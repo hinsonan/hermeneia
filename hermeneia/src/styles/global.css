@@ -1,0 +1,133 @@
+/* ═══════════════════════════════════════════════════════════════
+   Hermeneia Global Styles
+   Biblical Scribal Aesthetic • Light & Dark Modes
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════
+   CSS Variables - Light & Dark Modes
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  /* Light Mode (Default) */
+  --parchment: #f4e8d0;
+  --aged-paper: #e8dcc4;
+  --ink-dark: #2c1810;
+  --ink-medium: #5a4435;
+  --gold-accent: #b8860b;
+  --burgundy: #6b2c2c;
+  --border-ornament: #8b6f47;
+  --wood-dark: #3a2416;
+  --wood-light: #6b4e3d;
+  --bg-gradient-start: #4a3728;
+  --bg-gradient-mid: #2a1f18;
+  --bg-gradient-end: #1a1410;
+  --candlelight: rgba(255, 200, 100, 0.08);
+  --card-bg: rgba(232, 220, 196, 0.3);
+  --card-bg-hover: rgba(232, 220, 196, 0.5);
+  --shadow-color: rgba(44, 24, 16, 0.2);
+  --flourish-opacity: 0.3;
+}
+
+[data-theme="dark"] {
+  /* Dark Mode */
+  --parchment: #1a1410;
+  --aged-paper: #2a1f18;
+  --ink-dark: #e8dcc4;
+  --ink-medium: #c4b5a0;
+  --gold-accent: #d4af37;
+  --burgundy: #c9a227;
+  --border-ornament: #6b5835;
+  --wood-dark: #1a1208;
+  --wood-light: #4a3728;
+  --bg-gradient-start: #0a0806;
+  --bg-gradient-mid: #141210;
+  --bg-gradient-end: #0a0806;
+  --candlelight: rgba(184, 134, 11, 0.06);
+  --card-bg: rgba(42, 31, 24, 0.5);
+  --card-bg-hover: rgba(58, 43, 34, 0.7);
+  --shadow-color: rgba(0, 0, 0, 0.4);
+  --flourish-opacity: 0.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Base & Reset
+   ═══════════════════════════════════════════════════════════════ */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Crimson Text', Georgia, serif;
+  background: radial-gradient(
+    ellipse at top,
+    var(--bg-gradient-start) 0%,
+    var(--bg-gradient-mid) 50%,
+    var(--bg-gradient-end) 100%
+  );
+  min-height: 100vh;
+  transition: background 0.5s ease, color 0.5s ease;
+}
+
+/* Ambient candlelight effect */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(circle at 50% 30%, var(--candlelight) 0%, transparent 70%);
+  pointer-events: none;
+  animation: flicker 4s ease-in-out infinite;
+  z-index: 0;
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+  75% { opacity: 0.95; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Typography
+   ═══════════════════════════════════════════════════════════════ */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Cinzel', serif;
+  color: var(--burgundy);
+  transition: color 0.5s ease;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Animations
+   ═══════════════════════════════════════════════════════════════ */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Utilities
+   ═══════════════════════════════════════════════════════════════ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

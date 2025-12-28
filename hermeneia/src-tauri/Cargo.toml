@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "hermeneia"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -35,6 +36,10 @@ hound = "3.5"                                        # WAV I/O
 rubato = "0.16"                                      # Resample
 dasp = "0.11"                                        # Effects
 cpal = "0.15"                                        # Playback
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # custom
 thiserror = "1"

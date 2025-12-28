@@ -16,7 +16,7 @@ fn greet(name: &str) -> String {
 pub fn run() {
 
     gpu::apply_optimizations();
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![greet])

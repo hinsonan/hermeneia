@@ -1,3 +1,5 @@
+use tracing::{info, warn, debug};
+
 /// Automatically detect and apply GPU optimizations
 pub fn apply_optimizations() {
     #[cfg(target_os = "linux")]
@@ -15,7 +17,7 @@ pub fn apply_optimizations() {
 fn linux_nvidia_optimization() {
     // Check if environment variables are already set (manual override)
     if std::env::var("__NV_PRIME_RENDER_OFFLOAD").is_ok() {
-        eprintln!("🎮 GPU: Manual NVIDIA settings detected");
+        info!("Manual NVIDIA settings detected");
         return;
     }
 
@@ -28,13 +30,13 @@ fn linux_nvidia_optimization() {
     let is_hybrid = detect_hybrid_gpu();
 
     if is_hybrid {
-        eprintln!("🎮 GPU: Detected NVIDIA hybrid setup - enabling PRIME offload");
-        
+        info!("Detected NVIDIA hybrid setup - enabling PRIME offload");
+
         std::env::set_var("__NV_PRIME_RENDER_OFFLOAD", "1");
         std::env::set_var("__GLX_VENDOR_LIBRARY_NAME", "nvidia");
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     } else {
-        eprintln!("🎮 GPU: NVIDIA discrete GPU detected");
+        info!("NVIDIA discrete GPU detected");
         // Apply WebKit fix for rendering issues
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
@@ -46,13 +48,15 @@ fn detect_nvidia_gpu() -> bool {
         Ok(output) => {
             if let Ok(stdout) = String::from_utf8(output.stdout) {
                 let lower = stdout.to_lowercase();
-                return lower.contains("nvidia") 
+                let has_nvidia = lower.contains("nvidia")
                     && (lower.contains("vga") || lower.contains("3d"));
+                debug!(nvidia_detected = has_nvidia, "GPU detection complete");
+                return has_nvidia;
             }
             false
         }
         Err(e) => {
-            eprintln!("🎮 GPU: Failed to detect GPU: {}", e);
+            warn!(error = %e, "Failed to detect GPU");
             false
         }
     }
