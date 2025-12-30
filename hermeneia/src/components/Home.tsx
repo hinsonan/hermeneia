@@ -113,16 +113,9 @@ const Home: Component = () => {
 
             {/* Translate */}
             <article class="feature-card" onClick={() => navigateTo('translate')}>
-              <div class="feature-icon">
-                <svg viewBox="0 0 24 24">
-                  <path d="M4 5h7"/>
-                  <path d="M9 3v2"/>
-                  <path d="M4 9c0 0 2.5 4.5 7.5 4.5"/>
-                  <path d="M15 5l5 14"/>
-                  <path d="M20 5l-5 14"/>
-                  <path d="M13 11l3.5 8.5"/>
-                  <path d="M16 16h4"/>
-                </svg>
+              <div class="feature-icon greek-text">
+                <div class="greek-letter">Α</div>
+                <div class="greek-letter">Ω</div>
               </div>
               <h2 class="feature-title">Translate</h2>
               <p class="feature-desc">

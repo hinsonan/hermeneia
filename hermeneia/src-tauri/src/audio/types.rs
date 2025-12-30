@@ -67,6 +67,31 @@ pub struct TrimParams {
     pub end_seconds: f64,
 }
 
+/// Waveform peak data for visualization
+///
+/// Contains min/max peak values for efficient waveform rendering.
+/// Each peak represents a segment of the audio file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaveformPeaks {
+    /// Minimum amplitude values for each segment (range: -1.0 to 1.0)
+    pub min_peaks: Vec<f32>,
+
+    /// Maximum amplitude values for each segment (range: -1.0 to 1.0)
+    pub max_peaks: Vec<f32>,
+
+    /// Number of peaks/segments
+    pub num_peaks: usize,
+
+    /// Duration of audio in seconds
+    pub duration_seconds: f64,
+
+    /// Number of audio channels (for reference)
+    pub channels: u16,
+
+    /// Sample rate (for reference)
+    pub sample_rate: u32,
+}
+
 impl TrimParams {
     /// Create new trim parameters with validation
     pub fn new(start_seconds: f64, end_seconds: f64) -> crate::error::Result<Self> {
