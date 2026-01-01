@@ -49,9 +49,14 @@ pub fn trim_audio(audio: &AudioData, params: &TrimParams) -> Result<AudioData> {
     // Calculate sample indices
     // Formula: sample_index = time_in_seconds × sample_rate × num_channels
     let samples_per_second = audio.sample_rate as f64 * audio.channels as f64;
-    
+
     let start_sample_index = (params.start_seconds * samples_per_second) as usize;
     let end_sample_index = (params.end_seconds * samples_per_second) as usize;
+
+    // Ensure indices are aligned to frame boundaries (multiples of channels)
+    let channels = audio.channels as usize;
+    let start_sample_index = (start_sample_index / channels) * channels;
+    let end_sample_index = (end_sample_index / channels) * channels;
 
     // Clamp to valid range
     let start_sample_index = start_sample_index.min(audio.samples.len());

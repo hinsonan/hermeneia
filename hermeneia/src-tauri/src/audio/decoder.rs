@@ -75,11 +75,8 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
         .sample_rate
         .ok_or_else(|| AudioError::DecodeFailed("Sample rate not found".to_string()))?;
 
-    let channels = track
-        .codec_params
-        .channels
-        .ok_or_else(|| AudioError::DecodeFailed("Channel info not found".to_string()))?
-        .count() as u16;
+    // Try to get channels from metadata, but it may not be available for some MP3s
+    let mut channels_opt = track.codec_params.channels.map(|c| c.count() as u16);
 
     // Create decoder for this track
     let mut decoder = symphonia::default::get_codecs()
@@ -88,6 +85,46 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
 
     // Decode all packets into a sample buffer
     let mut samples = Vec::new();
+
+    // If channels not in metadata, decode first packet to get channel info
+    if channels_opt.is_none() {
+        loop {
+            let packet = match format.next_packet() {
+                Ok(packet) => packet,
+                Err(_) => return Err(AudioError::DecodeFailed("Could not read first packet to determine channels".to_string())),
+            };
+
+            if packet.track_id() != track_id {
+                continue;
+            }
+
+            let decoded = decoder
+                .decode(&packet)
+                .map_err(|e| AudioError::DecodeFailed(format!("Decode error on first packet: {}", e)))?;
+
+            // Get channel count from decoded audio
+            let ch = match &decoded {
+                AudioBufferRef::F32(buf) => buf.spec().channels.count(),
+                AudioBufferRef::F64(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S8(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S16(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S24(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S32(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U8(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U16(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U24(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U32(buf) => buf.spec().channels.count(),
+            } as u16;
+
+            channels_opt = Some(ch);
+
+            // Convert this first packet to samples
+            convert_audio_buffer_to_f32(&decoded, &mut samples);
+            break;
+        }
+    }
+
+    let channels = channels_opt.ok_or_else(|| AudioError::DecodeFailed("Could not determine channel count".to_string()))?;
 
     loop {
         // Get next packet

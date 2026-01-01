@@ -1,13 +1,17 @@
 import { Component } from 'solid-js';
+import { useNavigate } from '@solidjs/router';
 import { useTheme } from '../utils/theme';
 import './Home.css';
 
 const Home: Component = () => {
+  const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
 
   const navigateTo = (page: string) => {
-    console.log(`Navigating to: ${page}`);
-    // TODO: Integrate with router when implemented
+    if (page === 'audio') {
+      navigate('/audio-editor');
+    }
+    // Handle other routes when implemented
   };
 
   return (

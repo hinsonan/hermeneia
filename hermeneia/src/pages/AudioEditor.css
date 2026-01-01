@@ -1,0 +1,288 @@
+/* Editor Header */
+.editor-header {
+  text-align: center;
+  margin-bottom: 2rem;
+  position: relative;
+}
+
+.back-button {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 0.5rem 1rem;
+  background: var(--card-bg);
+  border: 2px solid var(--border-ornament);
+  border-radius: 4px;
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.back-button:hover {
+  background: var(--card-bg-hover);
+  border-color: var(--gold-accent);
+  transform: translateX(-4px);
+}
+
+.editor-title {
+  font-family: 'Cinzel', serif;
+  font-size: 2.5rem;
+  color: var(--burgundy);
+  margin-bottom: 0.5rem;
+}
+
+.editor-subtitle {
+  color: var(--ink-medium);
+  font-size: 1.1rem;
+}
+
+/* Loading Spinner */
+.loading-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid var(--border-ornament);
+  border-top-color: var(--burgundy);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Loading Overlay (File Analysis) */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.loading-content {
+  background: var(--parchment);
+  padding: 3rem 4rem;
+  border-radius: 8px;
+  text-align: center;
+  border: 2px solid var(--gold-accent);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.loading-content .loading-spinner {
+  width: 64px;
+  height: 64px;
+  border-width: 5px;
+}
+
+.loading-content p {
+  color: var(--burgundy);
+  font-family: 'Cinzel', serif;
+  font-size: 1.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.loading-info {
+  color: var(--ink-medium) !important;
+  font-family: 'Crimson Text', serif !important;
+  font-size: 1rem !important;
+  margin-bottom: 0 !important;
+}
+
+/* Trimming Overlay */
+.trimming-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.trimming-content {
+  background: var(--parchment);
+  padding: 3rem 4rem;
+  border-radius: 8px;
+  text-align: center;
+  border: 2px solid var(--gold-accent);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.trimming-content .loading-spinner {
+  width: 64px;
+  height: 64px;
+  border-width: 5px;
+}
+
+.trimming-content p {
+  color: var(--burgundy);
+  font-family: 'Cinzel', serif;
+  font-size: 1.3rem;
+  margin-bottom: 0.5rem;
+}
+
+.trim-info {
+  color: var(--ink-medium) !important;
+  font-family: 'Crimson Text', serif !important;
+  font-size: 1rem !important;
+  margin-bottom: 0 !important;
+}
+
+/* Error State */
+.error-state {
+  text-align: center;
+  padding: 3rem;
+}
+
+/* Error State */
+.error-state {
+  color: var(--burgundy);
+}
+
+.error-state button {
+  margin-top: 1rem;
+  padding: 0.5rem 1.5rem;
+  background: var(--burgundy);
+  color: var(--parchment);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: 'Crimson Text', serif;
+}
+
+.error-state button:hover {
+  background: var(--gold-accent);
+}
+
+/* Editor Workspace */
+.editor-workspace {
+  margin-top: 2rem;
+}
+
+.file-info {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.file-info h3 {
+  color: var(--burgundy);
+  font-family: 'Cinzel', serif;
+  margin-bottom: 0.5rem;
+}
+
+.file-info p {
+  color: var(--ink-medium);
+  font-size: 0.9rem;
+}
+
+/* Trim Controls */
+.trim-controls {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--card-bg);
+  border-radius: 4px;
+  border: 2px solid var(--border-ornament);
+}
+
+.time-inputs {
+  display: flex;
+  gap: 2rem;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.time-inputs label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+}
+
+.time-inputs input {
+  width: 100px;
+  padding: 0.5rem;
+  border: 2px solid var(--border-ornament);
+  border-radius: 4px;
+  background: var(--parchment);
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+}
+
+.time-inputs input:focus {
+  outline: none;
+  border-color: var(--gold-accent);
+}
+
+.trim-duration {
+  font-weight: bold;
+  color: var(--burgundy);
+}
+
+.trim-button {
+  display: block;
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto;
+  padding: 1rem 2rem;
+  background: var(--burgundy);
+  color: var(--parchment);
+  border: none;
+  border-radius: 4px;
+  font-family: 'Cinzel', serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.trim-button:hover:not(:disabled) {
+  background: var(--gold-accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px var(--shadow-color);
+}
+
+.trim-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.trim-error {
+  margin-top: 1rem;
+  color: var(--burgundy);
+  text-align: center;
+  font-weight: bold;
+}
+
+.load-new-file {
+  display: block;
+  margin: 2rem auto 0;
+  padding: 0.75rem 1.5rem;
+  background: var(--card-bg);
+  border: 2px solid var(--border-ornament);
+  border-radius: 4px;
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.load-new-file:hover {
+  background: var(--card-bg-hover);
+  border-color: var(--gold-accent);
+}

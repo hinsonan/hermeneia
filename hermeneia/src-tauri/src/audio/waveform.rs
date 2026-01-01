@@ -76,37 +76,80 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
 
     let mut format = probed.format;
 
-    // Find audio track
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or_else(|| AudioError::DecodeFailed("No audio track found".to_string()))?;
+    // Find audio track and extract needed parameters
+    let (track_id, sample_rate, channels_opt, codec_params, total_frames_opt) = {
+        let track = format
+            .tracks()
+            .iter()
+            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .ok_or_else(|| AudioError::DecodeFailed("No audio track found".to_string()))?;
 
-    let track_id = track.id;
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .ok_or_else(|| AudioError::DecodeFailed("Sample rate not found".to_string()))?;
+        let track_id = track.id;
+        let sample_rate = track
+            .codec_params
+            .sample_rate
+            .ok_or_else(|| AudioError::DecodeFailed("Sample rate not found".to_string()))?;
 
-    let channels = track
-        .codec_params
-        .channels
-        .ok_or_else(|| AudioError::DecodeFailed("Channel info not found".to_string()))?
-        .count() as u16;
+        // Try to get channels from metadata, but it may not be available for some MP3s
+        let channels_opt = track.codec_params.channels.map(|c| c.count() as u16);
+        let total_frames_opt = track.codec_params.n_frames;
+        let codec_params = track.codec_params.clone();
 
-    // Calculate total frames and duration
-    let total_frames = track
-        .codec_params
-        .n_frames
-        .ok_or_else(|| AudioError::DecodeFailed("Frame count not available".to_string()))?;
-
-    let duration_seconds = total_frames as f64 / sample_rate as f64;
+        (track_id, sample_rate, channels_opt, codec_params, total_frames_opt)
+    };
 
     // Create decoder
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make(&codec_params, &DecoderOptions::default())
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to create decoder: {}", e)))?;
+
+    // If channels not in metadata, decode first packet to get channel info
+    let (channels, first_packet_decoded) = if let Some(ch) = channels_opt {
+        (ch, None)
+    } else {
+        // Decode first packet to determine channels
+        let (ch, decoded) = loop {
+            let packet = format
+                .next_packet()
+                .map_err(|e| AudioError::DecodeFailed(format!("Failed to read first packet: {}", e)))?;
+
+            if packet.track_id() != track_id {
+                continue;
+            }
+
+            let decoded = decoder
+                .decode(&packet)
+                .map_err(|e| AudioError::DecodeFailed(format!("Failed to decode first packet: {}", e)))?;
+
+            // Get channel count from decoded audio
+            let ch = match &decoded {
+                AudioBufferRef::F32(buf) => buf.spec().channels.count(),
+                AudioBufferRef::F64(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S8(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S16(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S24(buf) => buf.spec().channels.count(),
+                AudioBufferRef::S32(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U8(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U16(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U24(buf) => buf.spec().channels.count(),
+                AudioBufferRef::U32(buf) => buf.spec().channels.count(),
+            } as u16;
+
+            break (ch, decoded);
+        };
+        (ch, Some(decoded))
+    };
+
+    // Calculate total frames and duration
+    // If we don't have frame count, we need to count during streaming
+    // For now, return a better error message
+    let total_frames = total_frames_opt.ok_or_else(|| {
+        AudioError::DecodeFailed(
+            "Frame count not available in metadata. This file may need a full decode to determine length.".to_string()
+        )
+    })?;
+
+    let duration_seconds = total_frames as f64 / sample_rate as f64;
 
     // Initialize peak buffers
     let mut min_peaks = vec![f32::MAX; num_peaks];
@@ -117,6 +160,18 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
 
     // Track current frame position
     let mut current_frame: u64 = 0;
+
+    // If we decoded the first packet to get channel info, process it for peaks now
+    if let Some(ref decoded) = first_packet_decoded {
+        process_packet_peaks(
+            decoded,
+            channels,
+            &mut current_frame,
+            frames_per_peak,
+            &mut min_peaks,
+            &mut max_peaks,
+        );
+    }
 
     // Stream through packets and calculate peaks
     loop {

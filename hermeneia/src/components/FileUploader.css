@@ -1,0 +1,39 @@
+.file-uploader {
+  border: 3px dashed var(--border-ornament);
+  border-radius: 8px;
+  padding: 3rem;
+  text-align: center;
+  transition: all 0.3s ease;
+  background: var(--card-bg);
+  cursor: pointer;
+}
+
+.file-uploader:hover {
+  background: var(--card-bg-hover);
+  border-color: var(--gold-accent);
+}
+
+.file-uploader.dragging {
+  background: var(--card-bg-hover);
+  border-color: var(--gold-accent);
+  transform: scale(1.02);
+  box-shadow: 0 8px 24px var(--shadow-color);
+}
+
+.upload-icon svg {
+  stroke: var(--burgundy);
+  stroke-width: 2;
+  fill: none;
+  margin-bottom: 1rem;
+}
+
+.file-uploader h3 {
+  font-family: 'Cinzel', serif;
+  color: var(--burgundy);
+  margin-bottom: 0.5rem;
+}
+
+.file-uploader p {
+  color: var(--ink-medium);
+  font-size: 0.9rem;
+}

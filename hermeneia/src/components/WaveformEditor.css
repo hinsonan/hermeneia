@@ -1,0 +1,21 @@
+.waveform-editor {
+  width: 100%;
+  height: 200px;
+  position: relative;
+  border: 2px solid var(--border-ornament);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 1.5rem 0;
+  background: var(--parchment);
+  cursor: col-resize;
+}
+
+.waveform-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.waveform-editor:hover {
+  border-color: var(--gold-accent);
+}
