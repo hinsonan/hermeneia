@@ -2,9 +2,16 @@ pub mod audio;
 pub mod error;
 pub mod gpu;
 
+use std::sync::Mutex;
+
 // Re-export for convenience
 pub use audio::*;
 pub use error::{AudioError, Result};
+
+/// Global audio player state managed by Tauri
+pub struct AppState {
+    pub player: Mutex<AudioPlayer>,
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -80,15 +87,99 @@ async fn trim_audio_file(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+// ============================================================================
+// Audio Playback Commands
+// ============================================================================
+
+/// Start playing an audio file
+#[tauri::command]
+fn play_audio(file_path: String, state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    let mut player = state.player.lock().map_err(|e| e.to_string())?;
+    player.play_file(&file_path).map_err(|e| e.to_string())
+}
+
+/// Pause audio playback
+#[tauri::command]
+fn pause_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    let player = state.player.lock().map_err(|e| e.to_string())?;
+    player.pause();
+    Ok(())
+}
+
+/// Resume audio playback
+#[tauri::command]
+fn resume_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    let player = state.player.lock().map_err(|e| e.to_string())?;
+    player.resume();
+    Ok(())
+}
+
+/// Toggle play/pause
+#[tauri::command]
+fn toggle_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    let player = state.player.lock().map_err(|e| e.to_string())?;
+    player.toggle();
+    Ok(())
+}
+
+/// Seek to a specific time in seconds
+#[tauri::command]
+fn seek_audio(time_seconds: f64, state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    let player = state.player.lock().map_err(|e| e.to_string())?;
+    player.seek(time_seconds);
+    Ok(())
+}
+
+/// Stop audio playback
+#[tauri::command]
+fn stop_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    let mut player = state.player.lock().map_err(|e| e.to_string())?;
+    player.stop();
+    Ok(())
+}
+
+/// Playback state returned to frontend
+#[derive(serde::Serialize)]
+pub struct PlaybackInfo {
+    pub is_playing: bool,
+    pub current_time: f64,
+    pub duration: f64,
+}
+
+/// Get current playback state
+#[tauri::command]
+fn get_playback_state(state: tauri::State<AppState>) -> std::result::Result<PlaybackInfo, String> {
+    let player = state.player.lock().map_err(|e| e.to_string())?;
+    let (is_playing, current_time, duration) = player.get_state();
+    Ok(PlaybackInfo {
+        is_playing,
+        current_time,
+        duration,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-
     gpu::apply_optimizations();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![greet, get_waveform_peaks, trim_audio_file])
+        .manage(AppState {
+            player: Mutex::new(AudioPlayer::new()),
+        })
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            get_waveform_peaks,
+            trim_audio_file,
+            play_audio,
+            pause_audio,
+            resume_audio,
+            toggle_audio,
+            seek_audio,
+            stop_audio,
+            get_playback_state
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
