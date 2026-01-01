@@ -1,4 +1,4 @@
-import { Component, createSignal, Show } from "solid-js";
+import { Component, createSignal, onCleanup, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -7,6 +7,13 @@ import FileUploader from "../components/FileUploader";
 import WaveformEditor from "../components/WaveformEditor";
 import type { AudioFileState, TrimSelection, WaveformPeaks } from "../types/audio";
 import "./AudioEditor.css";
+
+// Playback state returned from Rust backend
+interface PlaybackInfo {
+  is_playing: boolean;
+  current_time: number;
+  duration: number;
+}
 
 const AudioEditor: Component = () => {
   const navigate = useNavigate();
@@ -27,12 +34,51 @@ const AudioEditor: Component = () => {
     end: 0,
   });
 
+  // Playback state (synced from Rust backend)
+  const [isPlaying, setIsPlaying] = createSignal(false);
+  const [currentTime, setCurrentTime] = createSignal(0);
+
+  // Polling interval for playback state
+  let pollInterval: number | undefined;
+
   // Trimming state
   const [isTrimming, setIsTrimming] = createSignal(false);
   const [trimError, setTrimError] = createSignal<string | null>(null);
 
+  // Start polling playback state from Rust backend
+  const startPolling = () => {
+    if (pollInterval) return;
+
+    pollInterval = window.setInterval(async () => {
+      try {
+        const state = await invoke<PlaybackInfo>("get_playback_state");
+        setIsPlaying(state.is_playing);
+        setCurrentTime(state.current_time);
+      } catch (err) {
+        console.error("Failed to get playback state:", err);
+      }
+    }, 50); // Poll every 50ms for smooth playhead updates
+  };
+
+  const stopPolling = () => {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = undefined;
+    }
+  };
+
   // Handle file selection (from uploader)
   const handleFileSelected = async (filePath: string) => {
+    // Stop any existing playback
+    try {
+      await invoke("stop_audio");
+    } catch (_) {
+      // Ignore errors if nothing was playing
+    }
+
+    setIsPlaying(false);
+    setCurrentTime(0);
+
     setAudioFile({
       filePath,
       fileName: filePath.split("/").pop() || filePath.split("\\").pop() || "Unknown",
@@ -60,6 +106,9 @@ const AudioEditor: Component = () => {
         end: peaks.duration_seconds,
       });
 
+      // Start polling for playback state updates
+      startPolling();
+
     } catch (err) {
       setAudioFile({
         ...audioFile(),
@@ -69,10 +118,61 @@ const AudioEditor: Component = () => {
     }
   };
 
+  // Playback controls using Rust backend
+  const togglePlayPause = async () => {
+    const file = audioFile();
+    if (!file.filePath) return;
+
+    try {
+      if (isPlaying()) {
+        await invoke("pause_audio");
+      } else {
+        // If at the beginning or stopped, start fresh playback
+        const state = await invoke<PlaybackInfo>("get_playback_state");
+        if (state.current_time === 0 || state.duration === 0) {
+          await invoke("play_audio", { filePath: file.filePath });
+        } else {
+          await invoke("resume_audio");
+        }
+      }
+    } catch (err) {
+      console.error("Playback error:", err);
+    }
+  };
+
+  const handleSeek = async (time: number) => {
+    try {
+      await invoke("seek_audio", { timeSeconds: time });
+      setCurrentTime(time);
+    } catch (err) {
+      console.error("Seek error:", err);
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      await invoke("stop_audio");
+      setIsPlaying(false);
+      setCurrentTime(0);
+    } catch (err) {
+      console.error("Stop error:", err);
+    }
+  };
+
+  // Format time for display (MM:SS)
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
   // Handle trim operation
   const handleTrim = async () => {
     const file = audioFile();
     if (!file.filePath || !file.peaks) return;
+
+    // Stop playback before trimming
+    await handleStop();
 
     setIsTrimming(true);
     setTrimError(null);
@@ -102,7 +202,6 @@ const AudioEditor: Component = () => {
       });
 
       setIsTrimming(false);
-      // Success feedback could go here (toast notification, etc.)
 
     } catch (err) {
       setIsTrimming(false);
@@ -114,6 +213,16 @@ const AudioEditor: Component = () => {
   const handleSelectionChange = (start: number, end: number) => {
     setTrimSelection({ start, end });
   };
+
+  // Cleanup on unmount
+  onCleanup(async () => {
+    stopPolling();
+    try {
+      await invoke("stop_audio");
+    } catch (_) {
+      // Ignore cleanup errors
+    }
+  });
 
   return (
     <>
@@ -217,7 +326,45 @@ const AudioEditor: Component = () => {
                 peaks={audioFile().peaks!}
                 selection={trimSelection()}
                 onSelectionChange={handleSelectionChange}
+                currentTime={currentTime()}
+                onSeek={handleSeek}
               />
+
+              {/* Playback controls */}
+              <div class="playback-controls">
+                <button
+                  class="play-button"
+                  onClick={togglePlayPause}
+                  aria-label={isPlaying() ? "Pause" : "Play"}
+                >
+                  <Show when={isPlaying()} fallback={
+                    <svg viewBox="0 0 24 24" class="play-icon">
+                      <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                  }>
+                    <svg viewBox="0 0 24 24" class="pause-icon">
+                      <rect x="6" y="4" width="4" height="16"/>
+                      <rect x="14" y="4" width="4" height="16"/>
+                    </svg>
+                  </Show>
+                </button>
+
+                <div class="time-display">
+                  <span class="current-time">{formatTime(currentTime())}</span>
+                  <span class="time-separator">/</span>
+                  <span class="total-time">{formatTime(audioFile().peaks?.duration_seconds || 0)}</span>
+                </div>
+
+                <button
+                  class="stop-button"
+                  onClick={handleStop}
+                  aria-label="Stop and reset"
+                >
+                  <svg viewBox="0 0 24 24" class="stop-icon">
+                    <rect x="6" y="6" width="12" height="12"/>
+                  </svg>
+                </button>
+              </div>
 
               <div class="trim-controls">
                 <div class="time-inputs">
@@ -273,13 +420,18 @@ const AudioEditor: Component = () => {
 
               <button
                 class="load-new-file"
-                onClick={() => setAudioFile({
-                  filePath: "",
-                  fileName: "",
-                  peaks: null,
-                  isLoading: false,
-                  error: null,
-                })}
+                onClick={async () => {
+                  // Stop playback before loading new file
+                  await handleStop();
+                  stopPolling();
+                  setAudioFile({
+                    filePath: "",
+                    fileName: "",
+                    peaks: null,
+                    isLoading: false,
+                    error: null,
+                  });
+                }}
               >
                 Load Different File
               </button>

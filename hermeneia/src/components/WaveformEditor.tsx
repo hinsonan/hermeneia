@@ -6,6 +6,9 @@ interface WaveformEditorProps {
   peaks: WaveformPeaks;
   selection: TrimSelection;
   onSelectionChange: (start: number, end: number) => void;
+  // Playback props (optional)
+  currentTime?: number;
+  onSeek?: (time: number) => void;
 }
 
 const WaveformEditor: Component<WaveformEditorProps> = (props) => {
@@ -14,7 +17,7 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
 
   // Dragging state
   let isDragging = false;
-  let dragHandle: "start" | "end" | "none" = "none";
+  let dragTarget: "start" | "end" | "playhead" | "none" = "none";
 
   // Draw waveform on canvas
   const drawWaveform = () => {
@@ -82,35 +85,89 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
     ctx.fillRect(startX - handleWidth / 2, 0, handleWidth, height);
     ctx.fillRect(endX - handleWidth / 2, 0, handleWidth, height);
 
-    // Time labels
+    // Time labels for selection
     ctx.fillStyle = waveformColor;
     ctx.font = "12px 'Crimson Text', serif";
     ctx.textAlign = "left";
     ctx.fillText(`${selection.start.toFixed(2)}s`, startX + 4, 20);
     ctx.textAlign = "right";
     ctx.fillText(`${selection.end.toFixed(2)}s`, endX - 4, 20);
+
+    // Draw playhead if currentTime is provided
+    if (props.currentTime !== undefined) {
+      const playheadX = (props.currentTime / duration) * width;
+
+      // Playhead line (bright gold/yellow for visibility)
+      const goldAccent = getComputedStyle(document.documentElement)
+        .getPropertyValue("--gold-accent") || "#DAA520";
+
+      ctx.strokeStyle = goldAccent;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(playheadX, 0);
+      ctx.lineTo(playheadX, height);
+      ctx.stroke();
+
+      // Playhead handle (triangle at top)
+      ctx.fillStyle = goldAccent;
+      ctx.beginPath();
+      ctx.moveTo(playheadX - 8, 0);
+      ctx.lineTo(playheadX + 8, 0);
+      ctx.lineTo(playheadX, 12);
+      ctx.closePath();
+      ctx.fill();
+
+      // Current time label at bottom
+      ctx.fillStyle = goldAccent;
+      ctx.font = "bold 12px 'Crimson Text', serif";
+      ctx.textAlign = "center";
+      ctx.fillText(`${props.currentTime.toFixed(1)}s`, playheadX, height - 6);
+    }
   };
 
-  // Mouse event handlers for selection
-  const handleMouseDown = (e: MouseEvent) => {
-    if (!containerRef) return;
+  // Determine what was clicked
+  const getClickTarget = (x: number): "start" | "end" | "playhead" | "waveform" => {
+    if (!containerRef) return "waveform";
 
     const rect = containerRef.getBoundingClientRect();
-    const x = e.clientX - rect.left;
     const width = rect.width;
     const duration = props.peaks.duration_seconds;
 
     const startX = (props.selection.start / duration) * width;
     const endX = (props.selection.end / duration) * width;
 
-    // Determine if clicking on a handle
-    const handleThreshold = 10;
-    if (Math.abs(x - startX) < handleThreshold) {
+    const handleThreshold = 12;
+
+    // Check selection handles first
+    if (Math.abs(x - startX) < handleThreshold) return "start";
+    if (Math.abs(x - endX) < handleThreshold) return "end";
+
+    // Check playhead if present
+    if (props.currentTime !== undefined) {
+      const playheadX = (props.currentTime / duration) * width;
+      if (Math.abs(x - playheadX) < handleThreshold) return "playhead";
+    }
+
+    return "waveform";
+  };
+
+  // Mouse event handlers
+  const handleMouseDown = (e: MouseEvent) => {
+    if (!containerRef) return;
+
+    const rect = containerRef.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const target = getClickTarget(x);
+
+    if (target === "start" || target === "end" || target === "playhead") {
       isDragging = true;
-      dragHandle = "start";
-    } else if (Math.abs(x - endX) < handleThreshold) {
-      isDragging = true;
-      dragHandle = "end";
+      dragTarget = target;
+      e.preventDefault();
+    } else if (target === "waveform" && props.onSeek) {
+      // Click on waveform to seek
+      const duration = props.peaks.duration_seconds;
+      const time = (x / rect.width) * duration;
+      props.onSeek(Math.max(0, Math.min(time, duration)));
     }
   };
 
@@ -122,22 +179,41 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
     const duration = props.peaks.duration_seconds;
     const time = (x / rect.width) * duration;
 
-    if (dragHandle === "start") {
+    if (dragTarget === "start") {
       props.onSelectionChange(
         Math.min(time, props.selection.end - 0.1),
         props.selection.end
       );
-    } else if (dragHandle === "end") {
+    } else if (dragTarget === "end") {
       props.onSelectionChange(
         props.selection.start,
         Math.max(time, props.selection.start + 0.1)
       );
+    } else if (dragTarget === "playhead" && props.onSeek) {
+      props.onSeek(Math.max(0, Math.min(time, duration)));
     }
   };
 
   const handleMouseUp = () => {
     isDragging = false;
-    dragHandle = "none";
+    dragTarget = "none";
+  };
+
+  // Update cursor based on hover position
+  const handleMouseMoveForCursor = (e: MouseEvent) => {
+    if (!containerRef || isDragging) return;
+
+    const rect = containerRef.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const target = getClickTarget(x);
+
+    if (target === "start" || target === "end") {
+      containerRef.style.cursor = "col-resize";
+    } else if (target === "playhead") {
+      containerRef.style.cursor = "grab";
+    } else {
+      containerRef.style.cursor = props.onSeek ? "pointer" : "default";
+    }
   };
 
   // Setup and cleanup
@@ -146,18 +222,27 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
     window.addEventListener("resize", drawWaveform);
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
+
+    if (containerRef) {
+      containerRef.addEventListener("mousemove", handleMouseMoveForCursor);
+    }
   });
 
   onCleanup(() => {
     window.removeEventListener("resize", drawWaveform);
     window.removeEventListener("mousemove", handleMouseMove);
     window.removeEventListener("mouseup", handleMouseUp);
+
+    if (containerRef) {
+      containerRef.removeEventListener("mousemove", handleMouseMoveForCursor);
+    }
   });
 
-  // Redraw when peaks or selection changes
+  // Redraw when peaks, selection, or playhead changes
   createEffect(() => {
     props.peaks;
     props.selection;
+    props.currentTime;
     drawWaveform();
   });
 

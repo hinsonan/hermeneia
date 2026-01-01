@@ -19,3 +19,9 @@ export interface TrimSelection {
   start: number;
   end: number;
 }
+
+export interface PlaybackState {
+  isPlaying: boolean;
+  currentTime: number;
+  duration: number;
+}
