@@ -13,6 +13,56 @@ use std::path::Path;
 use crate::audio::types::WaveformPeaks;
 use crate::error::{AudioError, Result};
 
+/// Calculate optimal frame skip for adaptive sampling
+///
+/// For files with many frames per peak, we can skip frames while still
+/// maintaining quality. This dramatically speeds up processing of long files.
+///
+/// Returns a skip value between 1 (no skip) and 50 (aggressive sampling)
+fn calculate_optimal_skip(total_frames: u64, num_peaks: usize) -> usize {
+    let frames_per_peak = total_frames as f64 / num_peaks as f64;
+
+    // We want at least ~100 samples per peak for quality
+    // If frames_per_peak is 10,000, we can skip every 100th frame
+    const MIN_SAMPLES_PER_PEAK: f64 = 100.0;
+    const MAX_SKIP: usize = 50;
+
+    let optimal_skip = (frames_per_peak / MIN_SAMPLES_PER_PEAK).floor() as usize;
+
+    // Clamp between 1 (no skip) and MAX_SKIP
+    optimal_skip.clamp(1, MAX_SKIP)
+}
+
+/// Calculate optimal number of seek groups based on file duration
+///
+/// Balances I/O efficiency (fewer seeks) with processing speed (skip unneeded data).
+/// Returns number of groups to divide the file into for seeking.
+fn calculate_seek_groups(duration_seconds: f64, num_peaks: usize) -> usize {
+    // Base calculation: aim for ~20 peaks per group as a starting point
+    let base_groups = (num_peaks / 20).max(1);
+
+    // Adjust based on duration:
+    // - Very short files (< 30s): 1 group (pure sequential, no seeks needed)
+    // - Short files (< 5min): fewer groups (seeking overhead not worth it)
+    // - Long files: more groups to skip more of the file
+    let duration_factor = if duration_seconds < 30.0 {
+        0.0 // Force single group for very short files
+    } else if duration_seconds < 300.0 {
+        0.5 // Fewer groups for short files
+    } else if duration_seconds < 1800.0 {
+        1.0 // Normal grouping for medium files
+    } else {
+        1.5 // More groups for very long files
+    };
+
+    let adjusted_groups = (base_groups as f64 * duration_factor) as usize;
+
+    // Clamp to reasonable bounds:
+    // - Min 1 (pure sequential)
+    // - Max 200 (avoid excessive seeking even for very long files)
+    adjusted_groups.clamp(1, 200)
+}
+
 /// Extract waveform peaks from an audio file for visualization
 ///
 /// This function efficiently processes large audio files (up to 4+ hours)
@@ -104,12 +154,32 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
         .make(&codec_params, &DecoderOptions::default())
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to create decoder: {}", e)))?;
 
+    // Calculate total frames and duration first (needed for processing parameters)
+    let total_frames = total_frames_opt.ok_or_else(|| {
+        AudioError::DecodeFailed(
+            "Frame count not available in metadata. This file may need a full decode to determine length.".to_string()
+        )
+    })?;
+    let duration_seconds = total_frames as f64 / sample_rate as f64;
+
+    // Initialize peak buffers
+    let mut min_peaks = vec![f32::MAX; num_peaks];
+    let mut max_peaks = vec![f32::MIN; num_peaks];
+
+    // Calculate processing parameters
+    let frames_per_peak = total_frames as f64 / num_peaks as f64;
+    let frame_skip = calculate_optimal_skip(total_frames, num_peaks);
+
+    // Track current frame position (may be updated if we decode first packet for channel detection)
+    let mut initial_frame: u64 = 0;
+
     // If channels not in metadata, decode first packet to get channel info
-    let (channels, first_packet_decoded) = if let Some(ch) = channels_opt {
-        (ch, None)
+    // We process this packet immediately to avoid holding a reference to the decoder
+    let channels = if let Some(ch) = channels_opt {
+        ch
     } else {
         // Decode first packet to determine channels
-        let (ch, decoded) = loop {
+        let ch = loop {
             let packet = format
                 .next_packet()
                 .map_err(|e| AudioError::DecodeFailed(format!("Failed to read first packet: {}", e)))?;
@@ -136,100 +206,95 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
                 AudioBufferRef::U32(buf) => buf.spec().channels.count(),
             } as u16;
 
-            break (ch, decoded);
+            // Process this first packet immediately (don't store the reference)
+            process_packet_peaks(
+                &decoded,
+                ch,
+                &mut initial_frame,
+                frames_per_peak,
+                frame_skip,
+                &mut min_peaks,
+                &mut max_peaks,
+            );
+
+            break ch;
         };
-        (ch, Some(decoded))
+        ch
     };
 
-    // Calculate total frames and duration
-    // If we don't have frame count, we need to count during streaming
-    // For now, return a better error message
-    let total_frames = total_frames_opt.ok_or_else(|| {
-        AudioError::DecodeFailed(
-            "Frame count not available in metadata. This file may need a full decode to determine length.".to_string()
-        )
-    })?;
+    // UNIFIED GROUPED-SEEK APPROACH
+    //
+    // Strategy: Divide the file into seek groups, seek to each group's start,
+    // then decode sequentially within the group to fill multiple peaks.
+    //
+    // This balances:
+    // - I/O efficiency: Fewer seeks than per-peak seeking (good for HDDs, OS caching)
+    // - Speed: Only decode packets needed for each group (skip most of the file)
+    // - Quality: Use process_packet_peaks for proper frame boundary tracking
+    //
+    // For all file lengths, we use the same algorithm with adaptive group sizing.
 
-    let duration_seconds = total_frames as f64 / sample_rate as f64;
+    // Calculate optimal number of seek groups based on duration
+    // - Very short files (< 30s): 1 group (pure sequential)
+    // - Short files (< 5min): ~10 groups
+    // - Medium files (5-30min): ~30-50 groups
+    // - Long files (30min+): ~100 groups (cap to avoid too many seeks)
+    let num_seek_groups = calculate_seek_groups(duration_seconds, num_peaks);
+    let peaks_per_group = (num_peaks + num_seek_groups - 1) / num_seek_groups;
+    let time_per_group = duration_seconds / num_seek_groups as f64;
 
-    // Initialize peak buffers
-    let mut min_peaks = vec![f32::MAX; num_peaks];
-    let mut max_peaks = vec![f32::MIN; num_peaks];
+    for group_idx in 0..num_seek_groups {
+        let group_start_peak = group_idx * peaks_per_group;
+        let group_end_peak = ((group_idx + 1) * peaks_per_group).min(num_peaks);
 
-    // SEEK-BASED SAMPLING for long files (>5 minutes)
-    // Instead of decoding the entire file, seek to evenly-spaced positions
-    // and decode a small window at each position. This is ~20-50x faster!
-    if duration_seconds > 300.0 {
-        // Use seek-based approach for files > 5 minutes
-        let time_per_peak = duration_seconds / num_peaks as f64;
+        // Skip if we've already filled all peaks
+        if group_start_peak >= num_peaks {
+            break;
+        }
 
-        for peak_idx in 0..num_peaks {
-            let target_time = peak_idx as f64 * time_per_peak;
+        // For first group, continue from where we left off (may have decoded for channel detection)
+        // For subsequent groups, seek to the group's start position
+        let mut current_frame = if group_idx == 0 {
+            initial_frame
+        } else {
+            let group_start_time = group_idx as f64 * time_per_group;
+            let group_start_frame = (group_start_time * sample_rate as f64) as u64;
 
-            // Seek to target position
+            // Seek to group start
             let seek_result = format.seek(
-                SeekMode::Coarse, // Coarse seek is faster
+                SeekMode::Coarse,
                 SeekTo::Time {
-                    time: Time::from(target_time),
+                    time: Time::from(group_start_time),
                     track_id: Some(track_id),
                 },
             );
 
-            // If seek fails, skip this peak (will remain at 0)
             if seek_result.is_err() {
+                // If seek fails, skip this group
                 continue;
             }
 
-            // Reset decoder after seek
             decoder.reset();
+            group_start_frame
+        };
 
-            // Decode a few packets at this position to get peak values
-            let mut packets_decoded = 0;
-            let max_packets = 3; // Decode up to 3 packets per peak position
+        // Decode packets until we've filled all peaks for this group
+        // Use a packet limit to prevent runaway decoding if something goes wrong
+        let max_packets_per_group = (peaks_per_group * 10).max(50);
+        let mut packets_in_group = 0;
 
-            while packets_decoded < max_packets {
-                let packet = match format.next_packet() {
-                    Ok(p) => p,
-                    Err(_) => break,
-                };
-
-                if packet.track_id() != track_id {
-                    continue;
-                }
-
-                let decoded = match decoder.decode(&packet) {
-                    Ok(d) => d,
-                    Err(_) => break,
-                };
-
-                // Get min/max from this packet
-                let (pkt_min, pkt_max) = get_packet_minmax(&decoded);
-                min_peaks[peak_idx] = min_peaks[peak_idx].min(pkt_min);
-                max_peaks[peak_idx] = max_peaks[peak_idx].max(pkt_max);
-
-                packets_decoded += 1;
-            }
-        }
-    } else {
-        // For short files (<5 min), use full decode for maximum accuracy
-        let frames_per_peak = total_frames as f64 / num_peaks as f64;
-        let mut current_frame: u64 = 0;
-
-        // If we decoded the first packet to get channel info, process it for peaks now
-        if let Some(ref decoded) = first_packet_decoded {
-            process_packet_peaks(
-                decoded,
-                channels,
-                &mut current_frame,
-                frames_per_peak,
-                1, // No frame skipping for short files
-                &mut min_peaks,
-                &mut max_peaks,
-            );
-        }
-
-        // Stream through packets and calculate peaks
         loop {
+            // Check if we've filled all peaks for this group
+            let current_peak_idx = (current_frame as f64 / frames_per_peak) as usize;
+            if current_peak_idx >= group_end_peak {
+                break;
+            }
+
+            // Safety limit on packets per group
+            if packets_in_group >= max_packets_per_group {
+                break;
+            }
+
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
                 Err(_) => break,
@@ -239,19 +304,22 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
                 continue;
             }
 
-            let decoded = decoder
-                .decode(&packet)
-                .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
+            let decoded = match decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
 
             process_packet_peaks(
                 &decoded,
                 channels,
                 &mut current_frame,
                 frames_per_peak,
-                1,
+                frame_skip,
                 &mut min_peaks,
                 &mut max_peaks,
             );
+
+            packets_in_group += 1;
         }
     }
 
@@ -273,131 +341,6 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
         channels,
         sample_rate,
     })
-}
-
-/// Get min/max amplitude from a decoded packet (fast version for seek-based sampling)
-fn get_packet_minmax(buffer: &AudioBufferRef) -> (f32, f32) {
-    match buffer {
-        AudioBufferRef::F32(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    min = min.min(sample);
-                    max = max.max(sample);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::F64(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = sample as f32;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::S16(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = sample as f32 / 32768.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::S32(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = sample as f32 / 2147483648.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::S8(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = sample as f32 / 128.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::S24(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = sample.inner() as f32 / 8388608.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::U8(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = (sample as f32 - 128.0) / 128.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::U16(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = (sample as f32 - 32768.0) / 32768.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::U24(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = (sample.inner() as f32 - 8388608.0) / 8388608.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-        AudioBufferRef::U32(buf) => {
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for plane in buf.planes().planes() {
-                for &sample in plane.iter() {
-                    let s = (sample as f32 - 2147483648.0) / 2147483648.0;
-                    min = min.min(s);
-                    max = max.max(s);
-                }
-            }
-            (min, max)
-        }
-    }
 }
 
 /// Process a decoded packet and update peak values
