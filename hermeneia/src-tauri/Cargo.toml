@@ -41,6 +41,7 @@ hound = "3.5"                                        # WAV I/O
 rubato = "0.16"                                      # Resample
 dasp = "0.11"                                        # Effects
 cpal = "0.15"                                        # Playback
+ringbuf = "0.4"                                      # Ring buffer for streaming playback
 
 # Logging
 tracing = "0.1"

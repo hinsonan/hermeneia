@@ -70,6 +70,7 @@ const AudioEditor: Component = () => {
 
   // Handle file selection (from uploader)
   const handleFileSelected = async (filePath: string) => {
+    console.log("🔵 handleFileSelected called with:", filePath);
     // Stop any existing playback
     try {
       await invoke("stop_audio");
@@ -125,18 +126,25 @@ const AudioEditor: Component = () => {
 
   // Playback controls using Rust backend
   const togglePlayPause = async () => {
+    console.log("🟢 togglePlayPause called, isPlaying:", isPlaying());
     const file = audioFile();
     if (!file.filePath) return;
 
     try {
       if (isPlaying()) {
+        console.log("  -> Pausing");
         await invoke("pause_audio");
       } else {
-        // If at the beginning or stopped, start fresh playback
+        // If file is loaded, just resume; otherwise start fresh
         const state = await invoke<PlaybackInfo>("get_playback_state");
-        if (state.current_time === 0 || state.duration === 0) {
+        console.log("  -> Current state:", state);
+        if (state.duration === 0) {
+          // No file loaded - shouldn't happen but handle it
+          console.log("  -> Calling play_audio");
           await invoke("play_audio", { filePath: file.filePath });
         } else {
+          // File is loaded, just resume playback
+          console.log("  -> Calling resume_audio");
           await invoke("resume_audio");
         }
       }
@@ -155,6 +163,7 @@ const AudioEditor: Component = () => {
   };
 
   const handleStop = async () => {
+    console.log("🛑 handleStop called");
     try {
       await invoke("stop_audio");
       setIsPlaying(false);
@@ -221,6 +230,7 @@ const AudioEditor: Component = () => {
 
   // Cleanup on unmount
   onCleanup(async () => {
+    console.log("🔴 onCleanup running!");
     stopPolling();
     try {
       await invoke("stop_audio");
