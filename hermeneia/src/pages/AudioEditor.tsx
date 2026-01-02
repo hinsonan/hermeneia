@@ -106,6 +106,10 @@ const AudioEditor: Component = () => {
         end: peaks.duration_seconds,
       });
 
+      // Initialize playback in paused state so seeking works immediately
+      await invoke("play_audio", { filePath });
+      await invoke("pause_audio");
+
       // Start polling for playback state updates
       startPolling();
 

@@ -97,28 +97,27 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
     if (props.currentTime !== undefined) {
       const playheadX = (props.currentTime / duration) * width;
 
-      // Playhead line (bright gold/yellow for visibility)
-      const goldAccent = getComputedStyle(document.documentElement)
-        .getPropertyValue("--gold-accent") || "#DAA520";
+      // Playhead line (bright cyan for high visibility and contrast with burgundy trim)
+      const playheadColor = "#00CED1"; // Bright cyan/turquoise
 
-      ctx.strokeStyle = goldAccent;
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = playheadColor;
+      ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(playheadX, 0);
       ctx.lineTo(playheadX, height);
       ctx.stroke();
 
-      // Playhead handle (triangle at top)
-      ctx.fillStyle = goldAccent;
+      // Playhead handle (larger triangle at top for easier dragging)
+      ctx.fillStyle = playheadColor;
       ctx.beginPath();
-      ctx.moveTo(playheadX - 8, 0);
-      ctx.lineTo(playheadX + 8, 0);
-      ctx.lineTo(playheadX, 12);
+      ctx.moveTo(playheadX - 10, 0);
+      ctx.lineTo(playheadX + 10, 0);
+      ctx.lineTo(playheadX, 16);
       ctx.closePath();
       ctx.fill();
 
       // Current time label at bottom
-      ctx.fillStyle = goldAccent;
+      ctx.fillStyle = playheadColor;
       ctx.font = "bold 12px 'Crimson Text', serif";
       ctx.textAlign = "center";
       ctx.fillText(`${props.currentTime.toFixed(1)}s`, playheadX, height - 6);
