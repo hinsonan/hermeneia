@@ -1,0 +1,203 @@
+/* Greek Scroll Loader Container */
+.greek-scroll-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+}
+
+/* Scroll SVG Animation */
+.scroll-animation {
+  width: 100%;
+  max-width: 400px;
+  height: auto;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3));
+}
+
+/* Greek text writing animation - letter by letter reveal */
+.greek-text {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  stroke: #2c1810;
+  stroke-width: 0.5;
+  fill: #2c1810;
+  animation: write 4s ease-in-out infinite;
+}
+
+.greek-text-line2 {
+  stroke-dasharray: 800;
+  stroke-dashoffset: 800;
+  stroke: #2c1810;
+  stroke-width: 0.5;
+  fill: #2c1810;
+  animation: write 4s ease-in-out 0.5s infinite;
+}
+
+@keyframes write {
+  0% {
+    stroke-dashoffset: 1000;
+    fill-opacity: 0;
+  }
+  50% {
+    stroke-dashoffset: 0;
+    fill-opacity: 0.3;
+  }
+  70% {
+    fill-opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    fill-opacity: 1;
+  }
+}
+
+/* Reed pen animation - moves along text as it's being written */
+.reed-pen {
+  animation: writing-motion 4s ease-in-out infinite;
+  transform-origin: 50px 90px;
+}
+
+@keyframes writing-motion {
+  0% {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+  5% {
+    transform: translate(0, -0.5px);
+  }
+  10% {
+    transform: translate(8px, 0);
+  }
+  15% {
+    transform: translate(8px, -0.5px);
+  }
+  20% {
+    transform: translate(16px, 0);
+  }
+  25% {
+    transform: translate(16px, -0.5px);
+  }
+  30% {
+    transform: translate(24px, 0);
+  }
+  35% {
+    transform: translate(24px, -0.5px);
+  }
+  40% {
+    transform: translate(32px, 0);
+  }
+  45% {
+    transform: translate(32px, -0.5px);
+  }
+  50% {
+    transform: translate(40px, 0);
+    opacity: 1;
+  }
+  55% {
+    /* Lift pen to move to second line */
+    transform: translate(40px, -5px);
+    opacity: 0.3;
+  }
+  60% {
+    /* Position at start of second line */
+    transform: translate(0, 20px);
+    opacity: 0.3;
+  }
+  65% {
+    /* Begin writing second line */
+    transform: translate(0, 20px);
+    opacity: 1;
+  }
+  70% {
+    transform: translate(8px, 20px);
+  }
+  75% {
+    transform: translate(16px, 20px);
+  }
+  80% {
+    transform: translate(24px, 20px);
+  }
+  85% {
+    transform: translate(32px, 20px);
+  }
+  90% {
+    transform: translate(40px, 20px);
+  }
+  95% {
+    transform: translate(40px, 20px);
+    opacity: 1;
+  }
+  100% {
+    /* Return to start */
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+}
+
+/* Ink drop animation */
+.ink-drop {
+  animation: ink-fall 2s ease-in infinite;
+}
+
+@keyframes ink-fall {
+  0% {
+    cy: 86;
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  50% {
+    cy: 90;
+    opacity: 0.5;
+  }
+  100% {
+    cy: 95;
+    opacity: 0;
+  }
+}
+
+/* Text below scroll */
+.scroll-text {
+  text-align: center;
+}
+
+.scroll-title {
+  color: var(--burgundy);
+  font-family: 'Cinzel', serif;
+  font-size: 1.3rem;
+  margin-bottom: 0.5rem;
+  animation: fade-pulse 2s ease-in-out infinite;
+}
+
+.scroll-subtitle {
+  color: var(--ink-medium);
+  font-family: 'Crimson Text', serif;
+  font-size: 1rem;
+  font-style: italic;
+}
+
+@keyframes fade-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 480px) {
+  .scroll-animation {
+    max-width: 320px;
+  }
+
+  .scroll-title {
+    font-size: 1.1rem;
+  }
+
+  .scroll-subtitle {
+    font-size: 0.9rem;
+  }
+}
