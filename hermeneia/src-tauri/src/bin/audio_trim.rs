@@ -1,7 +1,7 @@
 use clap::Parser;
 use hermeneia_lib::audio::{get_audio_info, TrimParams};
 use hermeneia_lib::audio::trim::trim_audio_file;
-use tracing::{info, debug, error};
+use tracing::{info, error};
 
 /// Command-line tool for trimming audio files
 #[derive(Parser, Debug)]
@@ -41,7 +41,6 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Step 1: Get audio info
-    debug!("Getting audio info");
     let info = get_audio_info(&args.input)?;
 
     info!(
@@ -78,11 +77,6 @@ fn main() -> anyhow::Result<()> {
     let start_time = std::time::Instant::now();
 
     trim_audio_file(&args.input, &args.output, &params)?;
-
-    debug!(
-        trim_time_sec = start_time.elapsed().as_secs_f64(),
-        "Trimming complete"
-    );
 
     info!(
         output = %args.output,

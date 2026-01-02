@@ -80,7 +80,7 @@ impl AudioPlayer {
 
     /// Load and start playing an audio file
     pub fn play_file<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<()> {
-        tracing::info!("AudioPlayer::play_file - Stopping existing playback");
+        tracing::debug!("AudioPlayer::play_file - Stopping existing playback");
         // Stop any existing playback
         self.stop();
 
@@ -92,7 +92,7 @@ impl AudioPlayer {
 
         // Probe the file FIRST to get metadata before starting threads
         // This prevents race conditions where playback thread reads stale values
-        tracing::info!("AudioPlayer::play_file - Probing file for metadata");
+        tracing::debug!("AudioPlayer::play_file - Probing file for metadata");
         let (sample_rate, channels, total_frames) = probe_audio_file(&path)?;
 
         // Store metadata in state BEFORE starting threads
@@ -100,7 +100,7 @@ impl AudioPlayer {
         state.channels.store(channels, Ordering::SeqCst);
         state.total_frames.store(total_frames, Ordering::SeqCst);
 
-        tracing::info!("AudioPlayer::play_file - File metadata: {}Hz, {} channels, {} frames",
+        tracing::debug!("AudioPlayer::play_file - File metadata: {}Hz, {} channels, {} frames",
             sample_rate, channels, total_frames);
 
         // Reset state
@@ -142,20 +142,20 @@ impl AudioPlayer {
 
     /// Pause playback
     pub fn pause(&self) {
-        tracing::info!("AudioPlayer::pause");
+        tracing::debug!("AudioPlayer::pause");
         self.state.is_playing.store(false, Ordering::SeqCst);
     }
 
     /// Resume playback
     pub fn resume(&self) {
-        tracing::info!("AudioPlayer::resume");
+        tracing::debug!("AudioPlayer::resume");
         self.state.is_playing.store(true, Ordering::SeqCst);
     }
 
     /// Toggle play/pause
     pub fn toggle(&self) {
         let current = self.state.is_playing.load(Ordering::SeqCst);
-        tracing::info!("AudioPlayer::toggle (was: {}, now: {})", current, !current);
+        tracing::debug!("AudioPlayer::toggle (was: {}, now: {})", current, !current);
         self.state.is_playing.store(!current, Ordering::SeqCst);
     }
 
@@ -169,7 +169,7 @@ impl AudioPlayer {
 
     /// Stop playback completely
     pub fn stop(&mut self) {
-        tracing::info!("AudioPlayer::stop - Setting should_stop flag and waiting for threads");
+        tracing::debug!("AudioPlayer::stop - Setting should_stop flag and waiting for threads");
         self.state.should_stop.store(true, Ordering::SeqCst);
         self.state.is_playing.store(false, Ordering::SeqCst);
 
@@ -186,7 +186,7 @@ impl AudioPlayer {
         }
 
         self.state.current_frame.store(0, Ordering::SeqCst);
-        tracing::info!("AudioPlayer::stop - Complete");
+        tracing::debug!("AudioPlayer::stop - Complete");
     }
 
     /// Get the current playback state
@@ -316,7 +316,7 @@ fn run_decoder(
             | symphonia::core::audio::Channels::FRONT_RIGHT,
     );
 
-    tracing::info!("Decoder thread started - sample_rate: {}Hz, channels: {}, total_frames: {}",
+    tracing::debug!("Decoder thread started - sample_rate: {}Hz, channels: {}, total_frames: {}",
         sample_rate, channels, total_frames);
 
     // Main decoding loop - streams samples to ring buffer
@@ -326,7 +326,7 @@ fn run_decoder(
     loop {
         // Check for stop signal
         if state.should_stop.load(Ordering::SeqCst) {
-            tracing::info!("Decoder stopping - decoded {} packets, wrote {} samples",
+            tracing::debug!("Decoder stopping - decoded {} packets, wrote {} samples",
                 packets_decoded, samples_written);
             break;
         }
@@ -394,7 +394,7 @@ fn run_decoder(
         let samples = sample_buf.samples();
 
         if packets_decoded == 1 {
-            tracing::info!("First packet decoded: {} frames, {} samples", frames, samples.len());
+            tracing::debug!("First packet decoded: {} frames, {} samples", frames, samples.len());
         }
 
         // Write samples to ring buffer (blocking if buffer is full)
@@ -473,7 +473,7 @@ fn run_playback_stream(
             Ok(test_stream) => {
                 // Stream creation succeeded - this rate is supported
                 successful_rate = rate;
-                tracing::info!("Using sample rate: {}Hz (file: {}Hz)", rate, file_sample_rate);
+                tracing::debug!("Using sample rate: {}Hz (file: {}Hz)", rate, file_sample_rate);
                 drop(test_stream); // Clean up test stream
                 break;
             }
@@ -517,7 +517,7 @@ fn run_playback_stream(
                 let channels = state_clone.channels.load(Ordering::SeqCst);
 
                 if count == 0 {
-                    tracing::info!("Audio callback invoked for first time - buffer size: {}", data.len());
+                    tracing::debug!("Audio callback invoked for first time - buffer size: {}", data.len());
                 }
 
                 if !is_playing {
@@ -600,12 +600,12 @@ fn run_playback_stream(
         .play()
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to start stream: {}", e)))?;
 
-    tracing::info!("Playback stream started successfully");
+    tracing::debug!("Playback stream started successfully");
 
     // Keep stream alive until stop signal
     loop {
         if state.should_stop.load(Ordering::SeqCst) {
-            tracing::info!("Playback thread stopping");
+            tracing::debug!("Playback thread stopping");
             break;
         }
         thread::sleep(Duration::from_millis(100));
