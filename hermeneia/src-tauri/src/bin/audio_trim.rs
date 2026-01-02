@@ -1,5 +1,6 @@
 use clap::Parser;
-use hermeneia_lib::audio::{decode_audio_file, encode_wav, get_audio_info, trim_audio, TrimParams};
+use hermeneia_lib::audio::{get_audio_info, TrimParams};
+use hermeneia_lib::audio::trim::trim_audio_file;
 use tracing::{info, debug, error};
 
 /// Command-line tool for trimming audio files
@@ -72,36 +73,15 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    // Step 3: Decode audio
-    info!("Decoding audio");
+    // Step 3: Trim audio (optimized - uses streaming or direct byte copy)
+    info!("Trimming audio using optimized method");
     let start_time = std::time::Instant::now();
-    let audio = decode_audio_file(&args.input)?;
+
+    trim_audio_file(&args.input, &args.output, &params)?;
 
     debug!(
-        samples = audio.samples.len(),
-        size_mb = (audio.samples.len() * 4) as f64 / 1_048_576.0,
-        decode_time_sec = start_time.elapsed().as_secs_f64(),
-        "Audio decoded"
-    );
-
-    // Step 4: Trim audio
-    info!("Trimming audio");
-    let trimmed = trim_audio(&audio, &params)?;
-
-    debug!(
-        samples = trimmed.samples.len(),
-        duration_sec = trimmed.duration_seconds(),
-        "Audio trimmed"
-    );
-
-    // Step 5: Encode to WAV
-    info!("Encoding to WAV");
-    let encode_start = std::time::Instant::now();
-    encode_wav(&trimmed, &args.output)?;
-
-    debug!(
-        encode_time_sec = encode_start.elapsed().as_secs_f64(),
-        "WAV encoding complete"
+        trim_time_sec = start_time.elapsed().as_secs_f64(),
+        "Trimming complete"
     );
 
     info!(
