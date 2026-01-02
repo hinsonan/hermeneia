@@ -94,6 +94,7 @@ async fn trim_audio_file(
 /// Start playing an audio file
 #[tauri::command]
 fn play_audio(file_path: String, state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    tracing::info!("🎵 COMMAND: play_audio({})", file_path);
     let mut player = state.player.lock().map_err(|e| e.to_string())?;
     player.play_file(&file_path).map_err(|e| e.to_string())
 }
@@ -101,6 +102,7 @@ fn play_audio(file_path: String, state: tauri::State<AppState>) -> std::result::
 /// Pause audio playback
 #[tauri::command]
 fn pause_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    tracing::info!("⏸️  COMMAND: pause_audio");
     let player = state.player.lock().map_err(|e| e.to_string())?;
     player.pause();
     Ok(())
@@ -109,6 +111,7 @@ fn pause_audio(state: tauri::State<AppState>) -> std::result::Result<(), String>
 /// Resume audio playback
 #[tauri::command]
 fn resume_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    tracing::info!("▶️  COMMAND: resume_audio");
     let player = state.player.lock().map_err(|e| e.to_string())?;
     player.resume();
     Ok(())
@@ -117,6 +120,7 @@ fn resume_audio(state: tauri::State<AppState>) -> std::result::Result<(), String
 /// Toggle play/pause
 #[tauri::command]
 fn toggle_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    tracing::info!("🔄 COMMAND: toggle_audio");
     let player = state.player.lock().map_err(|e| e.to_string())?;
     player.toggle();
     Ok(())
@@ -125,6 +129,7 @@ fn toggle_audio(state: tauri::State<AppState>) -> std::result::Result<(), String
 /// Seek to a specific time in seconds
 #[tauri::command]
 fn seek_audio(time_seconds: f64, state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    tracing::info!("⏩ COMMAND: seek_audio({})", time_seconds);
     let player = state.player.lock().map_err(|e| e.to_string())?;
     player.seek(time_seconds);
     Ok(())
@@ -133,6 +138,7 @@ fn seek_audio(time_seconds: f64, state: tauri::State<AppState>) -> std::result::
 /// Stop audio playback
 #[tauri::command]
 fn stop_audio(state: tauri::State<AppState>) -> std::result::Result<(), String> {
+    tracing::info!("⏹️  COMMAND: stop_audio");
     let mut player = state.player.lock().map_err(|e| e.to_string())?;
     player.stop();
     Ok(())
