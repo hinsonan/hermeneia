@@ -5,6 +5,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../utils/theme";
 import FileUploader from "../components/FileUploader";
 import WaveformEditor from "../components/WaveformEditor";
+import GreekScrollLoader from "../components/GreekScrollLoader";
 import type { AudioFileState, TrimSelection, WaveformPeaks } from "../types/audio";
 import "./AudioEditor.css";
 
@@ -280,9 +281,7 @@ const AudioEditor: Component = () => {
           <Show when={audioFile().isLoading}>
             <div class="loading-overlay">
               <div class="loading-content">
-                <div class="loading-spinner"></div>
-                <p>Analyzing audio file...</p>
-                <p class="loading-info">Extracting waveform peaks</p>
+                <GreekScrollLoader />
               </div>
             </div>
           </Show>
@@ -307,9 +306,7 @@ const AudioEditor: Component = () => {
           <Show when={isTrimming()}>
             <div class="trimming-overlay">
               <div class="trimming-content">
-                <div class="loading-spinner"></div>
-                <p>Processing audio...</p>
-                <p class="trim-info">Trimming and encoding to WAV format</p>
+                <GreekScrollLoader />
               </div>
             </div>
           </Show>

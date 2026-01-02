@@ -97,8 +97,8 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
     if (props.currentTime !== undefined) {
       const playheadX = (props.currentTime / duration) * width;
 
-      // Playhead line (bright cyan for high visibility and contrast with burgundy trim)
-      const playheadColor = "#00CED1"; // Bright cyan/turquoise
+      // Playhead line (copper for biblical-era aesthetic and contrast with burgundy trim)
+      const playheadColor = "#b87333"; // Copper
 
       ctx.strokeStyle = playheadColor;
       ctx.lineWidth = 3;
