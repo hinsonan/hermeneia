@@ -69,16 +69,8 @@ async fn trim_audio_file(
         let params = TrimParams::new(start_seconds, end_seconds)
             .map_err(|e| e.to_string())?;
 
-        // Decode audio file
-        let audio = decode_audio_file(&input_path)
-            .map_err(|e| e.to_string())?;
-
-        // Trim audio
-        let trimmed = trim_audio(&audio, &params)
-            .map_err(|e| e.to_string())?;
-
-        // Encode to WAV
-        encode_wav(&trimmed, &output_path)
+        // Use optimized trim function (WAV direct copy or streaming)
+        audio::trim::trim_audio_file(&input_path, &output_path, &params)
             .map_err(|e| e.to_string())?;
 
         Ok(())
