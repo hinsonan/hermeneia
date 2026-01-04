@@ -20,6 +20,26 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "audio-trim"
 path = "src/bin/audio_trim.rs"
 
+# Binary for generating test audio files
+[[bin]]
+name = "generate-test-audio"
+path = "src/bin/generate_test_audio.rs"
+
+# Binary for profiling trim operations
+[[bin]]
+name = "profile-trim"
+path = "src/bin/profile_trim.rs"
+
+# Binary for detailed profiling trim operations
+[[bin]]
+name = "profile-trim-detailed"
+path = "src/bin/profile_trim_detailed.rs"
+
+# Binary for detailed profiling compressed formats
+[[bin]]
+name = "profile-compressed-detailed"
+path = "src/bin/profile_compressed_detailed.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
