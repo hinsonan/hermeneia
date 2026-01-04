@@ -1,5 +1,6 @@
 import { Component, onMount, onCleanup, createEffect } from "solid-js";
 import type { WaveformPeaks, TrimSelection } from "../types/audio";
+import { formatTime } from "../utils/timeFormat";
 import "./WaveformEditor.css";
 
 interface WaveformEditorProps {
@@ -89,9 +90,9 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
     ctx.fillStyle = waveformColor;
     ctx.font = "12px 'Crimson Text', serif";
     ctx.textAlign = "left";
-    ctx.fillText(`${selection.start.toFixed(2)}s`, startX + 4, 20);
+    ctx.fillText(formatTime(selection.start), startX + 4, 20);
     ctx.textAlign = "right";
-    ctx.fillText(`${selection.end.toFixed(2)}s`, endX - 4, 20);
+    ctx.fillText(formatTime(selection.end), endX - 4, 20);
 
     // Draw playhead if currentTime is provided
     if (props.currentTime !== undefined) {
@@ -120,7 +121,7 @@ const WaveformEditor: Component<WaveformEditorProps> = (props) => {
       ctx.fillStyle = playheadColor;
       ctx.font = "bold 12px 'Crimson Text', serif";
       ctx.textAlign = "center";
-      ctx.fillText(`${props.currentTime.toFixed(1)}s`, playheadX, height - 6);
+      ctx.fillText(formatTime(props.currentTime), playheadX, height - 6);
     }
   };
 
