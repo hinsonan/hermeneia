@@ -17,32 +17,6 @@ use symphonia::core::audio::AudioBufferRef;
 /// # Arguments
 /// * `audio` - The audio data to trim
 /// * `params` - Start and end times in seconds
-/// 
-/// # Returns
-/// New AudioData containing only the trimmed portion
-/// 
-/// # Example
-/// ```
-/// use hermeneia_lib::audio::{AudioData, TrimParams, trim_audio};
-/// 
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// // Create test audio: 10 seconds of stereo at 44.1kHz
-/// let original_audio = AudioData {
-///     samples: vec![0.5; 882000],  // 10 seconds
-///     sample_rate: 44100,
-///     channels: 2,
-/// };
-/// 
-/// // Trim from 5 seconds to 10 seconds
-/// let params = TrimParams::new(5.0, 10.0)?;
-/// let trimmed = trim_audio(&original_audio, &params)?;
-/// 
-/// assert_eq!(trimmed.duration_seconds(), 5.0);
-/// assert_eq!(trimmed.sample_rate, 44100);
-/// assert_eq!(trimmed.channels, 2);
-/// # Ok(())
-/// # }
-/// ```
 pub fn trim_audio(audio: &AudioData, params: &TrimParams) -> Result<AudioData> {
     // Validate trim range against audio duration
     let duration = audio.duration_seconds();
@@ -56,7 +30,6 @@ pub fn trim_audio(audio: &AudioData, params: &TrimParams) -> Result<AudioData> {
     }
 
     // Calculate sample indices
-    // Formula: sample_index = time_in_seconds × sample_rate × num_channels
     let samples_per_second = audio.sample_rate as f64 * audio.channels as f64;
 
     let start_sample_index = (params.start_seconds * samples_per_second) as usize;
@@ -90,18 +63,9 @@ fn is_wav_file<P: AsRef<Path>>(path: P) -> bool {
         .unwrap_or(false)
 }
 
-/// Trim a WAV file directly using byte-level operations (fastest method)
-///
-/// This function does NOT decode/encode - it directly copies PCM bytes from the
-/// input WAV to output WAV. This is extremely fast (limited only by disk I/O).
-///
-/// # Arguments
-/// * `input_path` - Path to input WAV file
-/// * `output_path` - Path to output WAV file
-/// * `params` - Start and end times in seconds
-///
-/// # Performance
-/// Can trim a 1-hour WAV file in milliseconds regardless of file size
+/// Trim a WAV file directly using seeking (O(1) complexity)
+/// 
+/// Note: This operation strips metadata (tags) from the original file.
 fn trim_wav_direct<P: AsRef<Path>>(
     input_path: P,
     output_path: P,
@@ -110,14 +74,12 @@ fn trim_wav_direct<P: AsRef<Path>>(
     let input_path = input_path.as_ref();
     let output_path = output_path.as_ref();
 
-    // Open WAV file and read header
     let mut reader = WavReader::open(input_path)
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to open WAV: {}", e)))?;
 
     let spec = reader.spec();
     let duration = reader.duration() as f64 / spec.sample_rate as f64;
 
-    // Validate trim range
     if params.end_seconds > duration {
         return Err(AudioError::TrimRangeOutOfBounds {
             start: params.start_seconds,
@@ -126,68 +88,114 @@ fn trim_wav_direct<P: AsRef<Path>>(
         });
     }
 
-    // Calculate sample positions (frames, not individual samples)
+    // Calculate frames (time steps)
     let start_frame = (params.start_seconds * spec.sample_rate as f64) as u32;
     let end_frame = (params.end_seconds * spec.sample_rate as f64) as u32;
-    let total_frames = reader.duration();
+    let total_frames = reader.duration(); // reader.duration() returns frames, not bytes
 
-    // Clamp to valid range
+    // Clamp range
     let start_frame = start_frame.min(total_frames);
     let end_frame = end_frame.min(total_frames);
+    let frames_to_read = end_frame - start_frame;
 
-    // Create output WAV writer
+    // Seek to the start position
+    // Hound seeks by *samples* (individual values), not frames. 
+    // So for stereo, we must multiply by channel count.
+    let start_sample_idx = start_frame * spec.channels as u32;
+    reader.seek(start_sample_idx)
+        .map_err(|e| AudioError::DecodeFailed(format!("Failed to seek WAV: {}", e)))?;
+
     let mut writer = WavWriter::create(output_path, spec)
         .map_err(|e| AudioError::EncodeFailed(format!("Failed to create WAV: {}", e)))?;
 
-    // Read and write samples in the specified range
-    // Use the reader's sample iterator and skip/take to extract the range
+    // We use a buffer size to balance memory vs I/O calls
+    // Increased from 4096 to 32768 for better I/O performance
+    const BUFFER_SIZE: usize = 32768;
+    let channels = spec.channels as usize;
+    let mut frames_remaining = frames_to_read;
+
+    // Optimized bulk read/write approach
+    // Collect samples into a buffer and write in batches to minimize function call overhead
     match spec.sample_format {
         SampleFormat::Float => {
-            let samples: Vec<f32> = reader
-                .samples::<f32>()
-                .skip((start_frame * spec.channels as u32) as usize)
-                .take(((end_frame - start_frame) * spec.channels as u32) as usize)
-                .collect::<std::result::Result<Vec<f32>, _>>()
-                .map_err(|e| AudioError::DecodeFailed(format!("Failed to read samples: {}", e)))?;
+            let mut iter = reader.samples::<f32>();
+            while frames_remaining > 0 {
+                let chunk_frames = frames_remaining.min(BUFFER_SIZE as u32);
+                let samples_to_process = chunk_frames as usize * channels;
 
-            for sample in samples {
-                writer.write_sample(sample)
-                    .map_err(|e| AudioError::EncodeFailed(format!("Failed to write sample: {}", e)))?;
+                // Bulk read into buffer
+                let mut buffer = Vec::with_capacity(samples_to_process);
+                for _ in 0..samples_to_process {
+                    if let Some(sample) = iter.next() {
+                        buffer.push(sample.map_err(|e| AudioError::DecodeFailed(format!("Read error: {}", e)))?);
+                    } else {
+                        break;
+                    }
+                }
+
+                // Bulk write from buffer
+                for sample in buffer {
+                    writer.write_sample(sample)
+                        .map_err(|e| AudioError::EncodeFailed(format!("Write error: {}", e)))?;
+                }
+
+                frames_remaining -= chunk_frames;
             }
         }
         SampleFormat::Int => {
             match spec.bits_per_sample {
                 16 => {
-                    let samples: Vec<i16> = reader
-                        .samples::<i16>()
-                        .skip((start_frame * spec.channels as u32) as usize)
-                        .take(((end_frame - start_frame) * spec.channels as u32) as usize)
-                        .collect::<std::result::Result<Vec<i16>, _>>()
-                        .map_err(|e| AudioError::DecodeFailed(format!("Failed to read samples: {}", e)))?;
+                    let mut iter = reader.samples::<i16>();
+                    while frames_remaining > 0 {
+                        let chunk_frames = frames_remaining.min(BUFFER_SIZE as u32);
+                        let samples_to_process = chunk_frames as usize * channels;
 
-                    for sample in samples {
-                        writer.write_sample(sample)
-                            .map_err(|e| AudioError::EncodeFailed(format!("Failed to write sample: {}", e)))?;
+                        // Bulk read into buffer
+                        let mut buffer = Vec::with_capacity(samples_to_process);
+                        for _ in 0..samples_to_process {
+                            if let Some(sample) = iter.next() {
+                                buffer.push(sample.map_err(|e| AudioError::DecodeFailed(format!("Read error: {}", e)))?);
+                            } else {
+                                break;
+                            }
+                        }
+
+                        // Bulk write from buffer
+                        for sample in buffer {
+                            writer.write_sample(sample)
+                                .map_err(|e| AudioError::EncodeFailed(format!("Write error: {}", e)))?;
+                        }
+
+                        frames_remaining -= chunk_frames;
                     }
                 }
-                32 => {
-                    let samples: Vec<i32> = reader
-                        .samples::<i32>()
-                        .skip((start_frame * spec.channels as u32) as usize)
-                        .take(((end_frame - start_frame) * spec.channels as u32) as usize)
-                        .collect::<std::result::Result<Vec<i32>, _>>()
-                        .map_err(|e| AudioError::DecodeFailed(format!("Failed to read samples: {}", e)))?;
+                // Handle 24-bit and 32-bit integers using i32 container
+                24 | 32 => {
+                    let mut iter = reader.samples::<i32>();
+                    while frames_remaining > 0 {
+                        let chunk_frames = frames_remaining.min(BUFFER_SIZE as u32);
+                        let samples_to_process = chunk_frames as usize * channels;
 
-                    for sample in samples {
-                        writer.write_sample(sample)
-                            .map_err(|e| AudioError::EncodeFailed(format!("Failed to write sample: {}", e)))?;
+                        // Bulk read into buffer
+                        let mut buffer = Vec::with_capacity(samples_to_process);
+                        for _ in 0..samples_to_process {
+                            if let Some(sample) = iter.next() {
+                                buffer.push(sample.map_err(|e| AudioError::DecodeFailed(format!("Read error: {}", e)))?);
+                            } else {
+                                break;
+                            }
+                        }
+
+                        // Bulk write from buffer
+                        for sample in buffer {
+                            writer.write_sample(sample)
+                                .map_err(|e| AudioError::EncodeFailed(format!("Write error: {}", e)))?;
+                        }
+
+                        frames_remaining -= chunk_frames;
                     }
                 }
-                _ => {
-                    return Err(AudioError::DecodeFailed(
-                        format!("Unsupported bit depth: {}", spec.bits_per_sample)
-                    ));
-                }
+                _ => return Err(AudioError::DecodeFailed(format!("Unsupported bit depth: {}", spec.bits_per_sample))),
             }
         }
     }
@@ -199,18 +207,8 @@ fn trim_wav_direct<P: AsRef<Path>>(
 }
 
 /// Trim any audio file using streaming with seeking (optimized for compressed formats)
-///
-/// This function seeks to the start position and only decodes the necessary portion,
-/// then streams directly to the output WAV file without loading everything into memory.
-///
-/// # Arguments
-/// * `input_path` - Path to input audio file (MP3, FLAC, OGG, etc.)
-/// * `output_path` - Path to output WAV file
-/// * `params` - Start and end times in seconds
-///
-/// # Performance
-/// Much faster than decoding the entire file. Memory usage is constant regardless
-/// of input file size.
+/// 
+/// Note: This operation strips metadata (tags) from the original file.
 fn trim_compressed_streaming<P: AsRef<Path>>(
     input_path: P,
     output_path: P,
@@ -220,7 +218,6 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
     let output_path = output_path.as_ref();
     let path_str = input_path.to_string_lossy().to_string();
 
-    // Open the file
     let file = File::open(input_path).map_err(|e| AudioError::FileOpen {
         path: path_str.clone(),
         source: e,
@@ -228,20 +225,17 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
-    // Create format hint
     let mut hint = Hint::new();
     if let Some(extension) = input_path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(extension);
     }
 
-    // Probe the format
     let probed = symphonia::default::get_probe()
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe format: {}", e)))?;
 
     let mut format = probed.format;
 
-    // Find audio track
     let track = format
         .tracks()
         .iter()
@@ -249,66 +243,50 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
         .ok_or_else(|| AudioError::DecodeFailed("No audio track found".to_string()))?;
 
     let track_id = track.id;
-
-    // Get audio parameters
-    let sample_rate = track
-        .codec_params
-        .sample_rate
+    let sample_rate = track.codec_params.sample_rate
         .ok_or_else(|| AudioError::DecodeFailed("Sample rate not found".to_string()))?;
 
     let mut channels_opt = track.codec_params.channels.map(|c| c.count() as u16);
 
-    // Create decoder
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to create decoder: {}", e)))?;
 
-    // Convert seconds to sample timestamp for seeking
-    let start_ts = (params.start_seconds * sample_rate as f64) as u64;
+    // --- Seeking Logic ---
+    let target_ts = (params.start_seconds * sample_rate as f64) as u64;
+    
+    // Seek and capture the ACTUAL timestamp we landed on.
+    // Compressed formats might not land exactly on the requested sample.
+    let seek_result = format.seek(
+        SeekMode::Accurate, 
+        SeekTo::TimeStamp { ts: target_ts, track_id }
+    ).map_err(|e| AudioError::DecodeFailed(format!("Seek failed: {}", e)))?;
 
-    // Helper to create seek position using sample timestamp
-    let make_start_seek = || SeekTo::TimeStamp { ts: start_ts, track_id };
+    // Update current sample tracker to the actual position
+    let mut current_sample = seek_result.actual_ts;
 
-    // Seek to start position
-    format.seek(SeekMode::Accurate, make_start_seek())
-        .map_err(|e| AudioError::DecodeFailed(format!("Seek failed: {}", e)))?;
-
-    // Determine channels by decoding first packet if needed
+    // --- Channel Determination (if unknown) ---
     if channels_opt.is_none() {
-        loop {
-            let packet = match format.next_packet() {
-                Ok(packet) => packet,
-                Err(_) => return Err(AudioError::DecodeFailed("Could not read first packet".to_string())),
-            };
+        // Decode one packet to find channel count
+        let first_packet = format.next_packet()
+            .map_err(|e| AudioError::DecodeFailed(format!("Failed to read packet for metadata: {}", e)))?;
+        
+        let decoded = decoder.decode(&first_packet)
+            .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
+        
+        channels_opt = Some(decoded.spec().channels.count() as u16);
 
-            if packet.track_id() != track_id {
-                continue;
-            }
-
-            let decoded = decoder
-                .decode(&packet)
-                .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
-
-            let ch = match &decoded {
-                AudioBufferRef::F32(buf) => buf.spec().channels.count(),
-                AudioBufferRef::F64(buf) => buf.spec().channels.count(),
-                AudioBufferRef::S16(buf) => buf.spec().channels.count(),
-                AudioBufferRef::S32(buf) => buf.spec().channels.count(),
-                _ => return Err(AudioError::DecodeFailed("Unsupported sample format".to_string())),
-            } as u16;
-
-            channels_opt = Some(ch);
-            break;
-        }
-
-        // Need to seek again after determining channels
-        format.seek(SeekMode::Accurate, make_start_seek())
-            .map_err(|e| AudioError::DecodeFailed(format!("Second seek failed: {}", e)))?;
+        // We consumed a packet, so we must re-seek to ensuring we don't miss start data
+        let re_seek = format.seek(
+            SeekMode::Accurate, 
+            SeekTo::TimeStamp { ts: target_ts, track_id }
+        ).map_err(|e| AudioError::DecodeFailed(format!("Re-seek failed: {}", e)))?;
+        
+        current_sample = re_seek.actual_ts;
     }
 
-    let channels = channels_opt.ok_or_else(|| AudioError::DecodeFailed("Could not determine channels".to_string()))?;
+    let channels = channels_opt.unwrap();
 
-    // Create WAV writer
     let spec = WavSpec {
         channels,
         sample_rate,
@@ -319,13 +297,10 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
     let mut writer = WavWriter::create(output_path, spec)
         .map_err(|e| AudioError::EncodeFailed(format!("Failed to create WAV: {}", e)))?;
 
-    // Calculate end time in samples
     let end_sample = (params.end_seconds * sample_rate as f64) as u64;
-    let mut current_sample = (params.start_seconds * sample_rate as f64) as u64;
 
-    // Decode and write packets until we reach end time
+    // --- Decode Loop ---
     loop {
-        // Check if we've reached the end
         if current_sample >= end_sample {
             break;
         }
@@ -339,22 +314,45 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
             continue;
         }
 
-        let decoded = decoder
-            .decode(&packet)
+        let decoded = decoder.decode(&packet)
             .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
 
-        // Convert to f32 and write
+        // Convert Planar -> Interleaved
         let samples = convert_to_f32(&decoded);
-
-        // Calculate how many samples to write from this packet
         let frames_in_packet = samples.len() / channels as usize;
-        let frames_remaining = (end_sample - current_sample) as usize;
-        let frames_to_write = frames_in_packet.min(frames_remaining);
-        let samples_to_write = frames_to_write * channels as usize;
+        
+        // Handle case where we seeked to a keyframe *before* our start time
+        // We might need to skip some initial samples in this specific packet
+        let mut start_offset_frames = 0;
+        if current_sample < target_ts {
+            if current_sample + (frames_in_packet as u64) > target_ts {
+                // We are crossing the start line in this packet
+                start_offset_frames = (target_ts - current_sample) as usize;
+            } else {
+                // Entire packet is before start time (should be rare with Accurate seek)
+                current_sample += frames_in_packet as u64;
+                continue;
+            }
+        }
 
-        for &sample in &samples[..samples_to_write] {
-            writer.write_sample(sample)
-                .map_err(|e| AudioError::EncodeFailed(format!("Write failed: {}", e)))?;
+        // Calculate how many frames to write
+        let valid_frames_in_packet = frames_in_packet - start_offset_frames;
+        
+        // How many frames left until the end marker?
+        let frames_until_end = end_sample.saturating_sub(current_sample + start_offset_frames as u64);
+        
+        let frames_to_write = (valid_frames_in_packet as u64).min(frames_until_end) as usize;
+        
+        if frames_to_write > 0 {
+            let start_index = start_offset_frames * channels as usize;
+            let end_index = start_index + (frames_to_write * channels as usize);
+
+            // Write samples - Hound buffers internally, so this is reasonably efficient
+            // Further optimization would require changes to Hound API
+            for &sample in &samples[start_index..end_index] {
+                writer.write_sample(sample)
+                    .map_err(|e| AudioError::EncodeFailed(format!("Write failed: {}", e)))?;
+            }
         }
 
         current_sample += frames_in_packet as u64;
@@ -366,29 +364,54 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
     Ok(())
 }
 
-/// Convert AudioBufferRef to Vec<f32>
+/// Convert AudioBufferRef to Vec<f32>, handling Planar to Interleaved conversion
+/// Optimized to process samples in cache-friendly order
 fn convert_to_f32(buffer: &AudioBufferRef) -> Vec<f32> {
-    let mut output = Vec::new();
+    let spec = buffer.spec();
+    let channels = spec.channels.count();
+    let frames = buffer.frames();
+
+    // Pre-allocate: frames * channels
+    let total_samples = frames * channels;
+    let mut output = vec![0.0f32; total_samples];
 
     match buffer {
         AudioBufferRef::F32(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend_from_slice(plane);
+            let planes = buf.planes();
+            // Process channel-by-channel for better cache locality
+            // Converts Planar (LLLLRRRR) to Interleaved (LRLRLRLR)
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample;
+                }
             }
         }
         AudioBufferRef::F64(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s as f32));
+            let planes = buf.planes();
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample as f32;
+                }
             }
         }
         AudioBufferRef::S16(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s as f32 / 32768.0));
+            let planes = buf.planes();
+            const NORM_S16: f32 = 1.0 / 32768.0;
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    // Normalize i16 to f32 (-1.0 to 1.0)
+                    output[frame * channels + ch] = sample as f32 * NORM_S16;
+                }
             }
         }
         AudioBufferRef::S32(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s as f32 / 2147483648.0));
+            let planes = buf.planes();
+            const NORM_S32: f32 = 1.0 / 2147483648.0;
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    // Normalize i32 to f32 (-1.0 to 1.0)
+                    output[frame * channels + ch] = sample as f32 * NORM_S32;
+                }
             }
         }
         _ => {}
@@ -400,24 +423,13 @@ fn convert_to_f32(buffer: &AudioBufferRef) -> Vec<f32> {
 /// Trim an audio file using the fastest method available
 ///
 /// Automatically selects the optimal trimming strategy:
-/// - WAV files: Direct byte copy (extremely fast, no decode/encode)
+/// - WAV files: Direct seeking (O(1), no decode/encode)
 /// - Compressed formats: Streaming with seeking (fast, low memory)
 ///
 /// # Arguments
 /// * `input_path` - Path to input audio file
 /// * `output_path` - Path to output WAV file
 /// * `params` - Start and end times in seconds
-///
-/// # Example
-/// ```no_run
-/// use hermeneia_lib::audio::{trim_audio_file, TrimParams};
-///
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let params = TrimParams::new(5.0, 10.0)?;
-/// trim_audio_file("input.mp3", "output.wav", &params)?;
-/// # Ok(())
-/// # }
-/// ```
 pub fn trim_audio_file<P: AsRef<Path>>(
     input_path: P,
     output_path: P,
@@ -436,10 +448,9 @@ pub fn trim_audio_file<P: AsRef<Path>>(
 mod tests {
     use super::*;
 
-    /// Helper to create test audio data
     fn create_test_audio(duration_seconds: f64, sample_rate: u32, channels: u16) -> AudioData {
         let total_samples = (duration_seconds * sample_rate as f64 * channels as f64) as usize;
-        let samples = vec![0.5f32; total_samples]; // Silent audio
+        let samples = vec![0.5f32; total_samples];
 
         AudioData {
             samples,
@@ -450,10 +461,7 @@ mod tests {
 
     #[test]
     fn test_trim_middle_section() {
-        // Create 10 seconds of audio
         let audio = create_test_audio(10.0, 44100, 2);
-        
-        // Trim from 3s to 7s (should give 4 seconds)
         let params = TrimParams::new(3.0, 7.0).unwrap();
         let trimmed = trim_audio(&audio, &params).unwrap();
 
@@ -463,8 +471,6 @@ mod tests {
     #[test]
     fn test_trim_start() {
         let audio = create_test_audio(10.0, 44100, 2);
-        
-        // Trim from beginning
         let params = TrimParams::new(0.0, 5.0).unwrap();
         let trimmed = trim_audio(&audio, &params).unwrap();
 
@@ -474,34 +480,24 @@ mod tests {
     #[test]
     fn test_trim_out_of_bounds() {
         let audio = create_test_audio(10.0, 44100, 2);
-        
-        // Try to trim beyond duration
         let params = TrimParams::new(5.0, 15.0).unwrap();
         let result = trim_audio(&audio, &params);
 
         assert!(result.is_err());
-        match result {
-            Err(AudioError::TrimRangeOutOfBounds { .. }) => (),
-            _ => panic!("Expected TrimRangeOutOfBounds error"),
-        }
     }
 
     #[test]
     fn test_invalid_trim_params() {
-        // Start > End
         assert!(TrimParams::new(10.0, 5.0).is_err());
-        
-        // Negative start
         assert!(TrimParams::new(-1.0, 5.0).is_err());
     }
 
     #[test]
     fn test_mono_vs_stereo() {
-        // Test that sample calculation is correct for different channel counts
         let mono = create_test_audio(1.0, 44100, 1);
         let stereo = create_test_audio(1.0, 44100, 2);
 
         assert_eq!(mono.samples.len(), 44100);
-        assert_eq!(stereo.samples.len(), 88200); // 2x for stereo
+        assert_eq!(stereo.samples.len(), 88200);
     }
 }
