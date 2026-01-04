@@ -625,4 +625,205 @@ mod tests {
         assert!(!is_playing);
         assert_eq!(current_time, 0.0);
     }
+
+    #[test]
+    fn test_shared_playback_state_new() {
+        let state = SharedPlaybackState::new();
+        assert!(!state.is_playing.load(Ordering::SeqCst));
+        assert_eq!(state.current_frame.load(Ordering::SeqCst), 0);
+        assert_eq!(state.total_frames.load(Ordering::SeqCst), 0);
+        assert_eq!(state.sample_rate.load(Ordering::SeqCst), 44100);
+        assert_eq!(state.channels.load(Ordering::SeqCst), 2);
+        assert!(!state.should_stop.load(Ordering::SeqCst));
+        assert!(!state.seek_pending.load(Ordering::SeqCst));
+        assert_eq!(state.seek_to_frame.load(Ordering::SeqCst), 0);
+        assert!(!state.buffer_flush_pending.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_audio_player_pause_resume() {
+        let player = AudioPlayer::new();
+
+        // Initially should be paused
+        let (is_playing, _, _) = player.get_state();
+        assert!(!is_playing);
+
+        // Simulate playing state
+        player.state.is_playing.store(true, Ordering::SeqCst);
+        let (is_playing, _, _) = player.get_state();
+        assert!(is_playing);
+
+        // Pause
+        player.pause();
+        let (is_playing, _, _) = player.get_state();
+        assert!(!is_playing);
+
+        // Resume
+        player.resume();
+        let (is_playing, _, _) = player.get_state();
+        assert!(is_playing);
+    }
+
+    #[test]
+    fn test_audio_player_toggle() {
+        let player = AudioPlayer::new();
+
+        // Initially false
+        let (is_playing, _, _) = player.get_state();
+        assert!(!is_playing);
+
+        // Toggle to true
+        player.toggle();
+        let (is_playing, _, _) = player.get_state();
+        assert!(is_playing);
+
+        // Toggle back to false
+        player.toggle();
+        let (is_playing, _, _) = player.get_state();
+        assert!(!is_playing);
+    }
+
+    #[test]
+    fn test_audio_player_seek() {
+        let player = AudioPlayer::new();
+
+        // Set sample rate
+        player.state.sample_rate.store(48000, Ordering::SeqCst);
+
+        // Seek to 5 seconds
+        player.seek(5.0);
+
+        // Check seek parameters
+        assert!(player.state.seek_pending.load(Ordering::SeqCst));
+        let seek_frame = player.state.seek_to_frame.load(Ordering::SeqCst);
+        assert_eq!(seek_frame, 5 * 48000); // 5 seconds * 48000 Hz
+    }
+
+    #[test]
+    fn test_audio_player_get_state_calculations() {
+        let player = AudioPlayer::new();
+
+        // Set up state
+        player.state.sample_rate.store(44100, Ordering::SeqCst);
+        player.state.channels.store(2, Ordering::SeqCst);
+        player.state.total_frames.store(441000, Ordering::SeqCst); // 10 seconds
+        player.state.current_frame.store(220500, Ordering::SeqCst); // 5 seconds
+        player.state.is_playing.store(true, Ordering::SeqCst);
+
+        let (is_playing, current_time, duration) = player.get_state();
+
+        assert!(is_playing);
+        assert_eq!(current_time, 5.0);
+        assert_eq!(duration, 10.0);
+    }
+
+    #[test]
+    fn test_audio_player_get_state_with_zero_sample_rate() {
+        let player = AudioPlayer::new();
+
+        // Set sample rate to 0 (edge case)
+        player.state.sample_rate.store(0, Ordering::SeqCst);
+        player.state.current_frame.store(1000, Ordering::SeqCst);
+        player.state.total_frames.store(5000, Ordering::SeqCst);
+
+        let (_, current_time, duration) = player.get_state();
+
+        // Should return 0.0 when sample rate is 0 (avoid division by zero)
+        assert_eq!(current_time, 0.0);
+        assert_eq!(duration, 0.0);
+    }
+
+    #[test]
+    fn test_audio_player_stop_sets_flags() {
+        let mut player = AudioPlayer::new();
+
+        // Set playing state
+        player.state.is_playing.store(true, Ordering::SeqCst);
+        player.state.current_frame.store(1000, Ordering::SeqCst);
+
+        // Stop
+        player.stop();
+
+        // Check flags
+        assert!(!player.state.is_playing.load(Ordering::SeqCst));
+        assert!(player.state.should_stop.load(Ordering::SeqCst));
+        assert_eq!(player.state.current_frame.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_audio_player_multiple_operations() {
+        let player = AudioPlayer::new();
+
+        // Set initial state
+        player.state.sample_rate.store(44100, Ordering::SeqCst);
+        player.state.total_frames.store(441000, Ordering::SeqCst);
+
+        // Play
+        player.resume();
+        assert!(player.state.is_playing.load(Ordering::SeqCst));
+
+        // Seek
+        player.seek(3.0);
+        assert!(player.state.seek_pending.load(Ordering::SeqCst));
+
+        // Pause
+        player.pause();
+        assert!(!player.state.is_playing.load(Ordering::SeqCst));
+
+        // Resume again
+        player.resume();
+        assert!(player.state.is_playing.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_ring_buffer_size_constant() {
+        // Ensure ring buffer size is reasonable (5 seconds at 48kHz stereo)
+        assert_eq!(RING_BUFFER_SIZE, 48000 * 2 * 5);
+        assert_eq!(RING_BUFFER_SIZE, 480000);
+    }
+
+    #[test]
+    fn test_audio_player_default_state_values() {
+        let player = AudioPlayer::new();
+
+        // Verify default values match SharedPlaybackState::new()
+        assert_eq!(player.state.sample_rate.load(Ordering::SeqCst), 44100);
+        assert_eq!(player.state.channels.load(Ordering::SeqCst), 2);
+        assert_eq!(player.state.current_frame.load(Ordering::SeqCst), 0);
+        assert_eq!(player.state.total_frames.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_seek_with_different_sample_rates() {
+        let player = AudioPlayer::new();
+
+        // Test with 48kHz
+        player.state.sample_rate.store(48000, Ordering::SeqCst);
+        player.seek(10.0);
+        assert_eq!(player.state.seek_to_frame.load(Ordering::SeqCst), 480000);
+
+        // Test with 44.1kHz
+        player.state.sample_rate.store(44100, Ordering::SeqCst);
+        player.seek(10.0);
+        assert_eq!(player.state.seek_to_frame.load(Ordering::SeqCst), 441000);
+
+        // Test with 96kHz
+        player.state.sample_rate.store(96000, Ordering::SeqCst);
+        player.seek(5.0);
+        assert_eq!(player.state.seek_to_frame.load(Ordering::SeqCst), 480000);
+    }
+
+    #[test]
+    fn test_audio_player_thread_safety() {
+        // Test that AudioPlayer can be used across threads (Send + Sync)
+        let player = Arc::new(Mutex::new(AudioPlayer::new()));
+
+        let player_clone = Arc::clone(&player);
+        let handle = std::thread::spawn(move || {
+            let p = player_clone.lock().unwrap();
+            let (_, _, _) = p.get_state();
+        });
+
+        handle.join().unwrap();
+    }
 }

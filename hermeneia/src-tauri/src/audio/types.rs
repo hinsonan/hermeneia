@@ -105,7 +105,7 @@ impl TrimParams {
 
         if end_seconds <= start_seconds {
             return Err(AudioError::InvalidTrimParams(
-                format!("End time ({}) must be greater than start time ({})", 
+                format!("End time ({}) must be greater than start time ({})",
                     end_seconds, start_seconds)
             ));
         }
@@ -119,5 +119,154 @@ impl TrimParams {
     /// Get the duration of the trimmed audio
     pub fn trim_duration(&self) -> f64 {
         self.end_seconds - self.start_seconds
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_audio_data_duration_stereo() {
+        let audio = AudioData {
+            samples: vec![0.0; 88200], // 1 second stereo at 44.1kHz
+            sample_rate: 44100,
+            channels: 2,
+        };
+        assert_eq!(audio.duration_seconds(), 1.0);
+    }
+
+    #[test]
+    fn test_audio_data_duration_mono() {
+        let audio = AudioData {
+            samples: vec![0.0; 48000], // 1 second mono at 48kHz
+            sample_rate: 48000,
+            channels: 1,
+        };
+        assert_eq!(audio.duration_seconds(), 1.0);
+    }
+
+    #[test]
+    fn test_audio_data_frame_count_stereo() {
+        let audio = AudioData {
+            samples: vec![0.0; 1000], // 500 frames stereo
+            sample_rate: 44100,
+            channels: 2,
+        };
+        assert_eq!(audio.frame_count(), 500);
+    }
+
+    #[test]
+    fn test_audio_data_frame_count_mono() {
+        let audio = AudioData {
+            samples: vec![0.0; 1000], // 1000 frames mono
+            sample_rate: 44100,
+            channels: 1,
+        };
+        assert_eq!(audio.frame_count(), 1000);
+    }
+
+    #[test]
+    fn test_audio_data_empty() {
+        let audio = AudioData {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        assert_eq!(audio.duration_seconds(), 0.0);
+        assert_eq!(audio.frame_count(), 0);
+    }
+
+    #[test]
+    fn test_trim_params_valid() {
+        let params = TrimParams::new(1.0, 5.0).unwrap();
+        assert_eq!(params.start_seconds, 1.0);
+        assert_eq!(params.end_seconds, 5.0);
+        assert_eq!(params.trim_duration(), 4.0);
+    }
+
+    #[test]
+    fn test_trim_params_negative_start() {
+        let result = TrimParams::new(-1.0, 5.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_trim_params_end_before_start() {
+        let result = TrimParams::new(5.0, 3.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_trim_params_equal_start_end() {
+        let result = TrimParams::new(5.0, 5.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_trim_params_zero_start() {
+        let params = TrimParams::new(0.0, 1.0).unwrap();
+        assert_eq!(params.start_seconds, 0.0);
+        assert_eq!(params.trim_duration(), 1.0);
+    }
+
+    #[test]
+    fn test_trim_params_large_values() {
+        let params = TrimParams::new(100.0, 3600.0).unwrap();
+        assert_eq!(params.trim_duration(), 3500.0);
+    }
+
+    #[test]
+    fn test_trim_params_small_duration() {
+        let params = TrimParams::new(0.0, 0.001).unwrap();
+        assert_eq!(params.trim_duration(), 0.001);
+    }
+
+    #[test]
+    fn test_waveform_peaks_clone() {
+        let peaks = WaveformPeaks {
+            min_peaks: vec![-0.5, -0.3],
+            max_peaks: vec![0.5, 0.3],
+            num_peaks: 2,
+            duration_seconds: 10.0,
+            channels: 2,
+            sample_rate: 44100,
+        };
+        let cloned = peaks.clone();
+        assert_eq!(cloned.num_peaks, 2);
+        assert_eq!(cloned.duration_seconds, 10.0);
+    }
+
+    #[test]
+    fn test_audio_info_serialization() {
+        let info = AudioInfo {
+            duration_seconds: 120.5,
+            sample_rate: 44100,
+            channels: 2,
+            format: "MP3".to_string(),
+            bit_depth: Some(16),
+        };
+
+        // Test that it can be serialized (will fail if Serialize isn't properly derived)
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("120.5"));
+        assert!(json.contains("MP3"));
+
+        // Test deserialization
+        let deserialized: AudioInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.duration_seconds, 120.5);
+        assert_eq!(deserialized.format, "MP3");
+    }
+
+    #[test]
+    fn test_audio_info_without_bit_depth() {
+        let info = AudioInfo {
+            duration_seconds: 60.0,
+            sample_rate: 48000,
+            channels: 1,
+            format: "Vorbis".to_string(),
+            bit_depth: None,
+        };
+        assert_eq!(info.bit_depth, None);
     }
 }

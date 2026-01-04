@@ -222,7 +222,7 @@ pub fn get_audio_info<P: AsRef<Path>>(path: P) -> Result<AudioInfo> {
 }
 
 /// Convert symphonia's AudioBufferRef to Vec<f32>
-/// 
+///
 /// Handles all sample formats (u8, i16, i32, f32, f64) and converts to f32
 fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
     match buffer {
@@ -232,14 +232,14 @@ fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
                 output.extend_from_slice(plane);
             }
         }
-        
+
         // Convert f64 → f32
         AudioBufferRef::F64(buf) => {
             for plane in buf.planes().planes() {
                 output.extend(plane.iter().map(|&s| s as f32));
             }
         }
-        
+
         // Convert signed integers to f32 in range [-1.0, 1.0]
         AudioBufferRef::S8(buf) => {
             for plane in buf.planes().planes() {
@@ -261,7 +261,7 @@ fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
                 output.extend(plane.iter().map(|&s| s as f32 / 2147483648.0));
             }
         }
-        
+
         // Convert unsigned integers to f32
         AudioBufferRef::U8(buf) => {
             for plane in buf.planes().planes() {
@@ -291,5 +291,207 @@ fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hound::{WavWriter, WavSpec, SampleFormat};
+    use std::io::Write;
+
+    /// Helper function to create a simple WAV file for testing
+    fn create_test_wav_file(
+        path: &str,
+        duration_seconds: f64,
+        sample_rate: u32,
+        channels: u16,
+    ) {
+        let spec = WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+
+        let mut writer = WavWriter::create(path, spec).expect("Failed to create WAV writer");
+        let num_samples = (duration_seconds * sample_rate as f64 * channels as f64) as usize;
+
+        // Write a simple sine wave
+        for i in 0..num_samples {
+            let sample = ((i as f32 * 440.0 * 2.0 * std::f32::consts::PI / sample_rate as f32).sin() * 16384.0) as i16;
+            writer.write_sample(sample).expect("Failed to write sample");
+        }
+
+        writer.finalize().expect("Failed to finalize WAV");
+    }
+
+    #[test]
+    fn test_decode_audio_file_wav() {
+        let temp_file = "/tmp/test_decode.wav";
+        create_test_wav_file(temp_file, 1.0, 44100, 2);
+
+        let audio = decode_audio_file(temp_file).unwrap();
+
+        assert_eq!(audio.sample_rate, 44100);
+        assert_eq!(audio.channels, 2);
+        assert!((audio.duration_seconds() - 1.0).abs() < 0.01);
+        assert!(!audio.samples.is_empty());
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_decode_audio_file_mono() {
+        let temp_file = "/tmp/test_decode_mono.wav";
+        create_test_wav_file(temp_file, 0.5, 48000, 1);
+
+        let audio = decode_audio_file(temp_file).unwrap();
+
+        assert_eq!(audio.sample_rate, 48000);
+        assert_eq!(audio.channels, 1);
+        assert!((audio.duration_seconds() - 0.5).abs() < 0.01);
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_decode_audio_file_not_found() {
+        let result = decode_audio_file("/nonexistent/file.wav");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            AudioError::FileOpen { .. } => {}, // Expected error
+            _ => panic!("Expected FileOpen error"),
+        }
+    }
+
+    #[test]
+    fn test_decode_audio_file_invalid_format() {
+        // Create a file with invalid content
+        let temp_file = "/tmp/test_invalid.wav";
+        let mut file = std::fs::File::create(temp_file).unwrap();
+        file.write_all(b"This is not a valid audio file").unwrap();
+        drop(file);
+
+        let result = decode_audio_file(temp_file);
+        assert!(result.is_err());
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_get_audio_info_wav() {
+        let temp_file = "/tmp/test_info.wav";
+        create_test_wav_file(temp_file, 2.5, 44100, 2);
+
+        let info = get_audio_info(temp_file).unwrap();
+
+        assert_eq!(info.sample_rate, 44100);
+        assert_eq!(info.channels, 2);
+        assert!((info.duration_seconds - 2.5).abs() < 0.1);
+        assert_eq!(info.bit_depth, Some(16));
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_get_audio_info_mono() {
+        let temp_file = "/tmp/test_info_mono.wav";
+        create_test_wav_file(temp_file, 1.0, 48000, 1);
+
+        let info = get_audio_info(temp_file).unwrap();
+
+        assert_eq!(info.sample_rate, 48000);
+        assert_eq!(info.channels, 1);
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_get_audio_info_file_not_found() {
+        let result = get_audio_info("/nonexistent/file.wav");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_different_sample_rates() {
+        let rates = vec![(22050, "/tmp/test_22k.wav"), (44100, "/tmp/test_44k.wav"), (48000, "/tmp/test_48k.wav")];
+
+        for (rate, path) in rates {
+            create_test_wav_file(path, 0.5, rate, 2);
+            let audio = decode_audio_file(path).unwrap();
+            assert_eq!(audio.sample_rate, rate);
+
+            // Cleanup
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn test_decode_and_verify_samples_in_range() {
+        let temp_file = "/tmp/test_sample_range.wav";
+        create_test_wav_file(temp_file, 0.1, 44100, 2);
+
+        let audio = decode_audio_file(temp_file).unwrap();
+
+        // All samples should be in valid f32 range [-1.0, 1.0]
+        for &sample in &audio.samples {
+            assert!(sample >= -1.0 && sample <= 1.0, "Sample {} out of range", sample);
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_audio_data_calculations() {
+        let temp_file = "/tmp/test_calculations.wav";
+        create_test_wav_file(temp_file, 3.0, 44100, 2);
+
+        let audio = decode_audio_file(temp_file).unwrap();
+
+        // Verify calculations
+        let expected_samples = 3.0 * 44100.0 * 2.0; // duration * rate * channels
+        assert!((audio.samples.len() as f64 - expected_samples).abs() < 1000.0);
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_decode_very_short_audio() {
+        let temp_file = "/tmp/test_short.wav";
+        create_test_wav_file(temp_file, 0.01, 44100, 2); // 10ms
+
+        let audio = decode_audio_file(temp_file).unwrap();
+
+        assert!(audio.duration_seconds() < 0.02);
+        assert!(!audio.samples.is_empty());
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_get_audio_info_vs_decode_consistency() {
+        let temp_file = "/tmp/test_consistency.wav";
+        create_test_wav_file(temp_file, 1.5, 44100, 2);
+
+        let info = get_audio_info(temp_file).unwrap();
+        let audio = decode_audio_file(temp_file).unwrap();
+
+        // Info and decoded data should match
+        assert_eq!(info.sample_rate, audio.sample_rate);
+        assert_eq!(info.channels, audio.channels);
+        assert!((info.duration_seconds - audio.duration_seconds()).abs() < 0.1);
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
     }
 }
