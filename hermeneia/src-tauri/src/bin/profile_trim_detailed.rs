@@ -2,7 +2,7 @@
 //
 // Profile audio trim with internal timing instrumentation
 
-use hound::{WavReader, WavWriter, WavSpec, SampleFormat};
+use hound::{WavReader, WavWriter, SampleFormat};
 use std::path::PathBuf;
 use std::time::Instant;
 use clap::Parser;
