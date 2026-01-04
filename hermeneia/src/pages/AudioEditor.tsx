@@ -3,6 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../utils/theme";
+import { formatTime, parseTime } from "../utils/timeFormat";
 import FileUploader from "../components/FileUploader";
 import WaveformEditor from "../components/WaveformEditor";
 import GreekScrollLoader from "../components/GreekScrollLoader";
@@ -34,6 +35,10 @@ const AudioEditor: Component = () => {
     start: 0,
     end: 0,
   });
+
+  // Text input values for trim times (in hh:mm:ss.SSS format)
+  const [startTimeText, setStartTimeText] = createSignal("00:00:00.000");
+  const [endTimeText, setEndTimeText] = createSignal("00:00:00.000");
 
   // Playback state (synced from Rust backend)
   const [isPlaying, setIsPlaying] = createSignal(false);
@@ -108,6 +113,10 @@ const AudioEditor: Component = () => {
         end: peaks.duration_seconds,
       });
 
+      // Initialize time text inputs
+      setStartTimeText(formatTime(0));
+      setEndTimeText(formatTime(peaks.duration_seconds));
+
       // Initialize playback in paused state so seeking works immediately
       await invoke("play_audio", { filePath });
       await invoke("pause_audio");
@@ -173,13 +182,6 @@ const AudioEditor: Component = () => {
     }
   };
 
-  // Format time for display (MM:SS)
-  const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
-
   // Handle trim operation
   const handleTrim = async () => {
     const file = audioFile();
@@ -226,6 +228,9 @@ const AudioEditor: Component = () => {
   // Handle trim selection change from waveform
   const handleSelectionChange = (start: number, end: number) => {
     setTrimSelection({ start, end });
+    // Update text inputs to reflect waveform changes
+    setStartTimeText(formatTime(start));
+    setEndTimeText(formatTime(end));
   };
 
   // Cleanup on unmount
@@ -327,7 +332,7 @@ const AudioEditor: Component = () => {
               <div class="file-info">
                 <h3>{audioFile().fileName}</h3>
                 <p>
-                  Duration: {audioFile().peaks?.duration_seconds.toFixed(2)}s |
+                  Duration: {formatTime(audioFile().peaks?.duration_seconds || 0, false)} |
                   Sample Rate: {audioFile().peaks?.sample_rate}Hz |
                   Channels: {audioFile().peaks?.channels}
                 </p>
@@ -382,37 +387,65 @@ const AudioEditor: Component = () => {
                   <label>
                     Start:
                     <input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max={audioFile().peaks?.duration_seconds || 0}
-                      value={trimSelection().start}
-                      onInput={(e) => setTrimSelection({
-                        ...trimSelection(),
-                        start: parseFloat(e.currentTarget.value),
-                      })}
+                      type="text"
+                      placeholder="hh:mm:ss.SSS"
+                      value={startTimeText()}
+                      onInput={(e) => {
+                        const value = e.currentTarget.value;
+                        setStartTimeText(value);
+                        const parsed = parseTime(value);
+                        if (parsed !== null && parsed >= 0 && parsed <= (audioFile().peaks?.duration_seconds || 0)) {
+                          setTrimSelection({
+                            ...trimSelection(),
+                            start: parsed,
+                          });
+                        }
+                      }}
+                      onBlur={() => {
+                        // Reformat on blur to ensure valid format
+                        const parsed = parseTime(startTimeText());
+                        if (parsed !== null) {
+                          setStartTimeText(formatTime(parsed));
+                        } else {
+                          // Reset to current valid value if invalid
+                          setStartTimeText(formatTime(trimSelection().start));
+                        }
+                      }}
                     />
-                    seconds
                   </label>
 
                   <label>
                     End:
                     <input
-                      type="number"
-                      step="0.1"
-                      min="0"
-                      max={audioFile().peaks?.duration_seconds || 0}
-                      value={trimSelection().end}
-                      onInput={(e) => setTrimSelection({
-                        ...trimSelection(),
-                        end: parseFloat(e.currentTarget.value),
-                      })}
+                      type="text"
+                      placeholder="hh:mm:ss.SSS"
+                      value={endTimeText()}
+                      onInput={(e) => {
+                        const value = e.currentTarget.value;
+                        setEndTimeText(value);
+                        const parsed = parseTime(value);
+                        if (parsed !== null && parsed >= 0 && parsed <= (audioFile().peaks?.duration_seconds || 0)) {
+                          setTrimSelection({
+                            ...trimSelection(),
+                            end: parsed,
+                          });
+                        }
+                      }}
+                      onBlur={() => {
+                        // Reformat on blur to ensure valid format
+                        const parsed = parseTime(endTimeText());
+                        if (parsed !== null) {
+                          setEndTimeText(formatTime(parsed));
+                        } else {
+                          // Reset to current valid value if invalid
+                          setEndTimeText(formatTime(trimSelection().end));
+                        }
+                      }}
                     />
-                    seconds
                   </label>
 
                   <p class="trim-duration">
-                    Trim Duration: {(trimSelection().end - trimSelection().start).toFixed(2)}s
+                    Trim Duration: {formatTime(trimSelection().end - trimSelection().start, false)}
                   </p>
                 </div>
 
