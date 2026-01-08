@@ -40,6 +40,11 @@ path = "src/bin/profile_trim_detailed.rs"
 name = "profile-compressed-detailed"
 path = "src/bin/profile_compressed_detailed.rs"
 
+# Binary for transcription testing
+[[bin]]
+name = "transcribe"
+path = "src/bin/transcribe.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -63,6 +68,13 @@ dasp = "0.11"                                        # Effects
 cpal = "0.15"                                        # Playback
 ringbuf = "0.4"                                      # Ring buffer for streaming playback
 
+# ML/Whisper dependencies
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+hf-hub = "0.4"
+tokenizers = "0.21"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -70,4 +82,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # custom
 thiserror = "1"
 anyhow = "1"
+dirs = "5"
 
+[features]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

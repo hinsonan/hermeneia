@@ -1,12 +1,14 @@
 pub mod audio;
 pub mod error;
 pub mod gpu;
+pub mod transcribe;
 
 use std::sync::Mutex;
 
 // Re-export for convenience
 pub use audio::*;
 pub use error::{AudioError, Result};
+pub use transcribe::*;
 
 /// Global audio player state managed by Tauri
 pub struct AppState {
@@ -77,6 +79,65 @@ async fn trim_audio_file(
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Transcribe an audio file using Whisper
+///
+/// # Arguments
+/// * `file_path` - Path to audio file
+/// * `model` - Whisper model size (e.g., "tiny", "base")
+/// * `task` - "transcribe" or "translate"
+/// * `language` - Language code (optional)
+/// * `timestamps` - Include timestamp information
+#[tauri::command]
+async fn transcribe_audio_file(
+    file_path: String,
+    model: String,
+    task: String,
+    language: Option<String>,
+    timestamps: bool,
+) -> std::result::Result<TranscriptResult, String> {
+    tokio::task::spawn_blocking(move || {
+        let model_enum = parse_whisper_model(&model)
+            .ok_or_else(|| format!("Invalid model: {}", model))?;
+
+        let task_enum = match task.as_str() {
+            "transcribe" => TranscriptionTask::Transcribe,
+            "translate" => TranscriptionTask::Translate,
+            _ => return Err(format!("Invalid task: {}", task)),
+        };
+
+        let params = TranscribeParams {
+            model: model_enum,
+            task: task_enum,
+            language,
+            timestamps,
+            force_cpu: false,
+            use_quantized: false,
+        };
+
+        transcribe::transcribe_audio(&file_path, params)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+fn parse_whisper_model(s: &str) -> Option<WhisperModel> {
+    match s.to_lowercase().as_str() {
+        "tiny" => Some(WhisperModel::Tiny),
+        "tiny.en" => Some(WhisperModel::TinyEn),
+        "base" => Some(WhisperModel::Base),
+        "base.en" => Some(WhisperModel::BaseEn),
+        "small" => Some(WhisperModel::Small),
+        "small.en" => Some(WhisperModel::SmallEn),
+        "medium" => Some(WhisperModel::Medium),
+        "medium.en" => Some(WhisperModel::MediumEn),
+        "large" => Some(WhisperModel::Large),
+        "large-v2" => Some(WhisperModel::LargeV2),
+        "large-v3" => Some(WhisperModel::LargeV3),
+        _ => None,
+    }
 }
 
 // ============================================================================
@@ -170,6 +231,7 @@ pub fn run() {
             greet,
             get_waveform_peaks,
             trim_audio_file,
+            transcribe_audio_file,
             play_audio,
             pause_audio,
             resume_audio,

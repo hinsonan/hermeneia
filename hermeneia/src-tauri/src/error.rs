@@ -45,6 +45,30 @@ pub enum AudioError {
     /// Error from hound WAV encoder
     #[error("Hound WAV error: {0}")]
     Hound(#[from] hound::Error),
+
+    /// Failed to download model from HuggingFace
+    #[error("Failed to download model '{model}': {details}")]
+    ModelDownload { model: String, details: String },
+
+    /// Failed to load model files
+    #[error("Failed to load model '{model}': {details}")]
+    ModelLoad { model: String, details: String },
+
+    /// Transcription inference failed
+    #[error("Transcription failed: {0}")]
+    TranscriptionFailed(String),
+
+    /// Audio preprocessing failed
+    #[error("Audio preprocessing failed: {0}")]
+    AudioPreprocessing(String),
+
+    /// Invalid transcription parameters
+    #[error("Invalid transcription parameters: {0}")]
+    InvalidTranscribeParams(String),
+
+    /// GPU error
+    #[error("GPU error: {0}")]
+    GpuError(String),
 }
 
 /// Convenient Result type that uses our AudioError
