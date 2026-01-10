@@ -1,9 +1,11 @@
 use crate::audio::decode_audio_file;
 use crate::error::{AudioError, Result};
 use crate::transcribe::{
+    decoder::Decoder,
+    language::detect_language,
     model::{get_device, ModelManager},
     preprocessing::preprocess_audio,
-    types::{ModelFiles, TranscribeParams, TranscriptResult, TranscriptSegment},
+    types::{ModelFiles, TranscribeParams, TranscriptResult},
 };
 use candle_core::Device;
 use candle_nn::VarBuilder;
@@ -19,9 +21,6 @@ pub fn transcribe_audio(file_path: &str, params: TranscribeParams) -> Result<Tra
     let audio_data = decode_audio_file(file_path)?;
     let duration = audio_data.duration_seconds();
 
-    // Preprocess to mel-spectrogram
-    let mel = preprocess_audio(&audio_data)?;
-
     // Download/load model
     let model_manager = ModelManager::new()?;
     let model_files = model_manager
@@ -32,8 +31,42 @@ pub fn transcribe_audio(file_path: &str, params: TranscribeParams) -> Result<Tra
     // Load model and tokenizer
     let (config, tokenizer, mut model) = load_model(&model_files, &device)?;
 
-    // Run inference - create a minimal decoder
-    let segments = run_inference_minimal(&mut model, &tokenizer, mel, &params, &device, &config)?;
+    // Preprocess to mel-spectrogram (needs config for mel bins)
+    let mel = preprocess_audio(&audio_data, &config, &device)?;
+
+    // Detect language if not specified and model is multilingual
+    let language_token = match (params.model.is_multilingual(), &params.language) {
+        (true, None) => {
+            tracing::info!("Auto-detecting language...");
+            Some(detect_language(&mut model, &tokenizer, &mel, &device)?)
+        }
+        (false, None) => None,
+        (true, Some(lang)) => {
+            let token = tokenizer
+                .token_to_id(&format!("<|{lang}|>"))
+                .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
+            Some(token)
+        }
+        (false, Some(_)) => {
+            return Err(AudioError::TranscriptionFailed(
+                "Cannot set language for non-multilingual models".to_string(),
+            ))
+        }
+    };
+
+    // Run inference with full decoder
+    let mut params_with_token = params.clone();
+    params_with_token.language = None; // Clear language string, we'll use token directly
+    let mut decoder = Decoder::new_with_language_token(
+        &mut model,
+        &tokenizer,
+        &config,
+        &device,
+        &params_with_token,
+        language_token,
+    )?;
+    let raw_segments = decoder.run(&mel)?;
+    let segments = decoder.extract_segments(raw_segments);
 
     // Build result
     let text = segments
@@ -105,29 +138,3 @@ fn load_model(
     Ok((config, tokenizer, model))
 }
 
-/// Minimal inference - just get the transcription text
-fn run_inference_minimal(
-    model: &mut m::model::Whisper,
-    _tokenizer: &Tokenizer,
-    mel: candle_core::Tensor,
-    _params: &TranscribeParams,
-    _device: &Device,
-    _config: &Config,
-) -> Result<Vec<TranscriptSegment>> {
-    // Encode audio features
-    let _audio_features = model
-        .encoder
-        .forward(&mel, true)
-        .map_err(|e| AudioError::TranscriptionFailed(format!("Encoder failed: {}", e)))?;
-
-    // For simplicity, just return a single segment with placeholder text
-    // A full implementation would use the decoder to generate tokens and convert to text
-    // This is a minimal stub to get compilation working
-
-    Ok(vec![TranscriptSegment {
-        id: 0,
-        start: Some(0.0),
-        end: Some(0.0),
-        text: "[Transcription stub - decoder not yet implemented]".to_string(),
-    }])
-}

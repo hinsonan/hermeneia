@@ -1,6 +1,8 @@
 use crate::audio::AudioData;
 use crate::error::{AudioError, Result};
+use byteorder::{ByteOrder, LittleEndian};
 use candle_core::{Device, Tensor};
+use candle_transformers::models::whisper::{audio, Config};
 use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType};
 
 /// Convert stereo to mono by averaging channels
@@ -47,18 +49,37 @@ pub fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> 
 }
 
 /// Compute mel-spectrogram using Candle
-pub fn compute_mel_spectrogram(_samples: &[f32]) -> Result<Tensor> {
-    // Stub implementation - returns a tensor with placeholder dimensions
-    // TODO: Implement proper mel-spectrogram using candle_transformers::models::whisper::audio
-    let device = Device::Cpu;
-    let mel_data = vec![0.0f32; 80 * 3000]; // 80 mel bins, 3000 frames
-    // Whisper encoder expects shape [batch, features, time]
-    Tensor::from_vec(mel_data, (1, 80, 3000), &device)
-        .map_err(|e| AudioError::AudioPreprocessing(format!("Tensor creation: {}", e)))
+pub fn compute_mel_spectrogram(samples: &[f32], config: &Config, device: &Device) -> Result<Tensor> {
+    // Load mel filters based on model configuration
+    let mel_bytes = match config.num_mel_bins {
+        80 => include_bytes!("../../assets/melfilters.bytes").as_slice(),
+        128 => include_bytes!("../../assets/melfilters128.bytes").as_slice(),
+        _ => {
+            return Err(AudioError::AudioPreprocessing(format!(
+                "Unsupported mel bins: {}",
+                config.num_mel_bins
+            )))
+        }
+    };
+
+    let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
+    LittleEndian::read_f32_into(mel_bytes, &mut mel_filters);
+
+    // Convert PCM to mel-spectrogram
+    let mel = audio::pcm_to_mel(config, samples, &mel_filters);
+    let mel_len = mel.len();
+
+    // Create tensor with shape [batch=1, n_mels, time_frames]
+    Tensor::from_vec(
+        mel,
+        (1, config.num_mel_bins, mel_len / config.num_mel_bins),
+        device,
+    )
+    .map_err(|e| AudioError::AudioPreprocessing(format!("Tensor creation: {}", e)))
 }
 
 /// Preprocess audio: mono, 16kHz, mel-spectrogram
-pub fn preprocess_audio(audio: &AudioData) -> Result<Tensor> {
+pub fn preprocess_audio(audio: &AudioData, config: &Config, device: &Device) -> Result<Tensor> {
     // Step 1: Convert to mono
     let mono = convert_to_mono(&audio.samples, audio.channels);
 
@@ -66,7 +87,7 @@ pub fn preprocess_audio(audio: &AudioData) -> Result<Tensor> {
     let resampled = resample_to_16khz(&mono, audio.sample_rate)?;
 
     // Step 3: Compute mel-spectrogram
-    compute_mel_spectrogram(&resampled)
+    compute_mel_spectrogram(&resampled, config, device)
 }
 
 #[cfg(test)]
