@@ -5,7 +5,7 @@ use crate::transcribe::{
     language::detect_language,
     model::{get_device, ModelManager},
     preprocessing::preprocess_audio,
-    types::{ModelFiles, TranscribeParams, TranscriptResult},
+    types::{ModelFiles, ProgressCallback, TranscribeParams, TranscriptResult},
 };
 use candle_core::Device;
 use candle_nn::VarBuilder;
@@ -15,6 +15,15 @@ use tokenizers::Tokenizer;
 
 /// Main transcription function
 pub fn transcribe_audio(file_path: &str, params: TranscribeParams) -> Result<TranscriptResult> {
+    transcribe_audio_with_progress(file_path, params, None)
+}
+
+/// Main transcription function with progress callback
+pub fn transcribe_audio_with_progress(
+    file_path: &str,
+    params: TranscribeParams,
+    progress_callback: Option<ProgressCallback>,
+) -> Result<TranscriptResult> {
     let start_time = Instant::now();
 
     // Load audio
@@ -65,7 +74,7 @@ pub fn transcribe_audio(file_path: &str, params: TranscribeParams) -> Result<Tra
         &params_with_token,
         language_token,
     )?;
-    let raw_segments = decoder.run(&mel)?;
+    let raw_segments = decoder.run(&mel, progress_callback)?;
     let segments = decoder.extract_segments(raw_segments);
 
     // Build result

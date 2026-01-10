@@ -87,6 +87,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 thiserror = "1"
 anyhow = "1"
 dirs = "5"
+indicatif = "0.17"
 
 [features]
 default = []

@@ -1,5 +1,7 @@
 use clap::Parser;
-use hermeneia_lib::transcribe::{transcribe_audio, TranscribeParams, TranscriptionTask, WhisperModel};
+use hermeneia_lib::transcribe::{transcribe_audio_with_progress, TranscribeParams, TranscriptionTask, WhisperModel};
+use indicatif::{ProgressBar, ProgressStyle};
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -84,7 +86,44 @@ fn main() -> anyhow::Result<()> {
         use_quantized: false,
     };
 
-    let result = transcribe_audio(&args.input, params)?;
+    // Create progress indicator - starts as spinner during model loading
+    let progress_bar = ProgressBar::new_spinner();
+    progress_bar.set_style(
+        ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {spinner:.cyan} {msg}")
+            .expect("Invalid spinner template"),
+    );
+    progress_bar.set_message("Loading model and detecting language...");
+    progress_bar.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    // Create progress callback - switches to progress bar on first call
+    let pb = progress_bar.clone();
+    let first_call = Arc::new(Mutex::new(true));
+    let progress_callback = Box::new(move |current: usize, total: usize| {
+        // On first callback, switch from spinner to progress bar
+        if let Ok(mut is_first) = first_call.lock() {
+            if *is_first {
+                *is_first = false;
+                pb.disable_steady_tick();
+                pb.set_style(
+                    ProgressStyle::default_bar()
+                        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>3}% {msg}")
+                        .expect("Invalid progress bar template")
+                        .progress_chars("█▓░"),
+                );
+                pb.set_length(100);
+                pb.set_message("Transcribing...");
+            }
+        }
+
+        let percentage = (current as f64 / total as f64 * 100.0) as u64;
+        pb.set_position(percentage);
+    });
+
+    let result = transcribe_audio_with_progress(&args.input, params, Some(progress_callback))?;
+
+    progress_bar.finish_with_message("Complete!");
+    println!();
 
     info!(
         "Transcription complete: {:.2}s audio, {:.2}s processing",

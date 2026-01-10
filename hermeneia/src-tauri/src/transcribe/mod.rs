@@ -7,7 +7,7 @@ pub mod language;
 
 pub use types::{
     WhisperModel, TranscribeParams, TranscriptResult,
-    TranscriptSegment, TranscriptionTask, ModelFiles,
+    TranscriptSegment, TranscriptionTask, ModelFiles, ProgressCallback,
 };
 pub use model::ModelManager;
-pub use inference::transcribe_audio;
+pub use inference::{transcribe_audio, transcribe_audio_with_progress};

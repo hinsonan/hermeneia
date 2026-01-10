@@ -1,5 +1,5 @@
 use crate::error::{AudioError, Result};
-use crate::transcribe::types::{TranscribeParams, TranscriptionTask, TranscriptSegment};
+use crate::transcribe::types::{ProgressCallback, TranscribeParams, TranscriptionTask, TranscriptSegment};
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::ops::{log_softmax, softmax};
 use candle_transformers::models::whisper::{self as m, Config};
@@ -43,6 +43,11 @@ pub struct Decoder<'a> {
     no_speech_token: u32,
     no_timestamps_token: u32,
     language_token: Option<u32>,
+    // Progress tracking
+    progress_callback: Option<ProgressCallback>,
+    total_frames: usize,
+    current_segment_start: usize,
+    current_segment_size: usize,
 }
 
 impl<'a> Decoder<'a> {
@@ -116,6 +121,10 @@ impl<'a> Decoder<'a> {
             no_speech_token,
             language_token,
             no_timestamps_token,
+            progress_callback: None,
+            total_frames: 0,
+            current_segment_start: 0,
+            current_segment_size: 0,
         })
     }
 
@@ -146,6 +155,17 @@ impl<'a> Decoder<'a> {
 
         // Token generation loop
         for i in 0..sample_len {
+            // Report fine-grained progress every 10 tokens
+            if i % 10 == 0 && self.total_frames > 0 {
+                if let Some(ref callback) = self.progress_callback {
+                    // Calculate progress: segment progress + token progress within segment
+                    let segment_progress_ratio = i as f64 / sample_len as f64;
+                    let current_frame = self.current_segment_start +
+                        (self.current_segment_size as f64 * segment_progress_ratio) as usize;
+                    callback(current_frame, self.total_frames);
+                }
+            }
+
             let tokens_t = Tensor::new(tokens.as_slice(), mel.device())
                 .map_err(|e| AudioError::TranscriptionFailed(format!("Token tensor: {}", e)))?;
             let tokens_t = tokens_t
@@ -487,20 +507,29 @@ impl<'a> Decoder<'a> {
     }
 
     /// Run decoding on full audio
-    pub fn run(&mut self, mel: &Tensor) -> Result<Vec<Segment>> {
+    pub fn run(&mut self, mel: &Tensor, progress_callback: Option<ProgressCallback>) -> Result<Vec<Segment>> {
         let (_, _, content_frames) = mel
             .dims3()
             .map_err(|e| AudioError::TranscriptionFailed(format!("Dims3: {}", e)))?;
         let mut seek = 0;
         let mut segments = vec![];
 
+        // Store progress info
+        self.progress_callback = progress_callback;
+        self.total_frames = content_frames;
+
         while seek < content_frames {
+
             let time_offset = (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
             let segment_size = usize::min(content_frames - seek, m::N_FRAMES);
             let mel_segment = mel
                 .narrow(2, seek, segment_size)
                 .map_err(|e| AudioError::TranscriptionFailed(format!("Narrow: {}", e)))?;
             let segment_duration = (segment_size * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
+
+            // Store segment info for progress tracking
+            self.current_segment_start = seek;
+            self.current_segment_size = segment_size;
 
             let dr = self.decode_with_fallback(&mel_segment)?;
             seek += segment_size;
@@ -514,6 +543,11 @@ impl<'a> Decoder<'a> {
                 duration: segment_duration,
                 dr,
             });
+        }
+
+        // Report 100% completion
+        if let Some(ref callback) = self.progress_callback {
+            callback(self.total_frames, self.total_frames);
         }
 
         Ok(segments)
