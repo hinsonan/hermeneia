@@ -2467,6 +2467,7 @@ dependencies = [
  "dirs 5.0.1",
  "hf-hub",
  "hound",
+ "indicatif",
  "rand 0.8.5",
  "ringbuf",
  "rubato",

@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Progress callback function type
+/// Parameters: (current_frames, total_frames)
+pub type ProgressCallback = Box<dyn Fn(usize, usize) + Send + Sync>;
+
 /// Whisper model size variants
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum WhisperModel {
