@@ -2457,6 +2457,7 @@ name = "hermeneia"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -2466,6 +2467,7 @@ dependencies = [
  "dirs 5.0.1",
  "hf-hub",
  "hound",
+ "rand 0.8.5",
  "ringbuf",
  "rubato",
  "serde",

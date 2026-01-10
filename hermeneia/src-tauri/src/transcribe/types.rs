@@ -34,6 +34,15 @@ impl WhisperModel {
             Self::LargeV3 => "openai/whisper-large-v3",
         }
     }
+
+    /// Check if this model is multilingual
+    pub fn is_multilingual(&self) -> bool {
+        match self {
+            Self::Tiny | Self::Base | Self::Small | Self::Medium
+            | Self::Large | Self::LargeV2 | Self::LargeV3 => true,
+            Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn => false,
+        }
+    }
 }
 
 /// Task type for Whisper inference
