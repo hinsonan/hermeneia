@@ -69,6 +69,8 @@ cpal = "0.15"                                        # Playback
 ringbuf = "0.4"                                      # Ring buffer for streaming playback
 
 # ML/Whisper dependencies
+# Note: MKL has compatibility issues with half-precision ops
+# Using default CPU backend with optimized resampling instead
 candle-core = "0.8"
 candle-nn = "0.8"
 candle-transformers = "0.8"
@@ -87,4 +89,5 @@ anyhow = "1"
 dirs = "5"
 
 [features]
+default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
