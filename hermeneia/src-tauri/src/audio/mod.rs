@@ -1,10 +1,10 @@
 // src-tauri/src/audio/mod.rs
 
-pub mod decoder;
-pub mod encoder;
+mod decoder;
+mod encoder;
 pub mod playback;
 pub mod trim;
-pub mod types;
+mod types;
 pub mod waveform;
 
 // Re-export commonly used items

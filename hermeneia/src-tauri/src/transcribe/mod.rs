@@ -1,8 +1,8 @@
-pub mod types;
+mod types;
 pub mod model;
 pub mod preprocessing;
 pub mod inference;
-pub mod decoder;
+mod decoder;
 pub mod language;
 
 pub use types::{
