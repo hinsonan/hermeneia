@@ -3,7 +3,7 @@
 // Profile audio trim operations with detailed timing breakdowns
 
 use hermeneia_lib::audio::trim::trim_audio_file;
-use hermeneia_lib::audio::types::TrimParams;
+use hermeneia_lib::audio::TrimParams;
 use std::path::PathBuf;
 use std::time::Instant;
 use clap::Parser;

@@ -13,7 +13,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::audio::AudioBufferRef;
-use hermeneia_lib::audio::types::TrimParams;
+use hermeneia_lib::audio::TrimParams;
 
 #[derive(Parser, Debug)]
 #[command(name = "profile-compressed-detailed")]

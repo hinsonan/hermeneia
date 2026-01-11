@@ -6,7 +6,7 @@ use hound::{WavReader, WavWriter, SampleFormat};
 use std::path::PathBuf;
 use std::time::Instant;
 use clap::Parser;
-use hermeneia_lib::audio::types::TrimParams;
+use hermeneia_lib::audio::TrimParams;
 
 #[derive(Parser, Debug)]
 #[command(name = "profile-trim-detailed")]

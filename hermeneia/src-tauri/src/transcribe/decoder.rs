@@ -14,7 +14,7 @@ pub struct DecodingResult {
     pub text: String,
     pub avg_logprob: f64,
     pub no_speech_prob: f64,
-    pub temperature: f64,
+    pub _temperature: f64,
     pub compression_ratio: f64,
 }
 
@@ -33,7 +33,7 @@ pub struct Decoder<'a> {
     task: TranscriptionTask,
     timestamps: bool,
     max_initial_timestamp_index: Option<u32>,
-    verbose: bool,
+    _verbose: bool,
     tokenizer: &'a Tokenizer,
     suppress_tokens: Tensor,
     sot_token: u32,
@@ -51,24 +51,6 @@ pub struct Decoder<'a> {
 }
 
 impl<'a> Decoder<'a> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        model: &'a mut m::model::Whisper,
-        tokenizer: &'a Tokenizer,
-        config: &Config,
-        device: &Device,
-        params: &TranscribeParams,
-    ) -> Result<Self> {
-        // Get language token if specified
-        let language_token = if let Some(ref lang) = params.language {
-            Some(token_id(tokenizer, &format!("<|{lang}|>"))?)
-        } else {
-            None
-        };
-
-        Self::new_with_language_token(model, tokenizer, config, device, params, language_token)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_language_token(
         model: &'a mut m::model::Whisper,
@@ -112,7 +94,7 @@ impl<'a> Decoder<'a> {
             task: params.task,
             timestamps: params.timestamps,
             max_initial_timestamp_index: None,
-            verbose: false,
+            _verbose: false,
             suppress_tokens,
             sot_token,
             transcribe_token,
@@ -279,7 +261,7 @@ impl<'a> Decoder<'a> {
             text,
             avg_logprob,
             no_speech_prob,
-            temperature,
+            _temperature: temperature,
             compression_ratio: f64::NAN,
         })
     }
