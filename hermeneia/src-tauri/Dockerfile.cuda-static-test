@@ -1,0 +1,77 @@
+# Dockerfile for attempting TRUE static CUDA linking
+# This is experimental - may not work with CUDA 12.8 / Blackwell
+
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
+    libasound2-dev \
+    patchelf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Set up CUDA paths
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+
+# Configure for RTX 5090 (Blackwell = sm_120 = compute capability 12.0)
+# Note: bindgen_cuda only supports a single compute cap value
+ENV CUDA_COMPUTE_CAP=120
+
+# Try to enable static linking via cudarc
+ENV CUDARC_STATIC=1
+
+WORKDIR /build
+
+# Copy project files
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY build.rs ./
+COPY tauri.conf.json ./
+COPY assets ./assets
+COPY icons ./icons
+
+# Build with CUDA feature attempting static linking
+RUN cargo build --release --features cuda --bin transcribe
+
+# Create distribution and check what we got
+RUN mkdir -p /dist && \
+    cp /build/target/release/transcribe /dist/ && \
+    echo "=== Binary dependencies ===" && \
+    ldd /build/target/release/transcribe && \
+    echo "" && \
+    echo "=== CUDA/NVIDIA dependencies ===" && \
+    (ldd /build/target/release/transcribe | grep -E "cuda|nvidia" || echo "✓ No CUDA runtime deps - static linking worked!") && \
+    echo "" && \
+    echo "=== Binary size ===" && \
+    ls -lh /dist/transcribe
+
+# Test on clean Ubuntu (no CUDA toolkit)
+FROM ubuntu:22.04 AS test
+
+RUN apt-get update && apt-get install -y \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /dist/transcribe /transcribe
+
+RUN echo "=== Testing binary on clean Ubuntu ===" && \
+    file /transcribe && \
+    echo "" && \
+    ldd /transcribe 2>&1 || true && \
+    echo "" && \
+    echo "If you see 'libcuda.so.1 => not found', that's OK - it needs GPU drivers" && \
+    echo "If you see libcudart or other CUDA toolkit libs, static linking failed"
