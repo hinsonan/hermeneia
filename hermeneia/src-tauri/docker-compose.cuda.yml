@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # Build service - creates binary with bundled CUDA libraries
+  build-cuda-static:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda-static
+      target: builder
+    image: hermeneia-cuda-bundled:12.8
+    volumes:
+      # Extract distribution package (binary + lib/) to host
+      - ./dist:/dist-out
+      # Cache dependencies for faster rebuilds
+      - cargo-cache:/root/.cargo/registry
+      - cargo-git:/root/.cargo/git
+    command: |
+      sh -c "
+        echo '=== Copying distribution package to host ===' &&
+        rm -rf /dist-out/* &&
+        cp -r /dist/* /dist-out/ &&
+        echo '' &&
+        echo '✅ Build complete!' &&
+        echo '' &&
+        echo '📦 Output:' &&
+        echo '   Binary: ./dist/transcribe' &&
+        echo '   Libraries: ./dist/lib/' &&
+        echo '' &&
+        echo '📊 Package contents:' &&
+        ls -lh /dist-out/ &&
+        echo '' &&
+        ls -lh /dist-out/lib/ &&
+        echo '' &&
+        echo '🚀 To run (binary finds libs via RPATH):' &&
+        echo '   ./dist/transcribe --input audio.mp3'
+      "
+
+volumes:
+  cargo-cache:
+  cargo-git:

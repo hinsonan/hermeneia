@@ -13,6 +13,15 @@ use candle_transformers::models::whisper::{self as m, Config};
 use std::time::Instant;
 use tokenizers::Tokenizer;
 
+/// Get a human-readable name for the device
+fn device_name(device: &Device) -> &'static str {
+    match device {
+        Device::Cpu => "CPU",
+        Device::Cuda(_) => "CUDA",
+        Device::Metal(_) => "Metal",
+    }
+}
+
 /// Main transcription function
 pub fn transcribe_audio(file_path: &str, params: TranscribeParams) -> Result<TranscriptResult> {
     transcribe_audio_with_progress(file_path, params, None)
@@ -36,6 +45,7 @@ pub fn transcribe_audio_with_progress(
         .ensure_model(params.model, params.use_quantized)?;
 
     let device = get_device(params.force_cpu)?;
+    tracing::info!("Using device: {}", device_name(&device));
 
     // Load model and tokenizer
     let (config, tokenizer, mut model) = load_model(&model_files, &device)?;
