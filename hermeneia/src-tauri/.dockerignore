@@ -1,0 +1,64 @@
+# Rust build artifacts
+target/
+dist/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock for libraries (keep Cargo.lock for binaries)
+# Cargo.lock
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Documentation (not needed for build)
+*.md
+!BUILD-CUDA.md
+
+# Docker files (avoid recursive copies)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Build scripts (already in context)
+*.sh
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+
+# Cache directories
+.cache/
+
+# Frontend node_modules (if accidentally in src-tauri)
+node_modules/
+
+# Test files and fixtures
+tests/fixtures/
+test_output/
+*.test.wav
+*.test.mp3
+
+# Binary outputs
+transcribe
+audio-trim
+generate-test-audio
+profile-*
