@@ -1,6 +1,59 @@
 version: '3.8'
 
 services:
+  # Extract CUDA libraries for local development
+  # Run once: docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs
+  extract-cuda-libs:
+    image: nvidia/cuda:12.8.0-devel-ubuntu22.04
+    volumes:
+      - ./cuda-libs:/output
+    command: |
+      sh -c "
+        mkdir -p /output &&
+        cp -P /usr/local/cuda/lib64/libcudart.so* /output/ &&
+        cp -P /usr/local/cuda/lib64/libcublas.so* /output/ &&
+        cp -P /usr/local/cuda/lib64/libcublasLt.so* /output/ &&
+        cp -P /usr/local/cuda/lib64/libnvrtc.so* /output/ &&
+        cp -P /usr/local/cuda/lib64/libcurand.so* /output/ &&
+        echo '' &&
+        echo '✅ CUDA 12.8 libs extracted to cuda-libs/' &&
+        ls -lh /output/
+      "
+
+  # Build Tauri app with CUDA for development
+  # Usage: docker-compose -f docker-compose.cuda.yml run --rm build-dev
+  build-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda-static
+      target: builder
+    image: hermeneia-cuda-dev:12.8
+    volumes:
+      # Mount source for incremental builds
+      - ./src:/build/src
+      - ./Cargo.toml:/build/Cargo.toml
+      - ./Cargo.lock:/build/Cargo.lock
+      - ./build.rs:/build/build.rs
+      - ./tauri.conf.json:/build/tauri.conf.json
+      # Output compiled binary to host
+      - ./target-cuda:/build/target
+      # Cargo cache for faster rebuilds
+      - cargo-cache:/root/.cargo/registry
+      - cargo-git:/root/.cargo/git
+    environment:
+      - CUDA_COMPUTE_CAP=75
+    command: |
+      sh -c "
+        echo '🔨 Building Tauri app with CUDA...' &&
+        cargo build --features cuda &&
+        echo '' &&
+        echo '✅ Build complete!' &&
+        echo '📦 Binary: ./target-cuda/debug/hermeneia' &&
+        echo '' &&
+        echo '🚀 To run:' &&
+        echo '   LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/hermeneia'
+      "
+
   # Build service - creates binary with bundled CUDA libraries
   build-cuda-static:
     build:
