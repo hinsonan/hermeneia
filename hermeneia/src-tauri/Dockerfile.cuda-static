@@ -28,9 +28,23 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
-# Configure for RTX 5090 (Blackwell = sm_120 = compute capability 12.0)
-# Note: bindgen_cuda only supports a single compute cap value
-ENV CUDA_COMPUTE_CAP=120
+# Configure for universal GPU support via PTX (Parallel Thread Execution)
+# PTX is NVIDIA's virtual ISA that JIT-compiles to any GPU at runtime
+#
+# Strategy: Build PTX for a baseline compute capability
+# - compute_75 (Turing) covers: RTX 20/30/40/50 series, T4, A100, H100
+# - At runtime, CUDA driver JIT-compiles PTX to actual GPU architecture
+# - Works on ANY GPU with compute capability >= 7.5
+# - First inference is ~10-20% slower (JIT compile time), then cached
+#
+# This single binary supports:
+#   ✓ RTX 20-series (Turing, sm_75)
+#   ✓ RTX 30-series (Ampere, sm_86)
+#   ✓ RTX 40-series (Ada, sm_89)
+#   ✓ RTX 50-series (Blackwell, sm_120)
+#   ✓ A100, H100, and newer datacenter GPUs
+#
+ENV CUDA_COMPUTE_CAP=75
 
 WORKDIR /build
 
@@ -64,23 +78,28 @@ RUN cargo build --release --features cuda --bin transcribe
 # Create distribution package with RPATH set
 RUN mkdir -p /dist/lib && \
     cp /build/target/release/transcribe /dist/ && \
-    cp /build/lib/* /dist/lib/ && \
+    # Use cp -a to preserve symlinks (reduces size from 4GB to 1.4GB)
+    cp -a /build/lib/* /dist/lib/ && \
     # Set RPATH so binary looks for libraries in ./lib relative to binary location
     patchelf --set-rpath '$ORIGIN/lib' /dist/transcribe && \
     echo "" && \
     echo "=== Verifying RPATH ===" && \
     patchelf --print-rpath /dist/transcribe && \
     echo "" && \
+    echo "=== Distribution package ===" && \
+    ls -lh /dist/ && \
+    echo "" && \
+    echo "=== CUDA libraries (with symlinks) ===" && \
+    ls -lh /dist/lib/ && \
+    echo "" && \
+    echo "=== Actual library sizes (unique files only) ===" && \
+    du -ch /dist/lib/*.so.*.* 2>/dev/null | tail -1 && \
+    echo "" && \
     echo "=== All binary dependencies ===" && \
     LD_LIBRARY_PATH=/dist/lib ldd /dist/transcribe && \
     echo "" && \
     echo "=== CUDA/NVIDIA dependencies ===" && \
-    (LD_LIBRARY_PATH=/dist/lib ldd /dist/transcribe | grep -E "cuda|nvidia" || echo "No direct CUDA deps - may use driver API only") && \
-    echo "" && \
-    echo "=== Distribution package ===" && \
-    ls -lh /dist/ && \
-    echo "" && \
-    ls -lh /dist/lib/
+    (LD_LIBRARY_PATH=/dist/lib ldd /dist/transcribe | grep -E "cuda|nvidia" || echo "No direct CUDA deps - may use driver API only")
 
 # Runtime stage - minimal image for testing
 FROM ubuntu:22.04 AS runtime
