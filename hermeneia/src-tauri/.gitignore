@@ -8,3 +8,9 @@
 
 # CUDA distribution package (binary + bundled libraries)
 /dist/
+
+# CUDA libraries extracted for local development
+/cuda-libs/
+
+# CUDA dev build output (compiled inside Docker)
+/target-cuda/
