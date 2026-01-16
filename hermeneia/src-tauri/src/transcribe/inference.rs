@@ -5,7 +5,7 @@ use crate::transcribe::{
     language::detect_language,
     model::{get_device, ModelManager},
     preprocessing::preprocess_audio,
-    types::{ModelFiles, ProgressCallback, TranscribeParams, TranscriptResult},
+    types::{ModelFiles, ProgressCallback, ProgressReporter, TranscribeParams, TranscriptResult},
 };
 use candle_core::Device;
 use candle_nn::VarBuilder;
@@ -86,6 +86,96 @@ pub fn transcribe_audio_with_progress(
     )?;
     let raw_segments = decoder.run(&mel, progress_callback)?;
     let segments = decoder.extract_segments(raw_segments);
+
+    // Build result
+    let text = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    Ok(TranscriptResult {
+        segments,
+        text,
+        language: params.language.clone(),
+        duration,
+        model: params.model,
+        inference_time: start_time.elapsed().as_secs_f64(),
+    })
+}
+
+/// Main transcription function with progress reporter trait
+pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
+    file_path: &str,
+    params: TranscribeParams,
+    reporter: &P,
+) -> Result<TranscriptResult> {
+    let start_time = Instant::now();
+
+    // Load audio
+    let audio_data = decode_audio_file(file_path)?;
+    let duration = audio_data.duration_seconds();
+
+    // Download/load model
+    let model_manager = ModelManager::new()?;
+    let model_files = model_manager
+        .ensure_model(params.model, params.use_quantized)?;
+
+    let device = get_device(params.force_cpu)?;
+    tracing::info!("Using device: {}", device_name(&device));
+
+    // Load model and tokenizer
+    let (config, tokenizer, mut model) = load_model(&model_files, &device)?;
+
+    // Preprocess to mel-spectrogram (needs config for mel bins)
+    let mel = preprocess_audio(&audio_data, &config, &device)?;
+
+    // Detect language if not specified and model is multilingual
+    let language_token = match (params.model.is_multilingual(), &params.language) {
+        (true, None) => {
+            tracing::info!("Auto-detecting language...");
+            Some(detect_language(&mut model, &tokenizer, &mel, &device)?)
+        }
+        (false, None) => None,
+        (true, Some(lang)) => {
+            let token = tokenizer
+                .token_to_id(&format!("<|{lang}|>"))
+                .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
+            Some(token)
+        }
+        (false, Some(_)) => {
+            return Err(AudioError::TranscriptionFailed(
+                "Cannot set language for non-multilingual models".to_string(),
+            ))
+        }
+    };
+
+    // Use raw pointer to avoid lifetime issues with the closure
+    let reporter_ptr = reporter as *const P as usize;
+
+    let callback: ProgressCallback = Box::new(move |current, total| {
+        unsafe {
+            let reporter_ref = &*(reporter_ptr as *const P);
+            reporter_ref.report(current, total);
+        }
+    });
+
+    // Run inference with full decoder
+    let mut params_with_token = params.clone();
+    params_with_token.language = None;
+    let mut decoder = Decoder::new_with_language_token(
+        &mut model,
+        &tokenizer,
+        &config,
+        &device,
+        &params_with_token,
+        language_token,
+    )?;
+    let raw_segments = decoder.run(&mel, Some(callback))?;
+    let segments = decoder.extract_segments(raw_segments);
+
+    // Signal completion
+    reporter.finish();
 
     // Build result
     let text = segments

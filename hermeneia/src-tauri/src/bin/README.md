@@ -1,6 +1,6 @@
 # Audio Processing Binaries
 
-This directory contains command-line tools for audio processing and performance profiling.
+This directory contains command-line tools for audio processing, transcription, and performance profiling.
 
 ## Requirements
 
@@ -262,6 +262,73 @@ Time Distribution:
 
 ---
 
+### 6. `transcribe`
+Transcribe audio files using Whisper speech recognition.
+
+**Usage:**
+```bash
+cargo run --release --bin transcribe -- \
+  --input audio.mp3 \
+  --output transcript.txt \
+  --model tiny \
+  --format text
+```
+
+**Arguments:**
+- `--input, -i` - Input audio file (MP3, WAV, FLAC, etc.)
+- `--output, -o` - Output file path (optional, prints to stdout if not specified)
+- `--model, -m` - Whisper model size: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large, large-v2, large-v3 (default: tiny)
+- `--task, -t` - Task type: transcribe or translate (default: transcribe)
+- `--language, -l` - Language code (e.g., en, es), auto-detect if not specified
+- `--timestamps` - Include timestamps in output
+- `--cpu` - Force CPU (disable GPU)
+- `--format, -f` - Output format: text, json, srt (default: text)
+
+**Supported Models:**
+- `tiny` / `tiny.en` - Fastest, ~39M params, English/English-only
+- `base` / `base.en` - Fast, ~74M params, English/English-only
+- `small` / `small.en` - Balanced, ~244M params, English/English-only
+- `medium` / `medium.en` - Accurate, ~769M params, English/English-only
+- `large` / `large-v2` / `large-v3` - Most accurate, ~1550M params, multilingual
+
+**Output Formats:**
+- `text` - Plain text transcription
+- `json` - Full JSON with segments, timestamps, and metadata
+- `srt` - SubRip subtitle format with timestamps
+
+**Examples:**
+```bash
+# Transcribe with tiny model (fastest)
+cargo run --release --bin transcribe -- \
+  -i sermon.mp3 -o transcript.txt
+
+# Transcribe with timestamps
+cargo run --release --bin transcribe -- \
+  -i interview.mp3 -o interview.txt --timestamps
+
+# Generate SRT subtitles
+cargo run --release --bin transcribe -- \
+  -i video.mp3 -o subtitles.srt --format srt
+
+# Use larger model for better accuracy
+cargo run --release --bin transcribe -- \
+  -i lecture.mp3 -o lecture.txt --model base
+
+# Force CPU usage
+cargo run --release --bin transcribe -- \
+  -i audio.mp3 --cpu
+
+# Output JSON with full metadata
+cargo run --release --bin transcribe -- \
+  -i speech.mp3 -o speech.json --format json
+
+# Translate to English
+cargo run --release --bin transcribe -- \
+  -i spanish.mp3 -o english.txt --task translate --language es
+```
+
+---
+
 ## Performance Profiling Guide
 
 ### Step 1: Generate Test Files
@@ -405,14 +472,8 @@ Reduce buffer size in `src/audio/trim.rs` if processing very large files on limi
 
 ## Contributing
 
-When adding new profiling tools:
+When adding new tools:
 1. Add the binary to `Cargo.toml` under `[[bin]]`
 2. Document it in this README
 3. Include usage examples
 4. Add performance benchmarks if applicable
-
----
-
-## License
-
-Part of the Hermeneia project.
