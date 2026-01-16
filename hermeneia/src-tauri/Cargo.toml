@@ -43,7 +43,7 @@ path = "src/bin/profile_compressed_detailed.rs"
 # Binary for transcription testing
 [[bin]]
 name = "transcribe"
-path = "src/bin/transcribe.rs"
+path = "src/bin/transcribe/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

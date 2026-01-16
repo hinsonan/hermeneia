@@ -1,9 +1,30 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Progress callback function type
+/// Progress callback function type (legacy, for backward compatibility)
 /// Parameters: (current_frames, total_frames)
 pub type ProgressCallback = Box<dyn Fn(usize, usize) + Send + Sync>;
+
+/// Trait for reporting transcription progress
+/// Allows decoupling of progress reporting from transcription logic
+pub trait ProgressReporter: Send + Sync {
+    /// Report progress (current_frame, total_frames)
+    fn report(&self, current: usize, total: usize);
+
+    /// Called when transcription starts
+    fn start(&self) {}
+
+    /// Called when transcription completes
+    fn finish(&self) {}
+}
+
+/// Null implementation for testing/no progress reporting
+#[derive(Debug, Clone)]
+pub struct NoProgress;
+
+impl ProgressReporter for NoProgress {
+    fn report(&self, _current: usize, _total: usize) {}
+}
 
 /// Whisper model size variants
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -125,5 +146,14 @@ mod tests {
         assert!(matches!(params.model, WhisperModel::Tiny));
         assert!(params.timestamps);
         assert!(!params.force_cpu);
+    }
+
+    #[test]
+    fn test_no_progress_trait() {
+        let reporter = NoProgress;
+        // Should not panic and do nothing
+        reporter.report(50, 100);
+        reporter.start();
+        reporter.finish();
     }
 }
