@@ -5,6 +5,60 @@ use std::path::PathBuf;
 /// Parameters: (current_frames, total_frames)
 pub type ProgressCallback = Box<dyn Fn(usize, usize) + Send + Sync>;
 
+/// Transcription phase for progress reporting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionPhase {
+    LoadingModel,
+    Transcribing,
+}
+
+/// Progress event payload for Tauri events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptionProgress {
+    pub phase: TranscriptionPhase,
+    pub current: Option<usize>,
+    pub total: Option<usize>,
+    pub message: String,
+}
+
+impl TranscriptionProgress {
+    /// Create a "loading model" progress event
+    pub fn loading_model() -> Self {
+        Self {
+            phase: TranscriptionPhase::LoadingModel,
+            current: None,
+            total: None,
+            message: "Loading model...".to_string(),
+        }
+    }
+
+    /// Create a "transcribing" progress event
+    pub fn transcribing(current: usize, total: usize) -> Self {
+        let percentage = if total > 0 {
+            (current as f64 / total as f64 * 100.0) as usize
+        } else {
+            0
+        };
+        Self {
+            phase: TranscriptionPhase::Transcribing,
+            current: Some(current),
+            total: Some(total),
+            message: format!("Transcribing... {}%", percentage),
+        }
+    }
+
+    /// Create a "completed" progress event
+    pub fn completed() -> Self {
+        Self {
+            phase: TranscriptionPhase::Transcribing,
+            current: Some(100),
+            total: Some(100),
+            message: "Transcription complete".to_string(),
+        }
+    }
+}
+
 /// Trait for reporting transcription progress
 /// Allows decoupling of progress reporting from transcription logic
 pub trait ProgressReporter: Send + Sync {

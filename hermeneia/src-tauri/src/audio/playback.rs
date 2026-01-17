@@ -185,7 +185,16 @@ impl AudioPlayer {
             tracing::debug!("Playback thread finished");
         }
 
+        // Reset all state so get_state() returns duration=0
+        // This signals to frontend that threads are dead and need restart
         self.state.current_frame.store(0, Ordering::SeqCst);
+        self.state.total_frames.store(0, Ordering::SeqCst);
+        self.state.sample_rate.store(44100, Ordering::SeqCst); // Reset to default
+        self.state.channels.store(2, Ordering::SeqCst); // Reset to default
+
+        // Clear loaded file
+        *self.loaded_file.lock().unwrap() = None;
+
         tracing::debug!("AudioPlayer::stop - Complete");
     }
 
@@ -322,6 +331,7 @@ fn run_decoder(
     // Main decoding loop - streams samples to ring buffer
     let mut packets_decoded = 0;
     let mut samples_written = 0;
+    let mut just_seeked = false;
 
     loop {
         // Check for stop signal
@@ -334,30 +344,66 @@ fn run_decoder(
         // Handle seek requests
         if state.seek_pending.load(Ordering::SeqCst) {
             let seek_frame = state.seek_to_frame.load(Ordering::SeqCst);
-
-            // Convert frame to time: seconds = frame / sample_rate
             let seek_seconds = seek_frame as f64 / sample_rate as f64;
-            let seconds_whole = seek_seconds.floor() as u64;
-            let seconds_frac = seek_seconds - seconds_whole as f64;
 
-            let seek_time = SeekTo::Time {
-                time: symphonia::core::units::Time::new(
-                    seconds_whole,
-                    seconds_frac,
-                ),
-                track_id: Some(track_id),
+            tracing::debug!("Seek request: frame={}, time={:.3}s", seek_frame, seek_seconds);
+
+            // Try multiple seek strategies for maximum compatibility
+            // Strategy 1: SeekTo::TimeStamp (sample-based) - best for PCM/WAV
+            // Strategy 2: SeekTo::Time - better for compressed formats (MP3, OGG, etc.)
+            // For each, try Accurate mode first, then Coarse as fallback
+
+            // Helper to create TimeStamp seek target
+            let make_seek_ts = || SeekTo::TimeStamp {
+                ts: seek_frame,
+                track_id: track_id,
             };
 
-            // Attempt to seek
-            if let Ok(seeked) = format.seek(SeekMode::Accurate, seek_time) {
-                // Update current position to seek target
-                state.current_frame.store(seeked.actual_ts, Ordering::SeqCst);
+            // Helper to create Time seek target
+            let make_seek_time = || {
+                let seconds_whole = seek_seconds.floor() as u64;
+                let seconds_frac = seek_seconds - seconds_whole as f64;
+                SeekTo::Time {
+                    time: symphonia::core::units::Time::new(seconds_whole, seconds_frac),
+                    track_id: Some(track_id),
+                }
+            };
 
-                // Signal consumer to flush ring buffer (discard old audio)
-                state.buffer_flush_pending.store(true, Ordering::SeqCst);
+            // Try all strategies in order of preference
+            let seek_result = format.seek(SeekMode::Accurate, make_seek_ts())
+                .or_else(|_| format.seek(SeekMode::Coarse, make_seek_ts()))
+                .or_else(|_| format.seek(SeekMode::Accurate, make_seek_time()))
+                .or_else(|_| format.seek(SeekMode::Coarse, make_seek_time()));
 
-                // Reset decoder state to start fresh from seek position
-                decoder.reset();
+            match seek_result {
+                Ok(seeked) => {
+                    tracing::info!("Seek successful: target={}, actual={}", seek_frame, seeked.actual_ts);
+
+                    // Update current position to seek target
+                    state.current_frame.store(seeked.actual_ts, Ordering::SeqCst);
+
+                    // Signal consumer to flush and wait for it to complete
+                    state.buffer_flush_pending.store(true, Ordering::SeqCst);
+
+                    // Wait for consumer to clear the flag (indicating flush complete)
+                    // Timeout after 100ms to avoid deadlock
+                    let flush_start = std::time::Instant::now();
+                    while state.buffer_flush_pending.load(Ordering::SeqCst) {
+                        if flush_start.elapsed().as_millis() > 100 {
+                            tracing::warn!("Buffer flush timeout after seek");
+                            break;
+                        }
+                        thread::sleep(Duration::from_micros(100));
+                    }
+                    tracing::debug!("Buffer flush completed in {:?}", flush_start.elapsed());
+
+                    // Reset decoder state to start fresh from seek position
+                    decoder.reset();
+                    just_seeked = true;
+                }
+                Err(e) => {
+                    tracing::error!("Seek failed, all strategies failed for frame {}: {}", seek_frame, e);
+                }
             }
 
             state.seek_pending.store(false, Ordering::SeqCst);
@@ -366,15 +412,42 @@ fn run_decoder(
         // Decode next packet
         let packet = match format.next_packet() {
             Ok(p) => p,
-            Err(_) => {
-                // End of stream
-                state.is_playing.store(false, Ordering::SeqCst);
-                break;
+            Err(e) => {
+                // Check what kind of error - could be EOF or actual error
+                let is_eof = matches!(e, symphonia::core::errors::Error::IoError(ref io_err)
+                    if io_err.kind() == std::io::ErrorKind::UnexpectedEof)
+                    || matches!(e, symphonia::core::errors::Error::ResetRequired);
+
+                tracing::debug!("next_packet error: {:?}, is_eof={}", e, is_eof);
+
+                // End of stream - but don't exit! We need to stay alive for seek requests.
+                // Wait for either a seek request or stop signal.
+                tracing::debug!("Decoder reached end of stream, waiting for seek or stop");
+
+                loop {
+                    if state.should_stop.load(Ordering::SeqCst) {
+                        tracing::debug!("Decoder stopping after end of stream");
+                        return Ok(());
+                    }
+
+                    if state.seek_pending.load(Ordering::SeqCst) {
+                        tracing::debug!("Seek requested after end of stream, breaking to handle");
+                        break; // Break inner loop to process seek in outer loop
+                    }
+
+                    thread::sleep(Duration::from_millis(50));
+                }
+                continue; // Continue outer loop to handle the seek
             }
         };
 
         if packet.track_id() != track_id {
             continue;
+        }
+
+        if just_seeked {
+            tracing::info!("First packet after seek: ts={}, dur={}", packet.ts(), packet.dur());
+            just_seeked = false;
         }
 
         let decoded = match decoder.decode(&packet) {
@@ -520,30 +593,31 @@ fn run_playback_stream(
                     tracing::debug!("Audio callback invoked for first time - buffer size: {}", data.len());
                 }
 
-                if !is_playing {
-                    // Output silence when paused
+                // Check if we need to flush buffer and reset position after seek
+                if state_clone.buffer_flush_pending.load(Ordering::SeqCst) {
+                    let mut consumer_guard = consumer_clone.lock().unwrap();
+
+                    // Drain all buffered audio
+                    let to_skip = consumer_guard.occupied_len();
+                    consumer_guard.skip(to_skip);
+                    tracing::debug!("Flushed {} samples from ring buffer", to_skip);
+
+                    // Reset position tracking to match seek target
+                    let current_frame = state_clone.current_frame.load(Ordering::SeqCst);
+                    samples_consumed_clone.store(current_frame * channels, Ordering::SeqCst);
+
+                    // Clear the flush flag to signal decoder it can proceed
+                    state_clone.buffer_flush_pending.store(false, Ordering::SeqCst);
+
+                    // Output silence while decoder refills with new position
                     for sample in data.iter_mut() {
                         *sample = 0.0;
                     }
                     return;
                 }
 
-                // Check if we need to flush the buffer (after seek)
-                if state_clone.buffer_flush_pending.load(Ordering::SeqCst) {
-                    let mut consumer_guard = consumer_clone.lock().unwrap();
-
-                    // Drain all old audio from ring buffer by skipping everything
-                    let to_skip = consumer_guard.occupied_len();
-                    consumer_guard.skip(to_skip);
-
-                    // Reset position tracking to match seek target
-                    let current_frame = state_clone.current_frame.load(Ordering::SeqCst);
-                    samples_consumed_clone.store(current_frame * channels, Ordering::SeqCst);
-
-                    // Clear the flush flag
-                    state_clone.buffer_flush_pending.store(false, Ordering::SeqCst);
-
-                    // Output silence this cycle
+                if !is_playing {
+                    // Output silence when paused
                     for sample in data.iter_mut() {
                         *sample = 0.0;
                     }

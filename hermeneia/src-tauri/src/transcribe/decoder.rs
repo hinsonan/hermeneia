@@ -137,17 +137,6 @@ impl<'a> Decoder<'a> {
 
         // Token generation loop
         for i in 0..sample_len {
-            // Report fine-grained progress every 10 tokens
-            if i % 10 == 0 && self.total_frames > 0 {
-                if let Some(ref callback) = self.progress_callback {
-                    // Calculate progress: segment progress + token progress within segment
-                    let segment_progress_ratio = i as f64 / sample_len as f64;
-                    let current_frame = self.current_segment_start +
-                        (self.current_segment_size as f64 * segment_progress_ratio) as usize;
-                    callback(current_frame, self.total_frames);
-                }
-            }
-
             let tokens_t = Tensor::new(tokens.as_slice(), mel.device())
                 .map_err(|e| AudioError::TranscriptionFailed(format!("Token tensor: {}", e)))?;
             let tokens_t = tokens_t
@@ -323,7 +312,8 @@ impl<'a> Decoder<'a> {
 
             if last_was_timestamp {
                 if penultimate_was_timestamp {
-                    // Must be non-timestamp
+                    // Two timestamps in a row (end of segment + start of next)
+                    // Force non-timestamp (text) for the next token
                     for i in 0..vocab_size {
                         mask_buffer[i as usize] = if i >= timestamp_begin {
                             f32::NEG_INFINITY
@@ -336,21 +326,9 @@ impl<'a> Decoder<'a> {
                             AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
                         })?,
                     );
-                } else {
-                    // Must be timestamp or EOT
-                    for i in 0..vocab_size {
-                        mask_buffer[i as usize] = if i < self.eot_token {
-                            f32::NEG_INFINITY
-                        } else {
-                            0.0
-                        };
-                    }
-                    masks.push(
-                        Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
-                            AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
-                        })?,
-                    );
                 }
+                // After a single timestamp (start of segment), allow text tokens
+                // Don't mask anything - let the model generate text naturally
             }
 
             // Rule 2: Non-decreasing timestamp constraint
@@ -501,6 +479,10 @@ impl<'a> Decoder<'a> {
         self.total_frames = content_frames;
 
         while seek < content_frames {
+            // Report progress at segment level (before processing)
+            if let Some(ref callback) = self.progress_callback {
+                callback(seek, content_frames);
+            }
 
             let time_offset = (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
             let segment_size = usize::min(content_frames - seek, m::N_FRAMES);
@@ -539,6 +521,12 @@ impl<'a> Decoder<'a> {
     pub fn extract_segments(&self, segments: Vec<Segment>) -> Vec<TranscriptSegment> {
         let mut result = Vec::new();
 
+        tracing::debug!(
+            "extract_segments: timestamps={}, sot={}, eot={}, transcribe={}, translate={}, no_timestamps={}, language={:?}",
+            self.timestamps, self.sot_token, self.eot_token, self.transcribe_token,
+            self.translate_token, self.no_timestamps_token, self.language_token
+        );
+
         for (seg_idx, segment) in segments.iter().enumerate() {
             if self.timestamps {
                 let mut tokens_to_decode = vec![];
@@ -546,32 +534,46 @@ impl<'a> Decoder<'a> {
                 let mut sub_segment_id = 0;
 
                 for &token in segment.dr.tokens.iter() {
-                    if token == self.sot_token || token == self.eot_token {
+                    // Skip special tokens: SOT, EOT, language, transcribe, translate
+                    if token == self.sot_token
+                        || token == self.eot_token
+                        || token == self.transcribe_token
+                        || token == self.translate_token
+                        || Some(token) == self.language_token
+                    {
+                        tracing::debug!("Skipping special token: {}", token);
                         continue;
                     }
 
                     if token > self.no_timestamps_token {
+                        tracing::debug!("Timestamp token: {} (time={:.2}s)", token, (token - self.no_timestamps_token - 1) as f32 / 50.0);
                         let timestamp_s = (token - self.no_timestamps_token - 1) as f32 / 50.0;
                         if !tokens_to_decode.is_empty() {
                             if let Ok(text) = self.tokenizer.decode(&tokens_to_decode, true) {
-                                result.push(TranscriptSegment {
-                                    id: seg_idx * 100 + sub_segment_id,
-                                    start: Some(segment.start + prev_timestamp_s as f64),
-                                    end: Some(segment.start + timestamp_s as f64),
-                                    text,
-                                });
-                                sub_segment_id += 1;
+                                if !text.trim().is_empty() {
+                                    result.push(TranscriptSegment {
+                                        id: seg_idx * 100 + sub_segment_id,
+                                        start: Some(segment.start + prev_timestamp_s as f64),
+                                        end: Some(segment.start + timestamp_s as f64),
+                                        text,
+                                    });
+                                    sub_segment_id += 1;
+                                }
                             }
                             tokens_to_decode.clear();
                         }
                         prev_timestamp_s = timestamp_s;
                     } else {
+                        tracing::debug!("Text token: {}", token);
                         tokens_to_decode.push(token);
                     }
                 }
 
+                tracing::debug!("End of segment, tokens_to_decode remaining: {:?}", tokens_to_decode);
+
                 if !tokens_to_decode.is_empty() {
                     if let Ok(text) = self.tokenizer.decode(&tokens_to_decode, true) {
+                        tracing::debug!("Decoded remaining tokens: '{}'", text);
                         if !text.trim().is_empty() {
                             result.push(TranscriptSegment {
                                 id: seg_idx * 100 + sub_segment_id,

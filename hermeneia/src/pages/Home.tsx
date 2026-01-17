@@ -10,8 +10,9 @@ const Home: Component = () => {
   const navigateTo = (page: string) => {
     if (page === 'audio') {
       navigate('/audio-editor');
+    } else if (page === 'transcribe') {
+      navigate('/transcription');
     }
-    // Handle other routes when implemented
   };
 
   return (

@@ -221,74 +221,79 @@ pub fn get_audio_info<P: AsRef<Path>>(path: P) -> Result<AudioInfo> {
     })
 }
 
-/// Convert symphonia's AudioBufferRef to Vec<f32>
+/// Convert symphonia's AudioBufferRef to Vec<f32> in interleaved format
 ///
-/// Handles all sample formats (u8, i16, i32, f32, f64) and converts to f32
+/// Handles all sample formats (u8, i16, i32, f32, f64) and converts to f32.
+/// Symphonia stores audio in planar format (separate array per channel),
+/// but we need interleaved format [L, R, L, R, ...] for downstream processing.
 fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
     match buffer {
-        // Already f32 - just copy
+        // Already f32 - interleave from planes
         AudioBufferRef::F32(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend_from_slice(plane);
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| s);
         }
 
         // Convert f64 → f32
         AudioBufferRef::F64(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s as f32));
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| s as f32);
         }
 
         // Convert signed integers to f32 in range [-1.0, 1.0]
         AudioBufferRef::S8(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s as f32 / 128.0));
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| s as f32 / 128.0);
         }
         AudioBufferRef::S16(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s as f32 / 32768.0));
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| s as f32 / 32768.0);
         }
         AudioBufferRef::S24(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s.inner() as f32 / 8388608.0));
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| s.inner() as f32 / 8388608.0);
         }
         AudioBufferRef::S32(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| s as f32 / 2147483648.0));
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| s as f32 / 2147483648.0);
         }
 
         // Convert unsigned integers to f32
         AudioBufferRef::U8(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| (s as f32 - 128.0) / 128.0));
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 128.0) / 128.0);
         }
         AudioBufferRef::U16(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(plane.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 32768.0) / 32768.0);
         }
         AudioBufferRef::U24(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(
-                    plane
-                        .iter()
-                        .map(|&s| (s.inner() as f32 - 8388608.0) / 8388608.0),
-                );
-            }
+            interleave_planes(buf.planes().planes(), output, |&s| (s.inner() as f32 - 8388608.0) / 8388608.0);
         }
         AudioBufferRef::U32(buf) => {
-            for plane in buf.planes().planes() {
-                output.extend(
-                    plane
-                        .iter()
-                        .map(|&s| (s as f32 - 2147483648.0) / 2147483648.0),
-                );
+            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 2147483648.0) / 2147483648.0);
+        }
+    }
+}
+
+/// Interleave samples from planar format to interleaved format
+///
+/// Converts from [L0, L1, L2, ...], [R0, R1, R2, ...] (planar)
+/// to [L0, R0, L1, R1, L2, R2, ...] (interleaved)
+fn interleave_planes<T, F>(planes: &[&[T]], output: &mut Vec<f32>, convert: F)
+where
+    F: Fn(&T) -> f32,
+{
+    if planes.is_empty() {
+        return;
+    }
+
+    // For mono, just convert directly
+    if planes.len() == 1 {
+        output.extend(planes[0].iter().map(&convert));
+        return;
+    }
+
+    // For multi-channel, interleave the samples
+    let num_samples = planes[0].len();
+    output.reserve(num_samples * planes.len());
+
+    for i in 0..num_samples {
+        for plane in planes {
+            if i < plane.len() {
+                output.push(convert(&plane[i]));
             }
         }
     }
