@@ -66,10 +66,13 @@ pub fn transcribe_audio_with_progress(
                 .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
             Some(token)
         }
-        (false, Some(_)) => {
-            return Err(AudioError::TranscriptionFailed(
-                "Cannot set language for non-multilingual models".to_string(),
-            ))
+        (false, Some(lang)) => {
+            // English-only models don't support language selection - ignore and continue
+            tracing::warn!(
+                "Ignoring language '{}' for English-only model; these models only support English",
+                lang
+            );
+            None
         }
     };
 
@@ -85,7 +88,22 @@ pub fn transcribe_audio_with_progress(
         language_token,
     )?;
     let raw_segments = decoder.run(&mel, progress_callback)?;
+
+    // Debug logging
+    tracing::info!("Raw segments count: {}", raw_segments.len());
+    for (i, seg) in raw_segments.iter().enumerate() {
+        tracing::info!(
+            "Raw segment {}: start={:.2}s, text='{}', tokens={:?}",
+            i, seg.start, seg.dr.text, seg.dr.tokens
+        );
+    }
+
     let segments = decoder.extract_segments(raw_segments);
+
+    tracing::info!("Extracted segments count: {}", segments.len());
+    for seg in &segments {
+        tracing::info!("Extracted segment {}: text='{}'", seg.id, seg.text);
+    }
 
     // Build result
     let text = segments
@@ -143,10 +161,13 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
                 .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
             Some(token)
         }
-        (false, Some(_)) => {
-            return Err(AudioError::TranscriptionFailed(
-                "Cannot set language for non-multilingual models".to_string(),
-            ))
+        (false, Some(lang)) => {
+            // English-only models don't support language selection - ignore and continue
+            tracing::warn!(
+                "Ignoring language '{}' for English-only model; these models only support English",
+                lang
+            );
+            None
         }
     };
 
