@@ -35,6 +35,10 @@ services:
       - ./Cargo.lock:/build/Cargo.lock
       - ./build.rs:/build/build.rs
       - ./tauri.conf.json:/build/tauri.conf.json
+      - ./capabilities:/build/capabilities
+      - ./icons:/build/icons
+      - ./gen:/build/gen
+      - ./assets:/build/assets
       # Output compiled binary to host
       - ./target-cuda:/build/target
       # Cargo cache for faster rebuilds

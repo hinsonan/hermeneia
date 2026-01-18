@@ -69,6 +69,8 @@ COPY build.rs ./
 COPY tauri.conf.json ./
 COPY assets ./assets
 COPY icons ./icons
+COPY capabilities ./capabilities
+COPY gen ./gen
 
 # Build with CUDA feature, using our bundled libraries
 # Add our lib directory to the library path during build
