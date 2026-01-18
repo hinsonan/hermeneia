@@ -1,5 +1,8 @@
 use clap::Parser;
-use hermeneia_lib::transcribe::{transcribe_audio_with_reporter, TranscribeParams, TranscriptionTask, WhisperModel};
+use hermeneia_lib::transcribe::{
+    transcribe_audio_with_reporter, ModelValidator, TranscribeParams,
+    TranscriptionTask, ValidationResult, WhisperModel
+};
 use tracing::info;
 
 mod progress;
@@ -40,6 +43,18 @@ struct Args {
     /// Output format: text, json, srt
     #[arg(short, long, default_value = "text")]
     format: String,
+
+    /// Check system compatibility without transcribing
+    #[arg(long)]
+    check_only: bool,
+
+    /// Treat warnings as errors
+    #[arg(long)]
+    strict: bool,
+
+    /// Force execution despite warnings/errors
+    #[arg(long)]
+    force: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -77,6 +92,79 @@ fn main() -> anyhow::Result<()> {
 
     info!("Transcribing: {}", args.input);
     info!("Model: {:?}, Task: {:?}", model, task);
+
+    // Validate model compatibility with system
+    let validator = ModelValidator::new()
+        .map_err(|e| anyhow::anyhow!("Failed to detect system capabilities: {}", e))?;
+
+    let validation_result = validator.validate_model(model, args.cpu);
+
+    match &validation_result {
+        ValidationResult::Error(msg) => {
+            if !args.force {
+                eprintln!("❌ Cannot run model: {}", msg);
+                if let Some(recommended) = Some(validator.recommend_model()) {
+                    eprintln!("💡 Recommended model: {:?}", recommended);
+                }
+                eprintln!("\nUse --force to attempt anyway (not recommended)");
+                std::process::exit(1);
+            } else {
+                eprintln!("⚠️  Forcing despite error: {}", msg);
+            }
+        }
+        ValidationResult::Warning(warnings) => {
+            if args.strict && !args.force {
+                eprintln!("⚠️  System compatibility warnings:");
+                for w in warnings {
+                    eprintln!("  - {}", w);
+                }
+                if let Some(recommended) = Some(validator.recommend_model()) {
+                    eprintln!("💡 Recommended model: {:?}", recommended);
+                }
+                eprintln!("\nUse --force to proceed anyway");
+                std::process::exit(1);
+            } else {
+                for w in warnings {
+                    eprintln!("⚠️  {}", w);
+                }
+            }
+        }
+        ValidationResult::Ok => {}
+    }
+
+    // Handle --check-only flag
+    if args.check_only {
+        println!("\n=== System Capabilities ===");
+        let caps = validator.capabilities();
+        println!("RAM: {:.1}GB total, {:.1}GB available", caps.total_ram_gb, caps.available_ram_gb);
+        if let Some(gpu) = &caps.gpu_info {
+            println!("GPU: {:?}", gpu.device_type);
+            if let Some(vram_total) = gpu.vram_total_gb {
+                println!("VRAM: {:.1}GB total", vram_total);
+            }
+            if let Some(vram_avail) = gpu.vram_available_gb {
+                println!("      {:.1}GB available", vram_avail);
+            }
+            if let Some((major, minor)) = gpu.compute_capability {
+                println!("Compute Capability: {}.{}", major, minor);
+            }
+        } else {
+            println!("GPU: None detected (will use CPU)");
+        }
+
+        println!("\n=== Model Validation ===");
+        println!("Model: {:?}", model);
+        println!("Status: {:?}", match validation_result {
+            ValidationResult::Ok => "✅ OK",
+            ValidationResult::Warning(_) => "⚠️  WARNING",
+            ValidationResult::Error(_) => "❌ ERROR",
+        });
+
+        println!("\n=== Recommended Model ===");
+        println!("{:?}", validator.recommend_model());
+
+        return Ok(());
+    }
 
     let params = TranscribeParams {
         model,

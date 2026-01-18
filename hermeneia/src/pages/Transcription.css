@@ -758,3 +758,42 @@
     flex-wrap: wrap;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Model Validation Warning
+   ═══════════════════════════════════════════════════════════════ */
+
+.model-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(244, 67, 54, 0.08);
+  border-radius: 4px;
+  color: #c62828;
+}
+
+.model-warning svg {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.warning-text {
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: inherit;
+}
+
+/* Disabled button state for errors */
+.start-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--border-ornament);
+}
+
+.start-btn:disabled:hover {
+  background: var(--border-ornament);
+  transform: none;
+}

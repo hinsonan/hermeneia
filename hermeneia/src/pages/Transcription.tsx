@@ -1,4 +1,4 @@
-import { Component, createSignal, For, Show, onCleanup } from "solid-js";
+import { Component, createSignal, For, Show, onCleanup, onMount, createEffect } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -8,7 +8,16 @@ import { formatTime } from "../utils/timeFormat";
 import FileUploader from "../components/FileUploader";
 import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranscriptionProgressBar from "../components/TranscriptionProgressBar";
-import type { WhisperModel, TranscriptionTask, TranscriptResult, TranscriptionProgress, ModelOption, LanguageOption } from "../types/transcription";
+import type {
+  WhisperModel,
+  TranscriptionTask,
+  TranscriptResult,
+  TranscriptionProgress,
+  ModelOption,
+  LanguageOption,
+  SystemCapabilities,
+  ModelValidation
+} from "../types/transcription";
 import "./Transcription.css";
 
 const MODEL_OPTIONS: ModelOption[] = [
@@ -50,14 +59,14 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 
 const Transcription: Component = () => {
   const navigate = useNavigate();
-  const { theme, toggleTheme } = useTheme();
+  const { toggleTheme } = useTheme();
 
   // File state
   const [filePath, setFilePath] = createSignal<string>("");
   const [fileName, setFileName] = createSignal<string>("");
 
   // Settings
-  const [selectedModel, setSelectedModel] = createSignal<WhisperModel>('base');
+  const [selectedModel, setSelectedModel] = createSignal<WhisperModel>('tiny');
   const [selectedTask, setSelectedTask] = createSignal<TranscriptionTask>('transcribe');
   const [selectedLanguage, setSelectedLanguage] = createSignal<string | null>(null);
   const [includeTimestamps, setIncludeTimestamps] = createSignal(true);
@@ -67,6 +76,10 @@ const Transcription: Component = () => {
   const [error, setError] = createSignal<string | null>(null);
   const [result, setResult] = createSignal<TranscriptResult | null>(null);
   const [transcriptionProgress, setTranscriptionProgress] = createSignal<TranscriptionProgress | null>(null);
+
+  // System capability detection
+  const [systemCapabilities, setSystemCapabilities] = createSignal<SystemCapabilities | null>(null);
+  const [modelValidation, setModelValidation] = createSignal<ModelValidation | null>(null);
 
   // Track unlisten function for cleanup
   let progressUnlisten: UnlistenFn | null = null;
@@ -78,6 +91,38 @@ const Transcription: Component = () => {
       progressUnlisten = null;
     }
   });
+
+  // Fetch system capabilities on mount
+  onMount(async () => {
+    try {
+      const caps = await invoke<SystemCapabilities>("get_system_capabilities");
+      setSystemCapabilities(caps);
+    } catch (err) {
+      console.warn("Failed to get system capabilities:", err);
+    }
+  });
+
+  // Validate model selection whenever model changes
+  createEffect(() => {
+    const model = selectedModel();
+    const caps = systemCapabilities();
+
+    if (caps) {
+      validateModel(model);
+    }
+  });
+
+  const validateModel = async (model: WhisperModel) => {
+    try {
+      const validation = await invoke<ModelValidation>(
+        "validate_model_selection",
+        { model, forceCpu: false }
+      );
+      setModelValidation(validation);
+    } catch (err) {
+      console.error("Validation failed:", err);
+    }
+  };
 
   // Segments expanded state
   const [segmentsExpanded, setSegmentsExpanded] = createSignal(false);
@@ -354,6 +399,16 @@ const Transcription: Component = () => {
                   <span class="setting-hint">
                     {MODEL_OPTIONS.find(m => m.value === selectedModel())?.description}
                   </span>
+                  <Show when={modelValidation() && modelValidation()!.status === 'warning'}>
+                    <div class="model-warning">
+                      <svg viewBox="0 0 24 24" width="14" height="14">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor"/>
+                      </svg>
+                      <For each={modelValidation()!.messages}>
+                        {(message) => <span class="warning-text">{message}</span>}
+                      </For>
+                    </div>
+                  </Show>
                 </div>
 
                 {/* Task Selection */}
@@ -414,7 +469,12 @@ const Transcription: Component = () => {
                 </div>
 
                 {/* Start button */}
-                <button class="start-btn" onClick={handleTranscribe}>
+                <button
+                  class="start-btn"
+                  onClick={handleTranscribe}
+                  disabled={modelValidation()?.status === 'error'}
+                  title={modelValidation()?.status === 'error' ? 'Cannot run: insufficient system resources' : ''}
+                >
                   <svg viewBox="0 0 24 24" width="20" height="20">
                     <polygon points="5 3 19 12 5 21 5 3"/>
                   </svg>
