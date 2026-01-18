@@ -37,3 +37,25 @@ export interface LanguageOption {
   value: string | null;
   label: string;
 }
+
+// System capability detection types
+export type GpuDeviceType = 'NvidiaCuda' | 'AmdRocm' | 'AppleMetal' | 'None';
+
+export interface GpuInfo {
+  device_type: GpuDeviceType;
+  vram_total_gb: number | null;
+  vram_available_gb: number | null;
+  compute_capability: [number, number] | null;
+}
+
+export interface SystemCapabilities {
+  total_ram_gb: number;
+  available_ram_gb: number;
+  gpu_info: GpuInfo | null;
+}
+
+export interface ModelValidation {
+  status: 'ok' | 'warning' | 'error';
+  messages: string[];
+  recommended_model: string | null;
+}

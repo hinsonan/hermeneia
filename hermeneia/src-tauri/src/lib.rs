@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod error;
 pub mod gpu;
+pub mod system_info;
 pub mod transcribe;
 
 use std::sync::Mutex;
@@ -9,6 +10,8 @@ use std::sync::Mutex;
 pub use audio::*;
 pub use error::{AudioError, Result};
 pub use transcribe::*;
+
+
 
 /// Global audio player state managed by Tauri
 pub struct AppState {
@@ -156,6 +159,51 @@ async fn write_text_file(path: String, content: String) -> std::result::Result<(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// Get system capabilities (RAM, GPU, VRAM)
+#[tauri::command]
+async fn get_system_capabilities() -> std::result::Result<system_info::SystemCapabilities, String> {
+    system_info::get_system_capabilities()
+}
+
+/// Model validation result for frontend
+#[derive(serde::Serialize)]
+pub struct ModelValidation {
+    pub status: String,  // "ok" | "warning" | "error"
+    pub messages: Vec<String>,
+    pub recommended_model: Option<String>,
+}
+
+/// Validate model selection against system capabilities
+#[tauri::command]
+async fn validate_model_selection(
+    model: String,
+    force_cpu: bool,
+) -> std::result::Result<ModelValidation, String> {
+    tokio::task::spawn_blocking(move || {
+        let model_enum = parse_whisper_model(&model)
+            .ok_or_else(|| format!("Invalid model: {}", model))?;
+
+        let validator = ModelValidator::new().map_err(|e| e.to_string())?;
+        let result = validator.validate_model(model_enum, force_cpu);
+
+        Ok(ModelValidation {
+            status: match result {
+                ValidationResult::Ok => "ok",
+                ValidationResult::Warning(_) => "warning",
+                ValidationResult::Error(_) => "error",
+            }.to_string(),
+            messages: match result {
+                ValidationResult::Ok => vec![],
+                ValidationResult::Warning(w) => w,
+                ValidationResult::Error(e) => vec![e],
+            },
+            recommended_model: Some(validator.recommend_model().model_id().to_string()),
+        })
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
 // ============================================================================
 // Audio Playback Commands
 // ============================================================================
@@ -249,6 +297,8 @@ pub fn run() {
             trim_audio_file,
             transcribe_audio_file,
             write_text_file,
+            get_system_capabilities,
+            validate_model_selection,
             play_audio,
             pause_audio,
             resume_audio,
