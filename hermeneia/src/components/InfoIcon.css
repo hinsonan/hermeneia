@@ -1,0 +1,27 @@
+.info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  cursor: help;
+  transition: all 0.2s ease;
+  opacity: 0.6;
+}
+
+.info-icon:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.info-icon svg {
+  stroke: var(--gold-accent);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.info-icon:hover svg {
+  stroke: var(--burgundy);
+}

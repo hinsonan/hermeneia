@@ -8,6 +8,7 @@ import { formatTime } from "../utils/timeFormat";
 import FileUploader from "../components/FileUploader";
 import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranscriptionProgressBar from "../components/TranscriptionProgressBar";
+import InfoIcon from "../components/InfoIcon";
 import type {
   WhisperModel,
   TranscriptionTask,
@@ -396,7 +397,13 @@ const Transcription: Component = () => {
               <section class="settings-panel">
                 {/* Model Selection */}
                 <div class="setting-group">
-                  <label for="model-select">Model</label>
+                  <label for="model-select" class="label-with-info">
+                    Model
+                    <InfoIcon
+                      content="Smaller models (tiny, base) are faster but less accurate. Larger models provide better accuracy but need more VRAM. Models ending in '.en' are English-only and faster."
+                      position="right"
+                    />
+                  </label>
                   <div class="select-wrapper">
                     <select
                       id="model-select"
@@ -432,7 +439,13 @@ const Transcription: Component = () => {
 
                 {/* Task Selection */}
                 <div class="setting-group">
-                  <label>Task</label>
+                  <label class="label-with-info">
+                    Task
+                    <InfoIcon
+                      content="Transcribe converts speech to text in the original language. Translate converts speech to English text, regardless of the source language."
+                      position="right"
+                    />
+                  </label>
                   <div class="task-toggle">
                     <button
                       class={`task-btn ${selectedTask() === 'transcribe' ? 'active' : ''}`}
@@ -451,7 +464,13 @@ const Transcription: Component = () => {
 
                 {/* Language Selection */}
                 <div class="setting-group">
-                  <label for="language-select">Source Language</label>
+                  <label for="language-select" class="label-with-info">
+                    Source Language
+                    <InfoIcon
+                      content="Auto-detect identifies the language automatically (recommended). Manually selecting a language can improve accuracy if you're certain of the source."
+                      position="right"
+                    />
+                  </label>
                   <div class="select-wrapper">
                     <select
                       id="language-select"
@@ -483,7 +502,13 @@ const Transcription: Component = () => {
                       />
                       <span class="toggle-slider"></span>
                     </span>
-                    <span>Include timestamps</span>
+                    <span class="label-with-info">
+                      Include timestamps
+                      <InfoIcon
+                        content="Generates time-coded segments. Enables SRT subtitle export for video subtitles and precise navigation."
+                        position="right"
+                      />
+                    </span>
                   </label>
                 </div>
 
