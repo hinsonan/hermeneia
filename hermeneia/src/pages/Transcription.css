@@ -212,6 +212,12 @@
   font-size: 0.9rem;
 }
 
+.label-with-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .setting-hint {
   display: block;
   margin-top: 0.4rem;
