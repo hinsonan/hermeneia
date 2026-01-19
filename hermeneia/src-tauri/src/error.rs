@@ -69,6 +69,15 @@ pub enum AudioError {
     /// GPU error
     #[error("GPU error: {0}")]
     GpuError(String),
+
+    /// Out of memory error with specific context and suggestions
+    #[error("Out of memory: {message}")]
+    OutOfMemory {
+        message: String,
+        device: String, // "RAM" or "VRAM"
+        required_gb: f32,
+        model_name: String,
+    },
 }
 
 /// Convenient Result type that uses our AudioError

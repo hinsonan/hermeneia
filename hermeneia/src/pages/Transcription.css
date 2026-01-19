@@ -154,6 +154,39 @@
   background: var(--gold-accent);
 }
 
+.error-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.error-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(184, 134, 11, 0.1);
+  border-left: 3px solid var(--gold-accent);
+  border-radius: 4px;
+  margin-top: 0.5rem;
+}
+
+.error-suggestion svg {
+  flex-shrink: 0;
+  stroke: var(--gold-accent);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.error-suggestion span {
+  color: var(--ink-dark);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
 /* Settings Panel */
 .settings-panel {
   background: var(--card-bg);
