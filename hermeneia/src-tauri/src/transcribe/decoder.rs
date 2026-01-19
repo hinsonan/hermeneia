@@ -116,7 +116,25 @@ impl<'a> Decoder<'a> {
             .model
             .encoder
             .forward(mel, true)
-            .map_err(|e| AudioError::TranscriptionFailed(format!("Encoder failed: {}", e)))?;
+            .map_err(|e| {
+                let err_str = e.to_string();
+                // Detect OOM during encoder forward pass
+                if err_str.contains("out of memory")
+                    || err_str.contains("OutOfMemory")
+                    || err_str.contains("OOM")
+                    || err_str.contains("CUDA_ERROR_OUT_OF_MEMORY")
+                    || err_str.contains("failed to allocate")
+                    || err_str.contains("Cannot allocate memory") {
+                    AudioError::OutOfMemory {
+                        message: "Out of memory during transcription (encoder pass). Model is too large for available memory.".to_string(),
+                        device: "unknown".to_string(),
+                        required_gb: 0.0,
+                        model_name: "unknown".to_string(),
+                    }
+                } else {
+                    AudioError::TranscriptionFailed(format!("Encoder failed: {}", e))
+                }
+            })?;
 
         let sample_len = self.model.config.max_target_positions / 2;
         let mut sum_logprob = 0f64;
@@ -147,7 +165,25 @@ impl<'a> Decoder<'a> {
                 .model
                 .decoder
                 .forward(&tokens_t, &audio_features, i == 0)
-                .map_err(|e| AudioError::TranscriptionFailed(format!("Decoder failed: {}", e)))?;
+                .map_err(|e| {
+                    let err_str = e.to_string();
+                    // Detect OOM during decoder forward pass
+                    if err_str.contains("out of memory")
+                        || err_str.contains("OutOfMemory")
+                        || err_str.contains("OOM")
+                        || err_str.contains("CUDA_ERROR_OUT_OF_MEMORY")
+                        || err_str.contains("failed to allocate")
+                        || err_str.contains("Cannot allocate memory") {
+                        AudioError::OutOfMemory {
+                            message: "Out of memory during transcription (decoder pass). Model is too large for available memory.".to_string(),
+                            device: "unknown".to_string(),
+                            required_gb: 0.0,
+                            model_name: "unknown".to_string(),
+                        }
+                    } else {
+                        AudioError::TranscriptionFailed(format!("Decoder failed: {}", e))
+                    }
+                })?;
 
             // Extract no speech probability on first iteration
             if i == 0 {

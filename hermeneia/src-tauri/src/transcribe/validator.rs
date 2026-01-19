@@ -111,18 +111,18 @@ impl ModelValidator {
                 ));
             }
 
-            // Only warn about slow models when they're truly problematic
-            // Large models are always slow on CPU, warn regardless of RAM
+            // Warn about slow models on CPU (anything larger than base/tiny)
             match model {
                 WhisperModel::Large | WhisperModel::LargeV2 | WhisperModel::LargeV3 => {
-                    warnings.push("Large model on CPU will be extremely slow (10-100x slower than GPU). Strongly recommend 'base' or 'tiny'.".to_string());
+                    warnings.push("Large model on CPU will be extremely slow (10-100x slower than GPU). Strongly recommend 'tiny' or 'base'.".to_string());
                 }
                 WhisperModel::Medium | WhisperModel::MediumEn => {
-                    // Only warn about Medium on CPU if RAM is limited
-                    if self.capabilities.available_ram_gb < 12.0 {
-                        warnings.push("Medium model on CPU will be slow. Consider 'base' for faster results.".to_string());
-                    }
+                    warnings.push("Medium model on CPU will be slow. Consider 'tiny' or 'base' for faster results.".to_string());
                 }
+                WhisperModel::Small | WhisperModel::SmallEn => {
+                    warnings.push("Small model on CPU may be slow. Consider 'tiny' or 'base' for better performance.".to_string());
+                }
+                // Tiny and Base models are fine on CPU
                 _ => {}
             }
         }
@@ -289,9 +289,11 @@ mod tests {
         let caps = mock_capabilities_cpu_only(16.0);
         let validator = ModelValidator::with_capabilities(caps);
         let result = validator.validate_model(WhisperModel::Small, false);
-        // Should warn about no GPU
+        // Should warn about slow performance on CPU and recommend tiny/base
         if let ValidationResult::Warning(warnings) = result {
-            assert!(warnings.iter().any(|w| w.contains("No GPU detected")));
+            assert!(warnings.iter().any(|w| w.contains("CPU may be slow") && w.contains("'tiny' or 'base'")));
+        } else {
+            panic!("Expected warning for Small model on CPU");
         }
     }
 }

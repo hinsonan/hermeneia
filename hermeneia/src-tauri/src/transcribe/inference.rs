@@ -48,7 +48,8 @@ pub fn transcribe_audio_with_progress(
     tracing::info!("Using device: {}", device_name(&device));
 
     // Load model and tokenizer
-    let (config, tokenizer, mut model) = load_model(&model_files, &device)?;
+    let (config, tokenizer, mut model) = load_model(&model_files, &device)
+        .map_err(|e| enrich_oom_error(e, params.model))?;
 
     // Preprocess to mel-spectrogram (needs config for mel bins)
     let mel = preprocess_audio(&audio_data, &config, &device)?;
@@ -143,7 +144,8 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     tracing::info!("Using device: {}", device_name(&device));
 
     // Load model and tokenizer
-    let (config, tokenizer, mut model) = load_model(&model_files, &device)?;
+    let (config, tokenizer, mut model) = load_model(&model_files, &device)
+        .map_err(|e| enrich_oom_error(e, params.model))?;
 
     // Preprocess to mel-spectrogram (needs config for mel bins)
     let mel = preprocess_audio(&audio_data, &config, &device)?;
@@ -252,19 +254,90 @@ fn load_model(
     // Load model weights
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[files.weights.clone()], m::DTYPE, device)
-            .map_err(|e| AudioError::ModelLoad {
-                model: "weights".to_string(),
-                details: e.to_string(),
+            .map_err(|e| {
+                let err_str = e.to_string();
+                // Detect OOM errors from various sources
+                if err_str.contains("out of memory")
+                    || err_str.contains("OutOfMemory")
+                    || err_str.contains("OOM")
+                    || err_str.contains("CUDA_ERROR_OUT_OF_MEMORY")
+                    || err_str.contains("failed to allocate")
+                    || err_str.contains("Cannot allocate memory") {
+
+                    let device_name = match device {
+                        Device::Cuda(_) => "VRAM",
+                        _ => "RAM",
+                    };
+
+                    AudioError::OutOfMemory {
+                        message: format!("Failed to load model into {}. The model is too large for your system.", device_name),
+                        device: device_name.to_string(),
+                        required_gb: 0.0, // Will be filled by caller if available
+                        model_name: "unknown".to_string(),
+                    }
+                } else {
+                    AudioError::ModelLoad {
+                        model: "weights".to_string(),
+                        details: e.to_string(),
+                    }
+                }
             })?
     };
 
     let model = m::model::Whisper::load(&vb, config.clone()).map_err(|e| {
-        AudioError::ModelLoad {
-            model: "model".to_string(),
-            details: e.to_string(),
+        let err_str = e.to_string();
+        // Detect OOM during model construction
+        if err_str.contains("out of memory")
+            || err_str.contains("OutOfMemory")
+            || err_str.contains("OOM")
+            || err_str.contains("CUDA_ERROR_OUT_OF_MEMORY")
+            || err_str.contains("failed to allocate")
+            || err_str.contains("Cannot allocate memory") {
+
+            let device_name = match device {
+                Device::Cuda(_) => "VRAM",
+                _ => "RAM",
+            };
+
+            AudioError::OutOfMemory {
+                message: format!("Failed to initialize model in {}. The model is too large for your system.", device_name),
+                device: device_name.to_string(),
+                required_gb: 0.0,
+                model_name: "unknown".to_string(),
+            }
+        } else {
+            AudioError::ModelLoad {
+                model: "model".to_string(),
+                details: e.to_string(),
+            }
         }
     })?;
 
     Ok((config, tokenizer, model))
+}
+
+/// Enrich OOM errors with model-specific information
+fn enrich_oom_error(error: AudioError, model: crate::transcribe::WhisperModel) -> AudioError {
+    match error {
+        AudioError::OutOfMemory { message, device, .. } => {
+            let reqs = model.requirements();
+            let required_gb = if device == "VRAM" {
+                reqs.min_vram_gb
+            } else {
+                reqs.min_ram_gb
+            };
+
+            AudioError::OutOfMemory {
+                message: format!(
+                    "{}. This model requires at least {:.1}GB of {}. Try using 'tiny' or 'base' model instead.",
+                    message, required_gb, device
+                ),
+                device,
+                required_gb,
+                model_name: model.model_id().to_string(),
+            }
+        }
+        other => other,
+    }
 }
 

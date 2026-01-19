@@ -175,6 +175,13 @@ const Transcription: Component = () => {
       .join('\n');
   };
 
+  // Check if error is OOM-related
+  const isOOMError = (err: string): boolean => {
+    return err.toLowerCase().includes('out of memory') ||
+           err.toLowerCase().includes('oom') ||
+           err.includes('OutOfMemory');
+  };
+
   // Start transcription
   const handleTranscribe = async () => {
     if (!filePath()) return;
@@ -367,7 +374,19 @@ const Transcription: Component = () => {
             {/* Error display */}
             <Show when={error()}>
               <div class="error-banner">
-                <span>{error()}</span>
+                <div class="error-content">
+                  <span>{error()}</span>
+                  <Show when={isOOMError(error()!)}>
+                    <div class="error-suggestion">
+                      <svg viewBox="0 0 24 24" width="16" height="16">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                      </svg>
+                      <span>Try selecting 'tiny' or 'base' model for your system</span>
+                    </div>
+                  </Show>
+                </div>
                 <button onClick={() => setError(null)}>Dismiss</button>
               </div>
             </Show>
