@@ -1,4 +1,4 @@
-import { Component, createSignal, For, Show, onCleanup, onMount, createEffect } from "solid-js";
+import { Component, createSignal, For, Show, onCleanup, onMount, createEffect, createMemo } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -84,6 +84,26 @@ const Transcription: Component = () => {
 
   // Track unlisten function for cleanup
   let progressUnlisten: UnlistenFn | null = null;
+
+  // Check if selected model is English-only
+  const isEnglishOnlyModel = createMemo(() => {
+    return selectedModel().endsWith('.en');
+  });
+
+  // Filter language options based on model selection
+  const availableLanguages = createMemo(() => {
+    if (isEnglishOnlyModel()) {
+      return LANGUAGE_OPTIONS.filter(lang => lang.value === 'en');
+    }
+    return LANGUAGE_OPTIONS;
+  });
+
+  // Auto-select English when English-only model is selected
+  createEffect(() => {
+    if (isEnglishOnlyModel()) {
+      setSelectedLanguage('en');
+    }
+  });
 
   // Cleanup on component unmount
   onCleanup(() => {
@@ -467,7 +487,10 @@ const Transcription: Component = () => {
                   <label for="language-select" class="label-with-info">
                     Source Language
                     <InfoIcon
-                      content="Auto-detect identifies the language automatically (recommended). Manually selecting a language can improve accuracy if you're certain of the source."
+                      content={isEnglishOnlyModel()
+                        ? "English-only models can only transcribe English audio."
+                        : "Auto-detect identifies the language automatically (recommended). Manually selecting a language can improve accuracy if you're certain of the source."
+                      }
                       position="right"
                     />
                   </label>
@@ -476,8 +499,9 @@ const Transcription: Component = () => {
                       id="language-select"
                       value={selectedLanguage() || ''}
                       onChange={(e) => setSelectedLanguage(e.currentTarget.value || null)}
+                      disabled={isEnglishOnlyModel()}
                     >
-                      <For each={LANGUAGE_OPTIONS}>
+                      <For each={availableLanguages()}>
                         {(option) => (
                           <option value={option.value || ''}>
                             {option.label}
