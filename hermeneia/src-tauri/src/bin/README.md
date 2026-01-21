@@ -266,6 +266,8 @@ Time Distribution:
 ### 6. `transcribe`
 Transcribe audio files using Whisper speech recognition.
 
+**Note:** This binary supports GPU acceleration via CUDA. See [Running Binaries with CUDA Support](#running-binaries-with-cuda-support) for setup instructions.
+
 **Usage:**
 ```bash
 cargo run --release --bin transcribe -- \
@@ -342,6 +344,112 @@ cargo run --release --bin transcribe -- \
 cargo run --release --bin transcribe -- \
   -i audio.mp3 -o transcript.txt --strict
 ```
+
+---
+
+## Running Binaries with CUDA Support
+
+Some binaries (like `transcribe`) support GPU acceleration via CUDA. You can run them with CUDA without bundling libraries by using `LD_LIBRARY_PATH`.
+
+### Initial Setup (one-time)
+
+Extract CUDA 12.8 runtime libraries from Docker:
+
+```bash
+cd src-tauri
+docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs
+```
+
+This creates `src-tauri/cuda-libs/` with the necessary CUDA libraries.
+
+### Building with CUDA
+
+Build any binary with CUDA support:
+
+```bash
+cd src-tauri
+
+# Development build
+docker-compose -f docker-compose.cuda.yml run --rm build-dev
+
+# Release build (inside Docker)
+docker-compose -f docker-compose.cuda.yml run --rm build-dev sh -c "cargo build --release --features cuda --bin transcribe"
+```
+
+Binaries are output to `src-tauri/target-cuda/debug/` or `src-tauri/target-cuda/release/`.
+
+### Running with CUDA
+
+Run any CUDA-enabled binary by pointing to the extracted libraries:
+
+```bash
+# From src-tauri directory
+LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/transcribe \
+  --input audio.mp3 \
+  --output transcript.txt \
+  --model tiny
+
+# From project root
+LD_LIBRARY_PATH=./src-tauri/cuda-libs ./src-tauri/target-cuda/debug/transcribe \
+  --input audio.mp3 \
+  --output transcript.txt
+
+# With absolute paths (works from anywhere)
+LD_LIBRARY_PATH=/home/user/hermeneia/src-tauri/cuda-libs \
+  /home/user/hermeneia/src-tauri/target-cuda/debug/transcribe \
+  --input audio.mp3
+```
+
+### Simplify with Environment Variable
+
+Add to your `~/.bashrc` or `~/.zshrc` for easier usage:
+
+```bash
+export LD_LIBRARY_PATH="$HOME/projects/Hermeneia/hermeneia/src-tauri/cuda-libs:$LD_LIBRARY_PATH"
+```
+
+Then run without specifying the library path:
+
+```bash
+./src-tauri/target-cuda/debug/transcribe --input audio.mp3
+```
+
+### CUDA Examples
+
+```bash
+# Transcribe with GPU acceleration
+LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/transcribe \
+  --input sermon.mp3 \
+  --output transcript.txt \
+  --model base
+
+# Check GPU compatibility before transcribing
+LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/transcribe \
+  --input audio.mp3 \
+  --model base \
+  --check-only
+
+# Force CPU mode (even with CUDA build)
+LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/transcribe \
+  --input audio.mp3 \
+  --cpu
+```
+
+### Requirements
+
+- **Development**: NVIDIA drivers only (no CUDA toolkit installation needed)
+- **GPU**: NVIDIA GPU with compute capability ≥ 7.5 (RTX 20-series or newer)
+- **CUDA**: Libraries extracted from Docker (via `extract-cuda-libs` command)
+
+### Why LD_LIBRARY_PATH?
+
+This approach provides flexibility during development:
+- CUDA libraries stay in one location (`cuda-libs/`)
+- No need to copy libraries alongside each binary
+- Easy to switch between CPU and CUDA builds
+- Same method works for all CUDA-enabled binaries
+
+For distribution, use `./build-static-cuda.sh` which bundles libraries with RPATH.
 
 ---
 
