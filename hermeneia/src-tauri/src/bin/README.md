@@ -29,6 +29,7 @@ cargo run --release --bin audio-trim -- \
 - `--output, -o` - Output WAV file path
 - `--start, -s` - Start time in seconds
 - `--end, -e` - End time in seconds
+- `--verbose, -v` - Show detailed information
 
 **Example:**
 ```bash
@@ -283,6 +284,9 @@ cargo run --release --bin transcribe -- \
 - `--timestamps` - Include timestamps in output
 - `--cpu` - Force CPU (disable GPU)
 - `--format, -f` - Output format: text, json, srt (default: text)
+- `--check-only` - Check system compatibility without transcribing
+- `--strict` - Treat warnings as errors
+- `--force` - Force execution despite warnings/errors
 
 **Supported Models:**
 - `tiny` / `tiny.en` - Fastest, ~39M params, English/English-only
@@ -325,6 +329,18 @@ cargo run --release --bin transcribe -- \
 # Translate to English
 cargo run --release --bin transcribe -- \
   -i spanish.mp3 -o english.txt --task translate --language es
+
+# Check system compatibility before transcribing
+cargo run --release --bin transcribe -- \
+  -i audio.mp3 --model base --check-only
+
+# Force transcription despite warnings
+cargo run --release --bin transcribe -- \
+  -i audio.mp3 -o transcript.txt --model medium --force
+
+# Strict mode: exit on any warnings
+cargo run --release --bin transcribe -- \
+  -i audio.mp3 -o transcript.txt --strict
 ```
 
 ---
