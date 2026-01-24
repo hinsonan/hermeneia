@@ -7,12 +7,13 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
 use ringbuf::{traits::*, HeapRb};
+use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use symphonia::core::audio::{SampleBuffer, SignalSpec};
+use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
@@ -29,7 +30,8 @@ struct SharedPlaybackState {
     is_playing: AtomicBool,
     current_frame: AtomicU64,
     total_frames: AtomicU64,
-    sample_rate: AtomicU64,
+    sample_rate: AtomicU64,        // File's native sample rate
+    device_sample_rate: AtomicU64, // Device's actual sample rate (for resampling)
     channels: AtomicU64,
     should_stop: AtomicBool,
     seek_to_frame: AtomicU64,
@@ -44,6 +46,7 @@ impl SharedPlaybackState {
             current_frame: AtomicU64::new(0),
             total_frames: AtomicU64::new(0),
             sample_rate: AtomicU64::new(44100),
+            device_sample_rate: AtomicU64::new(44100),
             channels: AtomicU64::new(2),
             should_stop: AtomicBool::new(false),
             seek_to_frame: AtomicU64::new(0),
@@ -95,13 +98,21 @@ impl AudioPlayer {
         tracing::debug!("AudioPlayer::play_file - Probing file for metadata");
         let (sample_rate, channels, total_frames) = probe_audio_file(&path)?;
 
+        // Detect device sample rate (may differ from file rate)
+        let device_sample_rate = detect_device_sample_rate(sample_rate)?;
+
         // Store metadata in state BEFORE starting threads
         state.sample_rate.store(sample_rate as u64, Ordering::SeqCst);
+        state.device_sample_rate.store(device_sample_rate as u64, Ordering::SeqCst);
         state.channels.store(channels, Ordering::SeqCst);
         state.total_frames.store(total_frames, Ordering::SeqCst);
 
-        tracing::debug!("AudioPlayer::play_file - File metadata: {}Hz, {} channels, {} frames",
-            sample_rate, channels, total_frames);
+        tracing::debug!("AudioPlayer::play_file - File: {}Hz, {} ch, {} frames | Device: {}Hz",
+            sample_rate, channels, total_frames, device_sample_rate);
+
+        if sample_rate != device_sample_rate {
+            tracing::info!("Resampling enabled: {}Hz -> {}Hz", sample_rate, device_sample_rate);
+        }
 
         // Reset state
         state.should_stop.store(false, Ordering::SeqCst);
@@ -190,6 +201,7 @@ impl AudioPlayer {
         self.state.current_frame.store(0, Ordering::SeqCst);
         self.state.total_frames.store(0, Ordering::SeqCst);
         self.state.sample_rate.store(44100, Ordering::SeqCst); // Reset to default
+        self.state.device_sample_rate.store(44100, Ordering::SeqCst); // Reset to default
         self.state.channels.store(2, Ordering::SeqCst); // Reset to default
 
         // Clear loaded file
@@ -229,6 +241,7 @@ impl Drop for AudioPlayer {
 
 /// Probe audio file to get metadata (sample rate, channels, total frames)
 /// This is called BEFORE starting threads to avoid race conditions
+/// For formats like AAC/M4A where channel info isn't in metadata, we decode a packet to detect it
 fn probe_audio_file(path: &std::path::Path) -> Result<(u32, u64, u64)> {
     let file = std::fs::File::open(path).map_err(|e| AudioError::FileOpen {
         path: path.to_string_lossy().to_string(),
@@ -245,7 +258,7 @@ fn probe_audio_file(path: &std::path::Path) -> Result<(u32, u64, u64)> {
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe: {}", e)))?;
 
-    let format = probed.format;
+    let mut format = probed.format;
 
     // Find the audio track
     let track = format
@@ -258,14 +271,96 @@ fn probe_audio_file(path: &std::path::Path) -> Result<(u32, u64, u64)> {
         .codec_params
         .sample_rate
         .ok_or_else(|| AudioError::DecodeFailed("No sample rate".to_string()))?;
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(2) as u64;
+
+    // Try to get channels from metadata
+    let mut channels = track.codec_params.channels.map(|c| c.count() as u64);
+    let track_id = track.id;
     let total_frames = track.codec_params.n_frames.unwrap_or(0);
 
-    Ok((sample_rate, channels, total_frames))
+    // If channels not in metadata (common for AAC/M4A), decode a packet to detect
+    if channels.is_none() || channels == Some(0) {
+        tracing::debug!("Channel count not in metadata, decoding packet to detect...");
+
+        let mut decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &DecoderOptions::default())
+            .map_err(|e| AudioError::DecodeFailed(format!("Failed to create decoder: {}", e)))?;
+
+        // Find and decode first audio packet
+        loop {
+            let packet = match format.next_packet() {
+                Ok(p) => p,
+                Err(_) => {
+                    tracing::warn!("Could not read packet to detect channels, defaulting to 2");
+                    channels = Some(2);
+                    break;
+                }
+            };
+
+            if packet.track_id() != track_id {
+                continue;
+            }
+
+            match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    channels = Some(decoded.spec().channels.count() as u64);
+                    tracing::debug!("Detected {} channels from decoded audio", channels.unwrap());
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to decode packet for channel detection: {}, defaulting to 2", e);
+                    channels = Some(2);
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok((sample_rate, channels.unwrap_or(2), total_frames))
+}
+
+/// Detect the best sample rate supported by the audio device
+/// Returns the device's preferred rate, trying file_rate first then common rates
+fn detect_device_sample_rate(file_sample_rate: u32) -> Result<u32> {
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| AudioError::DecodeFailed("No output device available".to_string()))?;
+
+    // Rates to try, in order of preference
+    let rates_to_try = [
+        file_sample_rate, // Try file's rate first
+        48000,            // Common rate
+        44100,            // CD quality
+        96000,            // High quality
+        22050,            // Lower quality
+    ];
+
+    for &rate in &rates_to_try {
+        let config = StreamConfig {
+            channels: 2, // Most devices support stereo
+            sample_rate: cpal::SampleRate(rate),
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        // Try to build a test stream to see if this config is supported
+        match device.build_output_stream(
+            &config,
+            |_data: &mut [f32], _: &cpal::OutputCallbackInfo| {},
+            |_err| {},
+            None,
+        ) {
+            Ok(test_stream) => {
+                drop(test_stream);
+                tracing::debug!("Device supports sample rate: {}Hz", rate);
+                return Ok(rate);
+            }
+            Err(_) => continue,
+        }
+    }
+
+    // Fallback to 48kHz if nothing else works
+    tracing::warn!("Could not detect supported sample rate, defaulting to 48000Hz");
+    Ok(48000)
 }
 
 /// Decoder thread: reads audio file and streams samples to ring buffer
@@ -274,6 +369,11 @@ fn run_decoder(
     state: Arc<SharedPlaybackState>,
     mut producer: ringbuf::HeapProd<f32>,
 ) -> Result<()> {
+    // Get sample rates and channels from state (already probed in play_file)
+    let file_sample_rate = state.sample_rate.load(Ordering::SeqCst) as u32;
+    let device_sample_rate = state.device_sample_rate.load(Ordering::SeqCst) as u32;
+    let file_channels = state.channels.load(Ordering::SeqCst) as usize;
+
     // Open and probe the audio file
     let file = std::fs::File::open(&path).map_err(|e| AudioError::FileOpen {
         path: path.to_string_lossy().to_string(),
@@ -300,33 +400,24 @@ fn run_decoder(
         .ok_or_else(|| AudioError::DecodeFailed("No audio track found".to_string()))?;
 
     let track_id = track.id;
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .ok_or_else(|| AudioError::DecodeFailed("No sample rate".to_string()))?;
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count())
-        .unwrap_or(2) as u64;
     let total_frames = track.codec_params.n_frames.unwrap_or(0);
-
-    // Note: Metadata is already set in play_file() before threads start
-    // This avoids race conditions with playback thread reading stale values
 
     // Create decoder
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to create decoder: {}", e)))?;
 
-    let spec = SignalSpec::new(
-        sample_rate,
-        symphonia::core::audio::Channels::FRONT_LEFT
-            | symphonia::core::audio::Channels::FRONT_RIGHT,
-    );
+    // Initialize resampler if needed
+    let needs_resampling = file_sample_rate != device_sample_rate;
+    let mut resampler: Option<SincFixedIn<f32>> = None;
+    let mut resample_buffer: Vec<f32> = Vec::new();
 
-    tracing::debug!("Decoder thread started - sample_rate: {}Hz, channels: {}, total_frames: {}",
-        sample_rate, channels, total_frames);
+    if needs_resampling {
+        tracing::info!("Initializing resampler: {}Hz -> {}Hz", file_sample_rate, device_sample_rate);
+    }
+
+    tracing::debug!("Decoder thread started - file: {}Hz {}ch, device: {}Hz, frames: {}",
+        file_sample_rate, file_channels, device_sample_rate, total_frames);
 
     // Main decoding loop - streams samples to ring buffer
     let mut packets_decoded = 0;
@@ -344,7 +435,7 @@ fn run_decoder(
         // Handle seek requests
         if state.seek_pending.load(Ordering::SeqCst) {
             let seek_frame = state.seek_to_frame.load(Ordering::SeqCst);
-            let seek_seconds = seek_frame as f64 / sample_rate as f64;
+            let seek_seconds = seek_frame as f64 / file_sample_rate as f64;
 
             tracing::debug!("Seek request: frame={}, time={:.3}s", seek_frame, seek_seconds);
 
@@ -460,26 +551,96 @@ fn run_decoder(
 
         packets_decoded += 1;
 
-        // Convert to f32 samples
-        let frames = decoded.frames();
-        let mut sample_buf = SampleBuffer::<f32>::new(frames as u64, spec);
-        sample_buf.copy_interleaved_ref(decoded);
-        let samples = sample_buf.samples();
+        // Convert decoded audio to interleaved f32 (handles all sample formats)
+        let mut samples = convert_audio_buffer_to_f32_interleaved(&decoded);
+        let actual_channels = decoded.spec().channels.count();
 
         if packets_decoded == 1 {
-            tracing::debug!("First packet decoded: {} frames, {} samples", frames, samples.len());
+            tracing::debug!("First packet decoded: {} frames, {} samples, {} channels",
+                decoded.frames(), samples.len(), actual_channels);
         }
+
+        // Convert mono to stereo for playback (most devices expect stereo)
+        if actual_channels == 1 {
+            samples = mono_to_stereo(&samples);
+        }
+
+        // Apply resampling if needed
+        let output_samples = if needs_resampling {
+            // Lazy init resampler with first packet's frame count
+            if resampler.is_none() {
+                let params = SincInterpolationParameters {
+                    sinc_len: 128,
+                    f_cutoff: 0.95,
+                    interpolation: SincInterpolationType::Linear,
+                    oversampling_factor: 128,
+                    window: rubato::WindowFunction::BlackmanHarris2,
+                };
+
+                // Output channels is always 2 (stereo) after mono-to-stereo conversion
+                let output_channels = 2;
+                resampler = Some(
+                    SincFixedIn::<f32>::new(
+                        device_sample_rate as f64 / file_sample_rate as f64,
+                        2.0,
+                        params,
+                        samples.len() / output_channels,
+                        output_channels,
+                    )
+                    .map_err(|e| AudioError::DecodeFailed(format!("Resampler init: {}", e)))?
+                );
+            }
+
+            // De-interleave stereo for rubato (expects separate channel vectors)
+            let (left, right): (Vec<f32>, Vec<f32>) = samples
+                .chunks(2)
+                .map(|chunk| (chunk[0], chunk.get(1).copied().unwrap_or(chunk[0])))
+                .unzip();
+
+            let resampler = resampler.as_mut().unwrap();
+
+            // Resize input to match resampler's expected chunk size
+            let chunk_size = resampler.input_frames_max();
+            let mut left_chunk = left;
+            let mut right_chunk = right;
+
+            // Pad or truncate to chunk size
+            left_chunk.resize(chunk_size, 0.0);
+            right_chunk.resize(chunk_size, 0.0);
+
+            let waves_in = vec![left_chunk, right_chunk];
+
+            match resampler.process(&waves_in, None) {
+                Ok(waves_out) => {
+                    // Re-interleave the output
+                    resample_buffer.clear();
+                    let out_frames = waves_out[0].len();
+                    resample_buffer.reserve(out_frames * 2);
+                    for i in 0..out_frames {
+                        resample_buffer.push(waves_out[0][i]);
+                        resample_buffer.push(waves_out[1][i]);
+                    }
+                    &resample_buffer[..]
+                }
+                Err(e) => {
+                    tracing::warn!("Resample error: {}, using original samples", e);
+                    &samples[..]
+                }
+            }
+        } else {
+            &samples[..]
+        };
 
         // Write samples to ring buffer (blocking if buffer is full)
         let mut written = 0;
-        while written < samples.len() {
+        while written < output_samples.len() {
             // Check for stop/seek while waiting
             if state.should_stop.load(Ordering::SeqCst) || state.seek_pending.load(Ordering::SeqCst) {
                 break;
             }
 
             // Try to write remaining samples
-            let chunk = &samples[written..];
+            let chunk = &output_samples[written..];
             let n = producer.push_slice(chunk);
             written += n;
             samples_written += n;
@@ -499,6 +660,115 @@ fn run_decoder(
     Ok(())
 }
 
+/// Convert symphonia AudioBufferRef to interleaved f32 samples
+/// Handles all sample formats and properly interleaves channels
+fn convert_audio_buffer_to_f32_interleaved(buffer: &AudioBufferRef) -> Vec<f32> {
+    let spec = buffer.spec();
+    let channels = spec.channels.count();
+    let frames = buffer.frames();
+    let total_samples = frames * channels;
+    let mut output = vec![0.0f32; total_samples];
+
+    match buffer {
+        AudioBufferRef::F32(buf) => {
+            let planes = buf.planes();
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample;
+                }
+            }
+        }
+        AudioBufferRef::F64(buf) => {
+            let planes = buf.planes();
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample as f32;
+                }
+            }
+        }
+        AudioBufferRef::S16(buf) => {
+            let planes = buf.planes();
+            const NORM: f32 = 1.0 / 32768.0;
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample as f32 * NORM;
+                }
+            }
+        }
+        AudioBufferRef::S32(buf) => {
+            let planes = buf.planes();
+            const NORM: f32 = 1.0 / 2147483648.0;
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample as f32 * NORM;
+                }
+            }
+        }
+        AudioBufferRef::S24(buf) => {
+            let planes = buf.planes();
+            const NORM: f32 = 1.0 / 8388608.0;
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample.inner() as f32 * NORM;
+                }
+            }
+        }
+        AudioBufferRef::S8(buf) => {
+            let planes = buf.planes();
+            const NORM: f32 = 1.0 / 128.0;
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = sample as f32 * NORM;
+                }
+            }
+        }
+        AudioBufferRef::U8(buf) => {
+            let planes = buf.planes();
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = (sample as f32 - 128.0) / 128.0;
+                }
+            }
+        }
+        AudioBufferRef::U16(buf) => {
+            let planes = buf.planes();
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = (sample as f32 - 32768.0) / 32768.0;
+                }
+            }
+        }
+        AudioBufferRef::U24(buf) => {
+            let planes = buf.planes();
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = (sample.inner() as f32 - 8388608.0) / 8388608.0;
+                }
+            }
+        }
+        AudioBufferRef::U32(buf) => {
+            let planes = buf.planes();
+            for (ch, plane) in planes.planes().iter().enumerate() {
+                for (frame, &sample) in plane.iter().enumerate() {
+                    output[frame * channels + ch] = (sample as f32 - 2147483648.0) / 2147483648.0;
+                }
+            }
+        }
+    }
+
+    output
+}
+
+/// Convert mono samples to stereo by duplicating to both channels
+fn mono_to_stereo(mono: &[f32]) -> Vec<f32> {
+    let mut stereo = Vec::with_capacity(mono.len() * 2);
+    for &sample in mono {
+        stereo.push(sample);
+        stereo.push(sample);
+    }
+    stereo
+}
+
 /// Playback thread: reads from ring buffer and outputs to audio device
 fn run_playback_stream(
     state: Arc<SharedPlaybackState>,
@@ -510,63 +780,18 @@ fn run_playback_stream(
         .default_output_device()
         .ok_or_else(|| AudioError::DecodeFailed("No output device available".to_string()))?;
 
-    // Use the file's sample rate and channel count (from state)
-    let file_sample_rate = state.sample_rate.load(Ordering::SeqCst) as u32;
-    let file_channels = state.channels.load(Ordering::SeqCst) as u16;
+    // Use the device sample rate determined during play_file()
+    // The decoder resamples to this rate, so we use it directly
+    let device_sample_rate = state.device_sample_rate.load(Ordering::SeqCst) as u32;
 
-    // Try to use file's sample rate, but fall back to common rates if unsupported
-    // Some devices don't support unusual rates like 24kHz
-    let supported_rates = [
-        file_sample_rate, // Try file's rate first
-        48000,            // Common rate
-        44100,            // CD quality
-        96000,            // High quality
-        22050,            // Lower quality
-    ];
-
-    let mut stream_config = StreamConfig {
-        channels: file_channels,
-        sample_rate: cpal::SampleRate(file_sample_rate),
+    // Always use stereo output (decoder converts mono to stereo)
+    let stream_config = StreamConfig {
+        channels: 2,
+        sample_rate: cpal::SampleRate(device_sample_rate),
         buffer_size: cpal::BufferSize::Default,
     };
 
-    // Test if we can build a stream with this config
-    // Try each sample rate until one works
-    let mut successful_rate = file_sample_rate;
-    for &rate in &supported_rates {
-        stream_config.sample_rate = cpal::SampleRate(rate);
-
-        // Try to build a test stream to see if this config is supported
-        match device.build_output_stream(
-            &stream_config,
-            |_data: &mut [f32], _: &cpal::OutputCallbackInfo| {},
-            |_err| {},
-            None,
-        ) {
-            Ok(test_stream) => {
-                // Stream creation succeeded - this rate is supported
-                successful_rate = rate;
-                tracing::debug!("Using sample rate: {}Hz (file: {}Hz)", rate, file_sample_rate);
-                drop(test_stream); // Clean up test stream
-                break;
-            }
-            Err(e) => {
-                tracing::debug!("Sample rate {}Hz not supported: {}", rate, e);
-                continue;
-            }
-        }
-    }
-
-    // Update config with successful rate
-    stream_config.sample_rate = cpal::SampleRate(successful_rate);
-
-    // If sample rate differs from file, warn user
-    if successful_rate != file_sample_rate {
-        tracing::warn!(
-            "Device doesn't support {}Hz, using {}Hz instead. Audio may play at different speed.",
-            file_sample_rate, successful_rate
-        );
-    }
+    tracing::debug!("Playback stream config: {}Hz, 2 channels", device_sample_rate);
 
     // Clone Arc references for sharing with callback
     let consumer_clone = Arc::clone(&consumer);
@@ -587,7 +812,8 @@ fn run_playback_stream(
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let count = callback_count_clone.fetch_add(1, Ordering::SeqCst);
                 let is_playing = state_clone.is_playing.load(Ordering::SeqCst);
-                let channels = state_clone.channels.load(Ordering::SeqCst);
+                // Always stereo output (decoder converts mono to stereo)
+                let channels: u64 = 2;
 
                 if count == 0 {
                     tracing::debug!("Audio callback invoked for first time - buffer size: {}", data.len());
@@ -707,6 +933,7 @@ mod tests {
         assert_eq!(state.current_frame.load(Ordering::SeqCst), 0);
         assert_eq!(state.total_frames.load(Ordering::SeqCst), 0);
         assert_eq!(state.sample_rate.load(Ordering::SeqCst), 44100);
+        assert_eq!(state.device_sample_rate.load(Ordering::SeqCst), 44100);
         assert_eq!(state.channels.load(Ordering::SeqCst), 2);
         assert!(!state.should_stop.load(Ordering::SeqCst));
         assert!(!state.seek_pending.load(Ordering::SeqCst));

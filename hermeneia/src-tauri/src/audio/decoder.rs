@@ -189,25 +189,59 @@ pub fn get_audio_info<P: AsRef<Path>>(path: P) -> Result<AudioInfo> {
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe: {}", e)))?;
 
-    let format = probed.format;
+    let mut format = probed.format;
     let track = format
         .tracks()
         .iter()
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
         .ok_or_else(|| AudioError::DecodeFailed("No audio track".to_string()))?;
 
+    // Extract all values from track before any mutable borrows of format
     let sample_rate = track.codec_params.sample_rate.unwrap_or(0);
-    let channels = track
+    let track_id = track.id;
+    let codec_type = track.codec_params.codec;
+    let bit_depth = track.codec_params.bits_per_sample.map(|b| b as u16);
+    let n_frames = track.codec_params.n_frames;
+    let codec_params = track.codec_params.clone();
+
+    // Try to get channels from metadata
+    let mut channels = track
         .codec_params
         .channels
         .map(|c| c.count() as u16)
         .unwrap_or(0);
 
+    // If channels not in metadata (common for AAC/M4A), decode a packet to detect
+    if channels == 0 {
+        let mut decoder = symphonia::default::get_codecs()
+            .make(&codec_params, &DecoderOptions::default())
+            .map_err(|e| AudioError::DecodeFailed(format!("Failed to create decoder: {}", e)))?;
+
+        // Find and decode first audio packet
+        loop {
+            let packet = match format.next_packet() {
+                Ok(p) => p,
+                Err(_) => break, // Couldn't read packet, leave channels as 0
+            };
+
+            if packet.track_id() != track_id {
+                continue;
+            }
+
+            if let Ok(decoded) = decoder.decode(&packet) {
+                channels = decoded.spec().channels.count() as u16;
+            }
+            break;
+        }
+    }
+
     // Calculate duration from frame count
-    let duration_seconds = if let (Some(n_frames), Some(sr)) =
-        (track.codec_params.n_frames, track.codec_params.sample_rate)
-    {
-        n_frames as f64 / sr as f64
+    let duration_seconds = if let (Some(frames), Some(sr)) = (n_frames, Some(sample_rate)) {
+        if sr > 0 {
+            frames as f64 / sr as f64
+        } else {
+            0.0
+        }
     } else {
         0.0
     };
@@ -216,8 +250,8 @@ pub fn get_audio_info<P: AsRef<Path>>(path: P) -> Result<AudioInfo> {
         duration_seconds,
         sample_rate,
         channels,
-        format: format!("{:?}", track.codec_params.codec),
-        bit_depth: track.codec_params.bits_per_sample.map(|b| b as u16),
+        format: format!("{:?}", codec_type),
+        bit_depth,
     })
 }
 
