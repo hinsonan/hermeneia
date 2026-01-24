@@ -78,6 +78,29 @@ pub enum AudioError {
         required_gb: f32,
         model_name: String,
     },
+
+    /// Translation failed
+    #[error("Translation failed: {0}")]
+    TranslationFailed(String),
+
+    /// Invalid translation parameters
+    #[error("Invalid translation parameters: {0}")]
+    InvalidTranslateParams(String),
+
+    /// Unsupported language pair for the selected model
+    #[error("Unsupported language pair: {source_lang} -> {target_lang}")]
+    UnsupportedLanguagePair {
+        source_lang: String,
+        target_lang: String,
+    },
+
+    /// Model not available and download not permitted
+    #[error("Model '{model}' not available")]
+    ModelNotAvailable { model: String },
+
+    /// Tokenization error
+    #[error("Tokenization error: {0}")]
+    TokenizationError(String),
 }
 
 /// Convenient Result type that uses our AudioError

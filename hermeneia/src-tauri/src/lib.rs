@@ -3,6 +3,7 @@ pub mod error;
 pub mod gpu;
 pub mod system_info;
 pub mod transcribe;
+pub mod translate;
 
 use std::sync::Mutex;
 
