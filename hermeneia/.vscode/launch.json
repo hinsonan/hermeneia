@@ -1,0 +1,151 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Tauri App (Development)",
+      "cargo": {
+        "args": [
+          "build",
+          "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml",
+          "--bin=hermeneia"
+        ],
+        "filter": {
+          "name": "hermeneia",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug"
+      },
+      "preLaunchTask": "ui:dev"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Tauri App (CUDA)",
+      "program": "${workspaceFolder}/src-tauri/target-cuda/debug/hermeneia",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "LD_LIBRARY_PATH": "./src-tauri/cuda-libs",
+        "__NV_PRIME_RENDER_OFFLOAD": "1",
+        "__GLX_VENDOR_LIBRARY_NAME": "nvidia",
+        "WEBKIT_DISABLE_DMABUF_RENDERER": "1"
+      },
+      "preLaunchTask": "ui:dev"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Transcribe CLI",
+      "cargo": {
+        "args": [
+          "build",
+          "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml",
+          "--bin=transcribe"
+        ],
+        "filter": {
+          "name": "transcribe",
+          "kind": "bin"
+        }
+      },
+      "args": [
+        "--input",
+        "${workspaceFolder}/test.mp3",
+        "--output",
+        "${workspaceFolder}/transcript.txt",
+        "--model",
+        "tiny"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Transcribe CLI (CUDA)",
+      "program": "${workspaceFolder}/src-tauri/target-cuda/debug/transcribe",
+      "args": [
+        "--input",
+        "${workspaceFolder}/test.mp3",
+        "--output",
+        "${workspaceFolder}/transcript.txt",
+        "--model",
+        "tiny"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug",
+        "LD_LIBRARY_PATH": "./src-tauri/cuda-libs",
+        "__NV_PRIME_RENDER_OFFLOAD": "1",
+        "__GLX_VENDOR_LIBRARY_NAME": "nvidia",
+        "WEBKIT_DISABLE_DMABUF_RENDERER": "1"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Audio Trim CLI",
+      "cargo": {
+        "args": [
+          "build",
+          "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml",
+          "--bin=audio-trim"
+        ],
+        "filter": {
+          "name": "audio-trim",
+          "kind": "bin"
+        }
+      },
+      "args": [
+        "--input",
+        "${workspaceFolder}/test.mp3",
+        "--output",
+        "${workspaceFolder}/trimmed.wav",
+        "--start",
+        "0.0",
+        "--end",
+        "10.0"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug"
+      }
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Tauri Tests",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--manifest-path=${workspaceFolder}/src-tauri/Cargo.toml",
+          "--lib"
+        ],
+        "filter": {
+          "name": "hermeneia",
+          "kind": "lib"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}/src-tauri",
+      "env": {
+        "RUST_BACKTRACE": "1",
+        "RUST_LOG": "debug"
+      }
+    }
+  ]
+}

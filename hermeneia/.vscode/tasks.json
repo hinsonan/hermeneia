@@ -1,0 +1,84 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ui:dev",
+      "type": "shell",
+      "command": "bash",
+      "args": ["-i", "-c", "npm run dev"],
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "(Local|localhost):.*1420"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "tauri:dev",
+      "type": "shell",
+      "command": "bash",
+      "args": ["-i", "-c", "npm run dev:tauri"],
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE.*ready in",
+          "endsPattern": "Finished.*hermeneia"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "cargo:build",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--manifest-path=src-tauri/Cargo.toml"],
+      "problemMatcher": ["$rustc"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "cargo:build:release",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--release", "--manifest-path=src-tauri/Cargo.toml"],
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "cargo:test",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["test", "--manifest-path=src-tauri/Cargo.toml"],
+      "problemMatcher": ["$rustc"],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "cargo:clean",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["clean", "--manifest-path=src-tauri/Cargo.toml"],
+      "problemMatcher": []
+    }
+  ]
+}
