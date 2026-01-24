@@ -40,13 +40,11 @@ Complete high-performance audio processing engine with streaming playback
 - GPU optimization for Linux NVIDIA
 - Complete audio editor UI with dark mode
 
-### ☐ Phase 2: Transcription
+### ✅ Phase 2: Transcription
 Convert sermon audio to text using local AI models
 - Local speech-to-text engine with GPU acceleration
-- Interactive text editor synced with audio timeline
-- Speaker identification and labeling
 - Word-level timestamps for precise editing
-- Export to multiple formats (TXT, SRT, VTT, JSON, DOCX, PDF)
+- Export to multiple formats (TXT, SRT)
 
 ### ☐ Phase 3: Translation
 Translate transcriptions to multiple languages offline
