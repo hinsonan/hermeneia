@@ -45,6 +45,11 @@ path = "src/bin/profile_compressed_detailed.rs"
 name = "transcribe"
 path = "src/bin/transcribe/main.rs"
 
+# Binary for translation testing
+[[bin]]
+name = "translate"
+path = "src/bin/translate/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -76,6 +81,7 @@ candle-nn = "0.9.1"
 candle-transformers = "0.9.1"
 hf-hub = "0.4"
 tokenizers = "0.21"
+rust_tokenizers = "8.1"  # For MarianMT tokenizer support
 rand = { version = "0.8", features = ["std_rng"] }
 byteorder = "1"
 
