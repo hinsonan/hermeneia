@@ -70,7 +70,7 @@ pub fn translate_text_with_progress(
     tracing::debug!("Input token IDs: {:?}", input_ids);
 
     // 5. Generate translation
-    let output_ids = generate_translation(
+    let (output_ids, decoder_start_token_id) = generate_translation(
         &mut model,
         &input_ids,
         &params,
@@ -82,7 +82,18 @@ pub fn translate_text_with_progress(
     tracing::debug!("Output token IDs: {:?}", output_ids);
 
     // 6. Decode output
-    let translated_text = tokenizer.decode(&output_ids)?;
+    // Skip the decoder start token (first token) which is used to prime the decoder
+    // but is not part of the actual translation output
+    let tokens_to_decode = if !output_ids.is_empty() && output_ids[0] == decoder_start_token_id {
+        tracing::debug!(
+            "Skipping decoder start token {} from output",
+            decoder_start_token_id
+        );
+        &output_ids[1..]
+    } else {
+        &output_ids
+    };
+    let translated_text = tokenizer.decode(tokens_to_decode)?;
 
     let inference_time = start_time.elapsed().as_secs_f64();
     tracing::info!("Translation completed in {:.2}s", inference_time);
@@ -189,13 +200,14 @@ fn load_model(
 }
 
 /// Generate translation using encoder-decoder architecture
+/// Returns (output_ids, decoder_start_token_id)
 fn generate_translation(
     model: &mut TranslationModelType,
     input_ids: &[u32],
     params: &TranslateParams,
     device: &Device,
     progress_callback: Option<&ProgressCallback>,
-) -> Result<Vec<u32>> {
+) -> Result<(Vec<u32>, u32)> {
     // Create input tensor
     let input_tensor = Tensor::new(input_ids, device)
         .map_err(|e| {
@@ -249,7 +261,7 @@ fn generate_translation(
                 progress_callback,
             )?;
 
-            Ok(output_ids)
+            Ok((output_ids, decoder_start_token_id))
         }
         TranslationModelType::Marian {
             model: marian_model,
@@ -338,7 +350,7 @@ fn generate_translation(
             let output_ids = token_ids;
 
             tracing::info!("Generated {} tokens", output_ids.len());
-            Ok(output_ids)
+            Ok((output_ids, decoder_start_token_id))
         }
     }
 }
