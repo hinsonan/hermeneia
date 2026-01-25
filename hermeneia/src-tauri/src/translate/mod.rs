@@ -1,8 +1,8 @@
+pub mod catalog;
 /// Translation service for Hermeneia
 ///
 /// This module provides text-to-text neural machine translation using
 /// encoder-decoder models from HuggingFace (MADLAD-400, MarianMT).
-
 // Public modules
 pub mod generator;
 pub mod inference;

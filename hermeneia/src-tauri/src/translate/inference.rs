@@ -12,6 +12,7 @@ use std::time::Instant;
 
 /// Enum to handle different model architectures
 enum TranslationModelType {
+    /// T5-based models (MADLAD-400 uses T5 architecture)
     T5 {
         model: t5::T5ForConditionalGeneration,
         config: t5::Config,
@@ -181,7 +182,7 @@ fn load_model(
         })?;
         TranslationModelType::Marian { model, config }
     } else {
-        // Load T5 model (MADLAD uses T5 architecture)
+        // Load T5-based model (MADLAD-400 uses T5 architecture)
         let config: t5::Config = serde_json::from_reader(std::fs::File::open(&model_files.config)?)
             .map_err(|e| AudioError::ModelLoad {
                 model: model_type.model_id().to_string(),
@@ -190,7 +191,7 @@ fn load_model(
         let model = t5::T5ForConditionalGeneration::load(vb, &config).map_err(|e| {
             AudioError::ModelLoad {
                 model: model_type.model_id().to_string(),
-                details: format!("Failed to initialize T5 model: {}", e),
+                details: format!("Failed to initialize T5-based model: {}", e),
             }
         })?;
         TranslationModelType::T5 { model, config }
@@ -221,7 +222,7 @@ fn generate_translation(
             model: t5_model,
             config,
         } => {
-            tracing::info!("Running T5 encoder...");
+            tracing::info!("Running T5-based encoder (MADLAD)...");
             let encoder_output = t5_model
                 .encode(&input_tensor)
                 .map_err(|e| AudioError::TranslationFailed(format!("Encoder failed: {}", e)))?;

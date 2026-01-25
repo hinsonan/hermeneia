@@ -3,29 +3,85 @@ use crate::translate::types::TranslationModel;
 /// Get the best MarianMT model for a specific language pair, if available
 pub fn get_marian_for_pair(source: &str, target: &str) -> Option<TranslationModel> {
     match (source, target) {
-        // English to other languages
+        // Romance Languages
         ("en", "es") => Some(TranslationModel::MarianEnEs),
-        ("en", "fr") => Some(TranslationModel::MarianEnFr),
-        ("en", "de") => Some(TranslationModel::MarianEnDe),
-        ("en", "pt") => Some(TranslationModel::MarianEnPt),
-        ("en", "it") => Some(TranslationModel::MarianEnIt),
-        ("en", "ru") => Some(TranslationModel::MarianEnRu),
-        ("en", "zh") => Some(TranslationModel::MarianEnZh),
-        ("en", "ja") => Some(TranslationModel::MarianEnJa),
-        ("en", "ko") => Some(TranslationModel::MarianEnKo),
-        ("en", "ar") => Some(TranslationModel::MarianEnAr),
-
-        // Other languages to English
         ("es", "en") => Some(TranslationModel::MarianEsEn),
+        ("en", "fr") => Some(TranslationModel::MarianEnFr),
         ("fr", "en") => Some(TranslationModel::MarianFrEn),
-        ("de", "en") => Some(TranslationModel::MarianDeEn),
+        ("en", "pt") => Some(TranslationModel::MarianEnPt),
         ("pt", "en") => Some(TranslationModel::MarianPtEn),
+        ("en", "it") => Some(TranslationModel::MarianEnIt),
         ("it", "en") => Some(TranslationModel::MarianItEn),
+        ("en", "ro") => Some(TranslationModel::MarianEnRo),
+        ("ro", "en") => Some(TranslationModel::MarianRoEn),
+
+        // Germanic Languages
+        ("en", "de") => Some(TranslationModel::MarianEnDe),
+        ("de", "en") => Some(TranslationModel::MarianDeEn),
+        ("en", "nl") => Some(TranslationModel::MarianEnNl),
+        ("nl", "en") => Some(TranslationModel::MarianNlEn),
+        ("en", "sv") => Some(TranslationModel::MarianEnSv),
+        ("sv", "en") => Some(TranslationModel::MarianSvEn),
+        ("en", "da") => Some(TranslationModel::MarianEnDa),
+        ("da", "en") => Some(TranslationModel::MarianDaEn),
+        ("en", "no") => Some(TranslationModel::MarianEnNo),
+        ("no", "en") => Some(TranslationModel::MarianNoEn),
+
+        // Slavic Languages
+        ("en", "ru") => Some(TranslationModel::MarianEnRu),
         ("ru", "en") => Some(TranslationModel::MarianRuEn),
+        ("en", "pl") => Some(TranslationModel::MarianEnPl),
+        ("pl", "en") => Some(TranslationModel::MarianPlEn),
+        ("en", "cs") => Some(TranslationModel::MarianEnCs),
+        ("cs", "en") => Some(TranslationModel::MarianCsEn),
+        ("en", "uk") => Some(TranslationModel::MarianEnUk),
+        ("uk", "en") => Some(TranslationModel::MarianUkEn),
+
+        // East Asian Languages
+        ("en", "zh") => Some(TranslationModel::MarianEnZh),
         ("zh", "en") => Some(TranslationModel::MarianZhEn),
+        ("en", "ja") => Some(TranslationModel::MarianEnJa),
         ("ja", "en") => Some(TranslationModel::MarianJaEn),
+        ("en", "ko") => Some(TranslationModel::MarianEnKo),
         ("ko", "en") => Some(TranslationModel::MarianKoEn),
+
+        // Southeast Asian Languages
+        ("en", "vi") => Some(TranslationModel::MarianEnVi),
+        ("vi", "en") => Some(TranslationModel::MarianViEn),
+        ("en", "th") => Some(TranslationModel::MarianEnTh),
+        ("th", "en") => Some(TranslationModel::MarianThEn),
+        ("en", "id") => Some(TranslationModel::MarianEnId),
+        ("id", "en") => Some(TranslationModel::MarianIdEn),
+
+        // Middle Eastern Languages
+        ("en", "ar") => Some(TranslationModel::MarianEnAr),
         ("ar", "en") => Some(TranslationModel::MarianArEn),
+        ("en", "he") => Some(TranslationModel::MarianEnHe),
+        ("he", "en") => Some(TranslationModel::MarianHeEn),
+        ("en", "fa") => Some(TranslationModel::MarianEnFa),
+        ("fa", "en") => Some(TranslationModel::MarianFaEn),
+        ("en", "tr") => Some(TranslationModel::MarianEnTr),
+        ("tr", "en") => Some(TranslationModel::MarianTrEn),
+
+        // South Asian Languages
+        ("en", "hi") => Some(TranslationModel::MarianEnHi),
+        ("hi", "en") => Some(TranslationModel::MarianHiEn),
+        ("en", "bn") => Some(TranslationModel::MarianEnBn),
+        ("bn", "en") => Some(TranslationModel::MarianBnEn),
+        ("en", "ur") => Some(TranslationModel::MarianEnUr),
+        ("ur", "en") => Some(TranslationModel::MarianUrEn),
+
+        // Other European Languages
+        ("en", "hu") => Some(TranslationModel::MarianEnHu),
+        ("hu", "en") => Some(TranslationModel::MarianHuEn),
+        ("en", "fi") => Some(TranslationModel::MarianEnFi),
+        ("fi", "en") => Some(TranslationModel::MarianFiEn),
+        ("en", "el") => Some(TranslationModel::MarianEnEl),
+        ("el", "en") => Some(TranslationModel::MarianElEn),
+
+        // African Languages
+        ("en", "sw") => Some(TranslationModel::MarianEnSw),
+        ("sw", "en") => Some(TranslationModel::MarianSwEn),
 
         // No specialized model for this pair
         _ => None,
@@ -105,6 +161,18 @@ mod tests {
         assert_eq!(
             get_marian_for_pair("fr", "en"),
             Some(TranslationModel::MarianFrEn)
+        );
+        assert_eq!(
+            get_marian_for_pair("en", "nl"),
+            Some(TranslationModel::MarianEnNl)
+        );
+        assert_eq!(
+            get_marian_for_pair("sv", "en"),
+            Some(TranslationModel::MarianSvEn)
+        );
+        assert_eq!(
+            get_marian_for_pair("en", "sw"),
+            Some(TranslationModel::MarianEnSw)
         );
         assert_eq!(get_marian_for_pair("en", "en"), None);
         assert_eq!(get_marian_for_pair("es", "fr"), None); // No direct ES->FR model

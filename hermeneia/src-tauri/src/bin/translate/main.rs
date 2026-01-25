@@ -31,8 +31,7 @@ struct Args {
     target: String,
 
     /// Preferred model (auto-selects if not specified)
-    /// Options: madlad-3b, madlad-7b, madlad-10b, t5-small, t5-base, t5-large,
-    /// flan-t5-small, flan-t5-base, flan-t5-large, flan-ul2, marian-en-es, etc.
+    /// Options: madlad-3b, madlad-7b, madlad-10b, marian-en-es, marian-es-en, etc.
     #[arg(short, long)]
     model: Option<String>,
 
@@ -44,9 +43,13 @@ struct Args {
     #[arg(long, default_value = "512")]
     max_length: usize,
 
-    /// List all cached models
+    /// List models from the catalog
     #[arg(long)]
     list_models: bool,
+
+    /// Only show cached models when listing
+    #[arg(long)]
+    cached_only: bool,
 
     /// Disable progress bar
     #[arg(long)]
@@ -65,7 +68,7 @@ fn main() -> anyhow::Result<()> {
 
     // Handle --list-models command
     if args.list_models {
-        return list_cached_models();
+        return list_models(args.cached_only);
     }
 
     // Get input text
@@ -89,10 +92,7 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
-    info!(
-        "Translating: {} -> {}",
-        args.source, args.target
-    );
+    info!("Translating: {} -> {}", args.source, args.target);
     if let Some(model) = preferred_model {
         info!("Using model: {}", model.display_name());
     } else {
@@ -132,8 +132,7 @@ fn main() -> anyhow::Result<()> {
         let pb_clone = pb.clone();
         Some(Box::new(move |current: usize, _total: usize| {
             pb_clone.set_position(current as u64);
-        })
-            as Box<dyn Fn(usize, usize) + Send + Sync>)
+        }) as Box<dyn Fn(usize, usize) + Send + Sync>)
     } else {
         None
     };
@@ -173,13 +172,6 @@ fn parse_model(s: &str) -> anyhow::Result<TranslationModel> {
         "madlad-3b" | "madlad3b" => TranslationModel::Madlad3B,
         "madlad-7b" | "madlad7b" => TranslationModel::Madlad7B,
         "madlad-10b" | "madlad10b" => TranslationModel::Madlad10B,
-        "t5-small" | "t5small" => TranslationModel::T5Small,
-        "t5-base" | "t5base" => TranslationModel::T5Base,
-        "t5-large" | "t5large" => TranslationModel::T5Large,
-        "flan-t5-small" | "flan-t5small" => TranslationModel::FlanT5Small,
-        "flan-t5-base" | "flan-t5base" => TranslationModel::FlanT5Base,
-        "flan-t5-large" | "flan-t5large" => TranslationModel::FlanT5Large,
-        "flan-ul2" | "flanul2" => TranslationModel::FlanUl2,
         "marian-en-es" => TranslationModel::MarianEnEs,
         "marian-es-en" => TranslationModel::MarianEsEn,
         "marian-en-fr" => TranslationModel::MarianEnFr,
@@ -190,54 +182,128 @@ fn parse_model(s: &str) -> anyhow::Result<TranslationModel> {
         "marian-pt-en" => TranslationModel::MarianPtEn,
         "marian-en-it" => TranslationModel::MarianEnIt,
         "marian-it-en" => TranslationModel::MarianItEn,
+        "marian-en-ro" => TranslationModel::MarianEnRo,
+        "marian-ro-en" => TranslationModel::MarianRoEn,
+        "marian-en-nl" => TranslationModel::MarianEnNl,
+        "marian-nl-en" => TranslationModel::MarianNlEn,
+        "marian-en-sv" => TranslationModel::MarianEnSv,
+        "marian-sv-en" => TranslationModel::MarianSvEn,
+        "marian-en-da" => TranslationModel::MarianEnDa,
+        "marian-da-en" => TranslationModel::MarianDaEn,
+        "marian-en-no" => TranslationModel::MarianEnNo,
+        "marian-no-en" => TranslationModel::MarianNoEn,
         "marian-en-ru" => TranslationModel::MarianEnRu,
         "marian-ru-en" => TranslationModel::MarianRuEn,
+        "marian-en-pl" => TranslationModel::MarianEnPl,
+        "marian-pl-en" => TranslationModel::MarianPlEn,
+        "marian-en-cs" => TranslationModel::MarianEnCs,
+        "marian-cs-en" => TranslationModel::MarianCsEn,
+        "marian-en-uk" => TranslationModel::MarianEnUk,
+        "marian-uk-en" => TranslationModel::MarianUkEn,
         "marian-en-zh" => TranslationModel::MarianEnZh,
         "marian-zh-en" => TranslationModel::MarianZhEn,
         "marian-en-ja" => TranslationModel::MarianEnJa,
         "marian-ja-en" => TranslationModel::MarianJaEn,
         "marian-en-ko" => TranslationModel::MarianEnKo,
         "marian-ko-en" => TranslationModel::MarianKoEn,
+        "marian-en-vi" => TranslationModel::MarianEnVi,
+        "marian-vi-en" => TranslationModel::MarianViEn,
+        "marian-en-th" => TranslationModel::MarianEnTh,
+        "marian-th-en" => TranslationModel::MarianThEn,
+        "marian-en-id" => TranslationModel::MarianEnId,
+        "marian-id-en" => TranslationModel::MarianIdEn,
         "marian-en-ar" => TranslationModel::MarianEnAr,
         "marian-ar-en" => TranslationModel::MarianArEn,
+        "marian-en-he" => TranslationModel::MarianEnHe,
+        "marian-he-en" => TranslationModel::MarianHeEn,
+        "marian-en-fa" => TranslationModel::MarianEnFa,
+        "marian-fa-en" => TranslationModel::MarianFaEn,
+        "marian-en-tr" => TranslationModel::MarianEnTr,
+        "marian-tr-en" => TranslationModel::MarianTrEn,
+        "marian-en-hi" => TranslationModel::MarianEnHi,
+        "marian-hi-en" => TranslationModel::MarianHiEn,
+        "marian-en-bn" => TranslationModel::MarianEnBn,
+        "marian-bn-en" => TranslationModel::MarianBnEn,
+        "marian-en-ur" => TranslationModel::MarianEnUr,
+        "marian-ur-en" => TranslationModel::MarianUrEn,
+        "marian-en-hu" => TranslationModel::MarianEnHu,
+        "marian-hu-en" => TranslationModel::MarianHuEn,
+        "marian-en-fi" => TranslationModel::MarianEnFi,
+        "marian-fi-en" => TranslationModel::MarianFiEn,
+        "marian-en-el" => TranslationModel::MarianEnEl,
+        "marian-el-en" => TranslationModel::MarianElEn,
+        "marian-en-sw" => TranslationModel::MarianEnSw,
+        "marian-sw-en" => TranslationModel::MarianSwEn,
         _ => anyhow::bail!("Invalid model: {}", s),
     };
     Ok(model)
 }
 
-/// List all cached translation models
-fn list_cached_models() -> anyhow::Result<()> {
+/// List translation models from the catalog
+fn list_models(cached_only: bool) -> anyhow::Result<()> {
     let manager = ModelManager::new()
         .map_err(|e| anyhow::anyhow!("Failed to initialize model manager: {}", e))?;
 
-    let cached = manager
-        .list_cached_models()
+    let mut catalog = manager
+        .list_catalog_models()
         .map_err(|e| anyhow::anyhow!("Failed to list models: {}", e))?;
 
-    if cached.is_empty() {
-        println!("No cached models found.");
+    if cached_only {
+        catalog.retain(|entry| entry.cached);
+    }
+
+    if catalog.is_empty() {
+        if cached_only {
+            println!("No cached models found.");
+        } else {
+            println!("No models found in catalog.");
+        }
         println!("Models will be downloaded automatically on first use.");
         return Ok(());
     }
 
-    println!("\nCached Translation Models:");
-    println!("{:<20} {:<45} {:>10}", "Model Key", "Display Name", "Size (MB)");
-    println!("{}", "-".repeat(80));
+    println!("\nTranslation Models:");
+    println!(
+        "{:<20} {:<7} {:<11} {:>9} {:>8}",
+        "Model Key", "Family", "Pair", "Size (MB)", "Cached"
+    );
+    println!("{}", "-".repeat(62));
 
     let mut total_size = 0u64;
-    for (model, size_mb) in cached {
+    let mut cached_size = 0u64;
+    let mut cached_count = 0u64;
+
+    for entry in &catalog {
+        let model = &entry.model;
+        let pair = match (model.source.as_deref(), model.target.as_deref()) {
+            (Some(source), Some(target)) => format!("{}→{}", source, target),
+            _ => "-".to_string(),
+        };
         println!(
-            "{:<20} {:<45} {:>10}",
-            model.cli_key(),
-            model.display_name(),
-            size_mb
+            "{:<20} {:<7} {:<11} {:>9} {:>8}",
+            model.name,
+            model.family.as_str(),
+            pair,
+            model.size_mb,
+            if entry.cached { "yes" } else { "no" }
         );
-        total_size += size_mb;
+
+        total_size += model.size_mb;
+        if entry.cached {
+            cached_size += model.size_mb;
+            cached_count += 1;
+        }
     }
 
-    println!("{}", "-".repeat(80));
-    println!("{:<20} {:<45} {:>10}", "Total", "", total_size);
-    println!("\nCache location: {}", manager.cache_dir().display());
+    println!("{}", "-".repeat(62));
+    println!(
+        "Total models: {} | Cached: {} | Total size: {} MB | Cached size: {} MB",
+        catalog.len(),
+        cached_count,
+        total_size,
+        cached_size
+    );
+    println!("Cache location: {}", manager.cache_dir().display());
 
     Ok(())
 }
