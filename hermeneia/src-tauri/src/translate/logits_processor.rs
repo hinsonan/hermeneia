@@ -89,11 +89,8 @@ impl LogitsProcessor {
     /// Top-p (nucleus) sampling
     fn sample_top_p(&mut self, logits: &[f32], top_p: f64) -> Result<u32> {
         // Create (index, probability) pairs
-        let mut logits_idx: Vec<(usize, f32)> = logits
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| (i, v))
-            .collect();
+        let mut logits_idx: Vec<(usize, f32)> =
+            logits.iter().enumerate().map(|(i, &v)| (i, v)).collect();
 
         // Sort by probability (descending)
         logits_idx.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

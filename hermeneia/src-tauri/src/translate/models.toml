@@ -1,0 +1,777 @@
+# Translation Models Configuration
+# This file defines all available translation models for the Hermeneia application
+# Models are organized by type: MADLAD (multilingual fallback) and MarianMT (specialized one-to-one)
+
+# =============================================================================
+# MADLAD-400 Multilingual Models (Universal Fallback)
+# =============================================================================
+# These models support 450+ languages but are larger in size
+# Use as fallback when no specialized MarianMT model is available
+
+[[madlad]]
+name = "madlad-3b"
+model_id = "jbochi/madlad400-3b-mt"
+size_mb = 11800  # 11.8 GB
+languages = 450
+revision = "main"
+description = "MADLAD-400 3B (11.8GB, 450+ languages)"
+
+[[madlad]]
+name = "madlad-7b"
+model_id = "jbochi/madlad400-7b-mt"
+size_mb = 20000  # ~20 GB estimated
+languages = 450
+revision = "main"
+description = "MADLAD-400 7B (20GB, 450+ languages)"
+
+[[madlad]]
+name = "madlad-10b"
+model_id = "jbochi/madlad400-10b-mt"
+size_mb = 38000  # ~38 GB estimated
+languages = 450
+revision = "main"
+description = "MADLAD-400 10B (38GB, 450+ languages)"
+
+# =============================================================================
+# MarianMT One-to-One Models (High Quality Specialized)
+# =============================================================================
+# These models are optimized for specific language pairs
+# ~298MB each, significantly better quality than multilingual models
+
+# -----------------------------------------------------------------------------
+# ROMANCE LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-es"
+model_id = "Helsinki-NLP/opus-mt-en-es"
+source = "en"
+target = "es"
+size_mb = 298
+chrf_score = 0.721
+bleu_score = 55.1
+revision = "refs/pr/4"
+description = "MarianMT EN→ES (298MB)"
+notes = "European Spanish"
+
+[[marian]]
+name = "marian-es-en"
+model_id = "Helsinki-NLP/opus-mt-es-en"
+source = "es"
+target = "en"
+size_mb = 298
+chrf_score = 0.739
+bleu_score = 59.6
+revision = "refs/pr/4"
+description = "MarianMT ES→EN (298MB)"
+
+[[marian]]
+name = "marian-en-fr"
+model_id = "Helsinki-NLP/opus-mt-en-fr"
+source = "en"
+target = "fr"
+size_mb = 298
+chrf_score = 0.671
+bleu_score = 50.8
+revision = "refs/pr/4"
+description = "MarianMT EN→FR (298MB)"
+
+[[marian]]
+name = "marian-fr-en"
+model_id = "Helsinki-NLP/opus-mt-fr-en"
+source = "fr"
+target = "en"
+size_mb = 298
+chrf_score = 0.724
+bleu_score = 57.9
+revision = "refs/pr/4"
+description = "MarianMT FR→EN (298MB)"
+
+[[marian]]
+name = "marian-en-pt"
+model_id = "Helsinki-NLP/opus-mt-en-roa"
+source = "en"
+target = "pt"
+size_mb = 298
+chrf_score = 0.637
+bleu_score = 41.7
+revision = "refs/pr/4"
+description = "MarianMT EN→PT (298MB)"
+notes = "Romance languages group model"
+
+[[marian]]
+name = "marian-pt-en"
+model_id = "Helsinki-NLP/opus-mt-roa-en"
+source = "pt"
+target = "en"
+size_mb = 298
+chrf_score = 0.739
+bleu_score = 59.9
+revision = "refs/pr/4"
+description = "MarianMT PT→EN (298MB)"
+
+[[marian]]
+name = "marian-en-it"
+model_id = "Helsinki-NLP/opus-mt-en-it"
+source = "en"
+target = "it"
+size_mb = 298
+revision = "refs/pr/4"
+description = "MarianMT EN→IT (298MB)"
+
+[[marian]]
+name = "marian-it-en"
+model_id = "Helsinki-NLP/opus-mt-it-en"
+source = "it"
+target = "en"
+size_mb = 298
+chrf_score = 0.796
+bleu_score = 68.8
+revision = "refs/pr/4"
+description = "MarianMT IT→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# GERMANIC LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-de"
+model_id = "Helsinki-NLP/opus-mt-en-de"
+source = "en"
+target = "de"
+size_mb = 298
+chrf_score = 0.655
+bleu_score = 45.8
+revision = "refs/pr/4"
+description = "MarianMT EN→DE (298MB)"
+
+[[marian]]
+name = "marian-de-en"
+model_id = "Helsinki-NLP/opus-mt-de-en"
+source = "de"
+target = "en"
+size_mb = 298
+chrf_score = 0.697
+bleu_score = 53.5
+revision = "refs/pr/4"
+description = "MarianMT DE→EN (298MB)"
+
+[[marian]]
+name = "marian-en-nl"
+model_id = "Helsinki-NLP/opus-mt-en-nl"
+source = "en"
+target = "nl"
+size_mb = 298
+chrf_score = 0.73
+bleu_score = 57.4
+revision = "refs/pr/4"
+description = "MarianMT EN→NL (298MB)"
+speakers_millions = 22
+
+[[marian]]
+name = "marian-nl-en"
+model_id = "Helsinki-NLP/opus-mt-nl-en"
+source = "nl"
+target = "en"
+size_mb = 298
+chrf_score = 0.755
+bleu_score = 61.7
+revision = "refs/pr/4"
+description = "MarianMT NL→EN (298MB)"
+
+[[marian]]
+name = "marian-en-sv"
+model_id = "Helsinki-NLP/opus-mt-en-sv"
+source = "en"
+target = "sv"
+size_mb = 298
+chrf_score = 0.746
+bleu_score = 61.7
+revision = "refs/pr/4"
+description = "MarianMT EN→SV (298MB)"
+speakers_millions = 13
+
+[[marian]]
+name = "marian-sv-en"
+model_id = "Helsinki-NLP/opus-mt-sv-en"
+source = "sv"
+target = "en"
+size_mb = 298
+chrf_score = 0.769
+bleu_score = 65.0
+revision = "refs/pr/4"
+description = "MarianMT SV→EN (298MB)"
+
+[[marian]]
+name = "marian-en-da"
+model_id = "Helsinki-NLP/opus-mt-en-da"
+source = "en"
+target = "da"
+size_mb = 298
+chrf_score = 0.753
+bleu_score = 61.7
+revision = "refs/pr/4"
+description = "MarianMT EN→DA (298MB)"
+speakers_millions = 6
+
+[[marian]]
+name = "marian-da-en"
+model_id = "Helsinki-NLP/opus-mt-da-en"
+source = "da"
+target = "en"
+size_mb = 298
+chrf_score = 0.777
+bleu_score = 64.7
+revision = "refs/pr/4"
+description = "MarianMT DA→EN (298MB)"
+
+[[marian]]
+name = "marian-en-no"
+model_id = "Helsinki-NLP/opus-mt-en-no"
+source = "en"
+target = "no"
+size_mb = 298
+revision = "refs/pr/4"
+description = "MarianMT EN→NO (298MB)"
+speakers_millions = 5
+
+[[marian]]
+name = "marian-no-en"
+model_id = "Helsinki-NLP/opus-mt-no-en"
+source = "no"
+target = "en"
+size_mb = 298
+chrf_score = 0.715
+bleu_score = 57.2
+revision = "refs/pr/4"
+description = "MarianMT NO→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# SLAVIC LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-ru"
+model_id = "Helsinki-NLP/opus-mt-en-ru"
+source = "en"
+target = "ru"
+size_mb = 298
+revision = "refs/pr/4"
+description = "MarianMT EN→RU (298MB)"
+
+[[marian]]
+name = "marian-ru-en"
+model_id = "Helsinki-NLP/opus-mt-ru-en"
+source = "ru"
+target = "en"
+size_mb = 298
+chrf_score = 0.716
+bleu_score = 57.8
+revision = "refs/pr/4"
+description = "MarianMT RU→EN (298MB)"
+
+[[marian]]
+name = "marian-en-pl"
+model_id = "Helsinki-NLP/opus-mt-en-pl"
+source = "en"
+target = "pl"
+size_mb = 298
+chrf_score = 0.673
+bleu_score = 47.5
+revision = "refs/pr/4"
+description = "MarianMT EN→PL (298MB)"
+speakers_millions = 45
+
+[[marian]]
+name = "marian-pl-en"
+model_id = "Helsinki-NLP/opus-mt-pl-en"
+source = "pl"
+target = "en"
+size_mb = 298
+chrf_score = 0.692
+bleu_score = 53.5
+revision = "refs/pr/4"
+description = "MarianMT PL→EN (298MB)"
+
+[[marian]]
+name = "marian-en-cs"
+model_id = "Helsinki-NLP/opus-mt-en-cs"
+source = "en"
+target = "cs"
+size_mb = 298
+chrf_score = 0.663
+bleu_score = 47.8
+revision = "refs/pr/4"
+description = "MarianMT EN→CS (298MB)"
+speakers_millions = 13
+
+[[marian]]
+name = "marian-cs-en"
+model_id = "Helsinki-NLP/opus-mt-cs-en"
+source = "cs"
+target = "en"
+size_mb = 298
+chrf_score = 0.719
+bleu_score = 56.9
+revision = "refs/pr/4"
+description = "MarianMT CS→EN (298MB)"
+
+[[marian]]
+name = "marian-en-uk"
+model_id = "Helsinki-NLP/opus-mt-en-uk"
+source = "en"
+target = "uk"
+size_mb = 298
+chrf_score = 0.594
+bleu_score = 38.5
+revision = "refs/pr/4"
+description = "MarianMT EN→UK (298MB)"
+speakers_millions = 40
+notes = "Ukrainian"
+
+[[marian]]
+name = "marian-uk-en"
+model_id = "Helsinki-NLP/opus-mt-uk-en"
+source = "uk"
+target = "en"
+size_mb = 298
+chrf_score = 0.67
+bleu_score = 51.7
+revision = "refs/pr/4"
+description = "MarianMT UK→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# EAST ASIAN LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-zh"
+model_id = "Helsinki-NLP/opus-mt-en-zh"
+source = "en"
+target = "zh"
+size_mb = 298
+chrf_score = 0.268
+bleu_score = 31.4
+revision = "refs/pr/4"
+description = "MarianMT EN→ZH (298MB)"
+
+[[marian]]
+name = "marian-zh-en"
+model_id = "Helsinki-NLP/opus-mt-zh-en"
+source = "zh"
+target = "en"
+size_mb = 298
+chrf_score = 0.548
+bleu_score = 36.1
+revision = "refs/pr/4"
+description = "MarianMT ZH→EN (298MB)"
+
+[[marian]]
+name = "marian-en-ja"
+model_id = "Helsinki-NLP/opus-mt-en-jap"
+source = "en"
+target = "ja"
+size_mb = 298
+chrf_score = 0.266
+bleu_score = 15.7
+revision = "refs/pr/4"
+description = "MarianMT EN→JA (298MB)"
+
+[[marian]]
+name = "marian-ja-en"
+model_id = "Helsinki-NLP/opus-mt-jap-en"
+source = "ja"
+target = "en"
+size_mb = 298
+chrf_score = 0.502
+bleu_score = 30.1
+revision = "refs/pr/4"
+description = "MarianMT JA→EN (298MB)"
+
+[[marian]]
+name = "marian-en-ko"
+model_id = "Helsinki-NLP/opus-mt-en-ko"
+source = "en"
+target = "ko"
+size_mb = 298
+revision = "refs/pr/4"
+description = "MarianMT EN→KO (298MB)"
+
+[[marian]]
+name = "marian-ko-en"
+model_id = "Helsinki-NLP/opus-mt-ko-en"
+source = "ko"
+target = "en"
+size_mb = 298
+chrf_score = 0.588
+bleu_score = 41.3
+revision = "refs/pr/4"
+description = "MarianMT KO→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# EAST ASIAN LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-vi"
+model_id = "Helsinki-NLP/opus-mt-en-vi"
+source = "en"
+target = "vi"
+size_mb = 298
+chrf_score = 0.542
+bleu_score = 37.2
+revision = "refs/pr/4"
+description = "MarianMT EN→VI (298MB)"
+speakers_millions = 85
+
+[[marian]]
+name = "marian-vi-en"
+model_id = "Helsinki-NLP/opus-mt-vi-en"
+source = "vi"
+target = "en"
+size_mb = 298
+chrf_score = 0.608
+bleu_score = 42.8
+revision = "refs/pr/4"
+description = "MarianMT VI→EN (298MB)"
+
+[[marian]]
+name = "marian-en-th"
+model_id = "Helsinki-NLP/opus-mt-en-th"
+source = "en"
+target = "th"
+size_mb = 298
+revision = "refs/pr/4"
+description = "MarianMT EN→TH (298MB)"
+speakers_millions = 60
+
+[[marian]]
+name = "marian-th-en"
+model_id = "Helsinki-NLP/opus-mt-th-en"
+source = "th"
+target = "en"
+size_mb = 298
+chrf_score = 0.644
+bleu_score = 48.1
+revision = "refs/pr/4"
+description = "MarianMT TH→EN (298MB)"
+
+[[marian]]
+name = "marian-en-id"
+model_id = "Helsinki-NLP/opus-mt-en-id"
+source = "en"
+target = "id"
+size_mb = 298
+revision = "refs/pr/4"
+description = "MarianMT EN→ID (298MB)"
+speakers_millions = 200
+notes = "Indonesian"
+
+[[marian]]
+name = "marian-id-en"
+model_id = "Helsinki-NLP/opus-mt-id-en"
+source = "id"
+target = "en"
+size_mb = 298
+chrf_score = 0.643
+bleu_score = 47.1
+revision = "refs/pr/4"
+description = "MarianMT ID→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# MIDDLE EASTERN LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-ar"
+model_id = "Helsinki-NLP/opus-mt-en-ar"
+source = "en"
+target = "ar"
+size_mb = 298
+chrf_score = 0.44
+bleu_score = 14.4
+revision = "refs/pr/4"
+description = "MarianMT EN→AR (298MB)"
+
+[[marian]]
+name = "marian-ar-en"
+model_id = "Helsinki-NLP/opus-mt-ar-en"
+source = "ar"
+target = "en"
+size_mb = 298
+chrf_score = 0.617
+bleu_score = 44.9
+revision = "refs/pr/4"
+description = "MarianMT AR→EN (298MB)"
+
+[[marian]]
+name = "marian-en-he"
+model_id = "Helsinki-NLP/opus-mt-en-he"
+source = "en"
+target = "he"
+size_mb = 298
+chrf_score = 0.602
+bleu_score = 37.8
+revision = "refs/pr/4"
+description = "MarianMT EN→HE (298MB)"
+speakers_millions = 9
+notes = "Hebrew"
+
+[[marian]]
+name = "marian-he-en"
+model_id = "Helsinki-NLP/opus-mt-tc-big-he-en"
+source = "he"
+target = "en"
+size_mb = 298
+chrf_score = 0.6851
+bleu_score = 53.8
+revision = "main"
+description = "MarianMT HE→EN (298MB)"
+notes = "TC-Big variant"
+
+[[marian]]
+name = "marian-en-fa"
+model_id = "Helsinki-NLP/opus-mt-en-fa"
+source = "en"
+target = "fa"
+size_mb = 298
+chrf_score = 0.364
+bleu_score = 11.8
+revision = "refs/pr/4"
+description = "MarianMT EN→FA (298MB)"
+speakers_millions = 110
+notes = "Persian/Farsi"
+
+[[marian]]
+name = "marian-fa-en"
+model_id = "Helsinki-NLP/opus-mt-fa-en"
+source = "fa"
+target = "en"
+size_mb = 298
+chrf_score = 0.566
+bleu_score = 38.2
+revision = "refs/pr/4"
+description = "MarianMT FA→EN (298MB)"
+
+[[marian]]
+name = "marian-en-tr"
+model_id = "Helsinki-NLP/opus-mt-tc-big-en-tr"
+source = "en"
+target = "tr"
+size_mb = 298
+revision = "main"
+description = "MarianMT EN→TR (298MB)"
+speakers_millions = 88
+notes = "Turkish, TC-Big variant"
+
+[[marian]]
+name = "marian-tr-en"
+model_id = "Helsinki-NLP/opus-mt-tr-en"
+source = "tr"
+target = "en"
+size_mb = 298
+chrf_score = 0.725
+bleu_score = 58.4
+revision = "refs/pr/4"
+description = "MarianMT TR→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# SOUTH ASIAN LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-hi"
+model_id = "Helsinki-NLP/opus-mt-en-hi"
+source = "en"
+target = "hi"
+size_mb = 298
+chrf_score = 0.447
+bleu_score = 16.1
+revision = "refs/pr/4"
+description = "MarianMT EN→HI (298MB)"
+speakers_millions = 600
+notes = "Hindi"
+
+[[marian]]
+name = "marian-hi-en"
+model_id = "Helsinki-NLP/opus-mt-hi-en"
+source = "hi"
+target = "en"
+size_mb = 298
+chrf_score = 0.569
+bleu_score = 39.0
+revision = "refs/pr/4"
+description = "MarianMT HI→EN (298MB)"
+
+[[marian]]
+name = "marian-en-bn"
+model_id = "Helsinki-NLP/opus-mt-en-bn"
+source = "en"
+target = "bn"
+size_mb = 298
+chrf_score = 0.484
+bleu_score = 16.9
+revision = "refs/pr/4"
+description = "MarianMT EN→BN (298MB)"
+speakers_millions = 265
+notes = "Bengali"
+
+[[marian]]
+name = "marian-bn-en"
+model_id = "Helsinki-NLP/opus-mt-bn-en"
+source = "bn"
+target = "en"
+size_mb = 298
+chrf_score = 0.641
+bleu_score = 49.7
+revision = "refs/pr/4"
+description = "MarianMT BN→EN (298MB)"
+
+[[marian]]
+name = "marian-en-ur"
+model_id = "Helsinki-NLP/opus-mt-en-ur"
+source = "en"
+target = "ur"
+size_mb = 298
+chrf_score = 0.39
+bleu_score = 12.1
+revision = "refs/pr/4"
+description = "MarianMT EN→UR (298MB)"
+speakers_millions = 230
+notes = "Urdu"
+
+[[marian]]
+name = "marian-ur-en"
+model_id = "Helsinki-NLP/opus-mt-ur-en"
+source = "ur"
+target = "en"
+size_mb = 298
+chrf_score = 0.435
+bleu_score = 23.2
+revision = "refs/pr/4"
+description = "MarianMT UR→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# OTHER EUROPEAN LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-ro"
+model_id = "Helsinki-NLP/opus-mt-en-ro"
+source = "en"
+target = "ro"
+size_mb = 298
+chrf_score = 0.666
+bleu_score = 45.0
+revision = "refs/pr/4"
+description = "MarianMT EN→RO (298MB)"
+speakers_millions = 26
+notes = "Romanian"
+
+[[marian]]
+name = "marian-ro-en"
+model_id = "Helsinki-NLP/opus-mt-ro-en"
+source = "ro"
+target = "en"
+size_mb = 298
+chrf_score = 0.733
+bleu_score = 59.3
+revision = "refs/pr/4"
+description = "MarianMT RO→EN (298MB)"
+
+[[marian]]
+name = "marian-en-hu"
+model_id = "Helsinki-NLP/opus-mt-tc-big-en-hu"
+source = "en"
+target = "hu"
+size_mb = 298
+chrf_score = 0.6233
+bleu_score = 39.1
+revision = "main"
+description = "MarianMT EN→HU (298MB)"
+speakers_millions = 13
+notes = "Hungarian, TC-Big variant"
+
+[[marian]]
+name = "marian-hu-en"
+model_id = "Helsinki-NLP/opus-mt-hu-en"
+source = "hu"
+target = "en"
+size_mb = 298
+chrf_score = 0.675
+bleu_score = 51.4
+revision = "refs/pr/4"
+description = "MarianMT HU→EN (298MB)"
+
+[[marian]]
+name = "marian-en-fi"
+model_id = "Helsinki-NLP/opus-mt-en-fi"
+source = "en"
+target = "fi"
+size_mb = 298
+chrf_score = 0.629
+bleu_score = 38.7
+revision = "refs/pr/4"
+description = "MarianMT EN→FI (298MB)"
+speakers_millions = 6
+notes = "Finnish"
+
+[[marian]]
+name = "marian-fi-en"
+model_id = "Helsinki-NLP/opus-mt-tc-big-fi-en"
+source = "fi"
+target = "en"
+size_mb = 298
+revision = "main"
+description = "MarianMT FI→EN (298MB)"
+notes = "TC-Big variant"
+
+[[marian]]
+name = "marian-en-el"
+model_id = "Helsinki-NLP/opus-mt-en-el"
+source = "en"
+target = "el"
+size_mb = 298
+revision = "refs/pr/4"
+description = "MarianMT EN→EL (298MB)"
+speakers_millions = 13
+notes = "Greek"
+
+[[marian]]
+name = "marian-el-en"
+model_id = "Helsinki-NLP/opus-mt-el-en"
+source = "el"
+target = "en"
+size_mb = 298
+chrf_score = 0.801
+bleu_score = 69.2
+revision = "refs/pr/4"
+description = "MarianMT EL→EN (298MB)"
+
+# -----------------------------------------------------------------------------
+# AFRICAN LANGUAGES
+# -----------------------------------------------------------------------------
+
+[[marian]]
+name = "marian-en-sw"
+model_id = "Helsinki-NLP/opus-mt-en-sw"
+source = "en"
+target = "sw"
+size_mb = 298
+chrf_score = 0.604
+bleu_score = 23.2
+revision = "refs/pr/4"
+description = "MarianMT EN→SW (298MB)"
+speakers_millions = 200
+notes = "Swahili"
+
+[[marian]]
+name = "marian-sw-en"
+model_id = "Helsinki-NLP/opus-mt-sw-en"
+source = "sw"
+target = "en"
+size_mb = 298
+chrf_score = 0.58
+bleu_score = 43.5
+revision = "refs/pr/4"
+description = "MarianMT SW→EN (298MB)"

@@ -28,11 +28,7 @@ pub enum AudioError {
 
     /// Trim range is outside the audio file's duration
     #[error("Trim range ({start}s to {end}s) exceeds audio duration ({duration}s)")]
-    TrimRangeOutOfBounds {
-        start: f64,
-        end: f64,
-        duration: f64,
-    },
+    TrimRangeOutOfBounds { start: f64, end: f64, duration: f64 },
 
     /// Generic I/O error
     #[error("I/O error: {0}")]
@@ -97,6 +93,10 @@ pub enum AudioError {
     /// Model not available and download not permitted
     #[error("Model '{model}' not available")]
     ModelNotAvailable { model: String },
+
+    /// Failed to load model catalog configuration
+    #[error("Model catalog load failed: {0}")]
+    ModelCatalogLoad(String),
 
     /// Tokenization error
     #[error("Tokenization error: {0}")]

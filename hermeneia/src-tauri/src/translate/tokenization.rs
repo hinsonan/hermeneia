@@ -16,7 +16,7 @@ enum TokenizerInner {
 }
 
 impl TranslationTokenizer {
-    /// Load tokenizer from file (for T5/mT5 models)
+    /// Load tokenizer from file (for MADLAD models)
     pub fn from_file(path: &Path, model_type: TranslationModel) -> Result<Self> {
         let mut tokenizer = Tokenizer::from_file(path).map_err(|e| {
             AudioError::TokenizationError(format!("Failed to load tokenizer: {}", e))
@@ -62,15 +62,12 @@ impl TranslationTokenizer {
     ///
     /// For MADLAD: Prepends "<2{target_lang}> {text}" (e.g., "<2de> Hello" for translation to German)
     /// For MarianMT: Direct encoding (no prefix)
-    pub fn encode(&self, text: &str, source_lang: &str, target_lang: &str) -> Result<Vec<u32>> {
+    pub fn encode(&self, text: &str, _source_lang: &str, target_lang: &str) -> Result<Vec<u32>> {
         match &self.inner {
             TokenizerInner::HuggingFace(tokenizer) => {
                 let input = if self.model_type.is_madlad() {
                     // MADLAD models use target language prefix: "<2{lang}> {text}"
                     self.format_madlad_input(text, target_lang)
-                } else if self.model_type.is_t5() {
-                    // T5-family models use task prompts for translation
-                    self.format_t5_input(text, source_lang, target_lang)
                 } else {
                     text.to_string()
                 };
@@ -124,14 +121,6 @@ impl TranslationTokenizer {
         format!("<2{}> {}", target_lang, text)
     }
 
-    /// Format input for T5-family translation models
-    ///
-    /// Example: "translate to German: A beautiful candle."
-    fn format_t5_input(&self, text: &str, source_lang: &str, target_lang: &str) -> String {
-        let _ = source_lang;
-        let target_name = language_name(target_lang);
-        format!("translate to {}: {}", target_name, text)
-    }
     /// Get special token IDs
     pub fn get_bos_token_id(&self) -> Option<u32> {
         match &self.inner {
@@ -166,23 +155,6 @@ impl TranslationTokenizer {
                 Some(0)
             }
         }
-    }
-}
-
-fn language_name(code: &str) -> String {
-    match code.to_lowercase().as_str() {
-        "en" => "English".to_string(),
-        "es" => "Spanish".to_string(),
-        "fr" => "French".to_string(),
-        "de" => "German".to_string(),
-        "pt" => "Portuguese".to_string(),
-        "it" => "Italian".to_string(),
-        "ru" => "Russian".to_string(),
-        "zh" => "Chinese".to_string(),
-        "ja" => "Japanese".to_string(),
-        "ko" => "Korean".to_string(),
-        "ar" => "Arabic".to_string(),
-        _ => code.to_string(),
     }
 }
 
