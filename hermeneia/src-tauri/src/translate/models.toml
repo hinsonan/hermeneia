@@ -1,17 +1,7 @@
-# Translation Models Configuration
-# This file defines all available translation models for the Hermeneia application
-# Models are organized by type: MADLAD (multilingual fallback) and MarianMT (specialized one-to-one)
-
-# =============================================================================
-# MADLAD-400 Multilingual Models (Universal Fallback)
-# =============================================================================
-# These models support 450+ languages but are larger in size
-# Use as fallback when no specialized MarianMT model is available
-
 [[madlad]]
 name = "madlad-3b"
 model_id = "jbochi/madlad400-3b-mt"
-size_mb = 11800  # 11.8 GB
+size_mb = 11800
 languages = 450
 revision = "main"
 description = "MADLAD-400 3B (11.8GB, 450+ languages)"
@@ -19,7 +9,7 @@ description = "MADLAD-400 3B (11.8GB, 450+ languages)"
 [[madlad]]
 name = "madlad-7b"
 model_id = "jbochi/madlad400-7b-mt"
-size_mb = 20000  # ~20 GB estimated
+size_mb = 20000
 languages = 450
 revision = "main"
 description = "MADLAD-400 7B (20GB, 450+ languages)"
@@ -27,20 +17,10 @@ description = "MADLAD-400 7B (20GB, 450+ languages)"
 [[madlad]]
 name = "madlad-10b"
 model_id = "jbochi/madlad400-10b-mt"
-size_mb = 38000  # ~38 GB estimated
+size_mb = 38000
 languages = 450
 revision = "main"
 description = "MADLAD-400 10B (38GB, 450+ languages)"
-
-# =============================================================================
-# MarianMT One-to-One Models (High Quality Specialized)
-# =============================================================================
-# These models are optimized for specific language pairs
-# ~298MB each, significantly better quality than multilingual models
-
-# -----------------------------------------------------------------------------
-# ROMANCE LANGUAGES
-# -----------------------------------------------------------------------------
 
 [[marian]]
 name = "marian-en-es"
@@ -53,6 +33,7 @@ bleu_score = 55.1
 revision = "refs/pr/4"
 description = "MarianMT EN→ES (298MB)"
 notes = "European Spanish"
+has_safetensors = true
 
 [[marian]]
 name = "marian-es-en"
@@ -64,6 +45,7 @@ chrf_score = 0.739
 bleu_score = 59.6
 revision = "refs/pr/4"
 description = "MarianMT ES→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-fr"
@@ -75,6 +57,7 @@ chrf_score = 0.671
 bleu_score = 50.8
 revision = "refs/pr/4"
 description = "MarianMT EN→FR (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-fr-en"
@@ -86,6 +69,7 @@ chrf_score = 0.724
 bleu_score = 57.9
 revision = "refs/pr/4"
 description = "MarianMT FR→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-pt"
@@ -98,6 +82,7 @@ bleu_score = 41.7
 revision = "refs/pr/4"
 description = "MarianMT EN→PT (298MB)"
 notes = "Romance languages group model"
+has_safetensors = false
 
 [[marian]]
 name = "marian-pt-en"
@@ -109,6 +94,7 @@ chrf_score = 0.739
 bleu_score = 59.9
 revision = "refs/pr/4"
 description = "MarianMT PT→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-it"
@@ -118,6 +104,7 @@ target = "it"
 size_mb = 298
 revision = "refs/pr/4"
 description = "MarianMT EN→IT (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-it-en"
@@ -129,10 +116,7 @@ chrf_score = 0.796
 bleu_score = 68.8
 revision = "refs/pr/4"
 description = "MarianMT IT→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# GERMANIC LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-de"
@@ -144,6 +128,7 @@ chrf_score = 0.655
 bleu_score = 45.8
 revision = "refs/pr/4"
 description = "MarianMT EN→DE (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-de-en"
@@ -155,6 +140,7 @@ chrf_score = 0.697
 bleu_score = 53.5
 revision = "refs/pr/4"
 description = "MarianMT DE→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-nl"
@@ -167,6 +153,7 @@ bleu_score = 57.4
 revision = "refs/pr/4"
 description = "MarianMT EN→NL (298MB)"
 speakers_millions = 22
+has_safetensors = false
 
 [[marian]]
 name = "marian-nl-en"
@@ -178,6 +165,7 @@ chrf_score = 0.755
 bleu_score = 61.7
 revision = "refs/pr/4"
 description = "MarianMT NL→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-sv"
@@ -190,6 +178,7 @@ bleu_score = 61.7
 revision = "refs/pr/4"
 description = "MarianMT EN→SV (298MB)"
 speakers_millions = 13
+has_safetensors = false
 
 [[marian]]
 name = "marian-sv-en"
@@ -201,6 +190,7 @@ chrf_score = 0.769
 bleu_score = 65.0
 revision = "refs/pr/4"
 description = "MarianMT SV→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-da"
@@ -213,6 +203,7 @@ bleu_score = 61.7
 revision = "refs/pr/4"
 description = "MarianMT EN→DA (298MB)"
 speakers_millions = 6
+has_safetensors = false
 
 [[marian]]
 name = "marian-da-en"
@@ -224,6 +215,7 @@ chrf_score = 0.777
 bleu_score = 64.7
 revision = "refs/pr/4"
 description = "MarianMT DA→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-no"
@@ -234,6 +226,7 @@ size_mb = 298
 revision = "refs/pr/4"
 description = "MarianMT EN→NO (298MB)"
 speakers_millions = 5
+has_safetensors = false
 
 [[marian]]
 name = "marian-no-en"
@@ -245,10 +238,7 @@ chrf_score = 0.715
 bleu_score = 57.2
 revision = "refs/pr/4"
 description = "MarianMT NO→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# SLAVIC LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-ru"
@@ -258,6 +248,7 @@ target = "ru"
 size_mb = 298
 revision = "refs/pr/4"
 description = "MarianMT EN→RU (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-ru-en"
@@ -269,6 +260,7 @@ chrf_score = 0.716
 bleu_score = 57.8
 revision = "refs/pr/4"
 description = "MarianMT RU→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-pl"
@@ -281,6 +273,7 @@ bleu_score = 47.5
 revision = "refs/pr/4"
 description = "MarianMT EN→PL (298MB)"
 speakers_millions = 45
+has_safetensors = false
 
 [[marian]]
 name = "marian-pl-en"
@@ -292,6 +285,7 @@ chrf_score = 0.692
 bleu_score = 53.5
 revision = "refs/pr/4"
 description = "MarianMT PL→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-cs"
@@ -304,6 +298,7 @@ bleu_score = 47.8
 revision = "refs/pr/4"
 description = "MarianMT EN→CS (298MB)"
 speakers_millions = 13
+has_safetensors = false
 
 [[marian]]
 name = "marian-cs-en"
@@ -315,6 +310,7 @@ chrf_score = 0.719
 bleu_score = 56.9
 revision = "refs/pr/4"
 description = "MarianMT CS→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-uk"
@@ -328,6 +324,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→UK (298MB)"
 speakers_millions = 40
 notes = "Ukrainian"
+has_safetensors = false
 
 [[marian]]
 name = "marian-uk-en"
@@ -339,10 +336,7 @@ chrf_score = 0.67
 bleu_score = 51.7
 revision = "refs/pr/4"
 description = "MarianMT UK→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# EAST ASIAN LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-zh"
@@ -354,6 +348,7 @@ chrf_score = 0.268
 bleu_score = 31.4
 revision = "refs/pr/4"
 description = "MarianMT EN→ZH (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-zh-en"
@@ -365,6 +360,7 @@ chrf_score = 0.548
 bleu_score = 36.1
 revision = "refs/pr/4"
 description = "MarianMT ZH→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-ja"
@@ -376,6 +372,7 @@ chrf_score = 0.266
 bleu_score = 15.7
 revision = "refs/pr/4"
 description = "MarianMT EN→JA (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-ja-en"
@@ -387,6 +384,7 @@ chrf_score = 0.502
 bleu_score = 30.1
 revision = "refs/pr/4"
 description = "MarianMT JA→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-ko"
@@ -396,6 +394,7 @@ target = "ko"
 size_mb = 298
 revision = "refs/pr/4"
 description = "MarianMT EN→KO (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-ko-en"
@@ -407,10 +406,7 @@ chrf_score = 0.588
 bleu_score = 41.3
 revision = "refs/pr/4"
 description = "MarianMT KO→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# EAST ASIAN LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-vi"
@@ -423,6 +419,7 @@ bleu_score = 37.2
 revision = "refs/pr/4"
 description = "MarianMT EN→VI (298MB)"
 speakers_millions = 85
+has_safetensors = false
 
 [[marian]]
 name = "marian-vi-en"
@@ -434,6 +431,7 @@ chrf_score = 0.608
 bleu_score = 42.8
 revision = "refs/pr/4"
 description = "MarianMT VI→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-th"
@@ -444,6 +442,7 @@ size_mb = 298
 revision = "refs/pr/4"
 description = "MarianMT EN→TH (298MB)"
 speakers_millions = 60
+has_safetensors = false
 
 [[marian]]
 name = "marian-th-en"
@@ -455,6 +454,7 @@ chrf_score = 0.644
 bleu_score = 48.1
 revision = "refs/pr/4"
 description = "MarianMT TH→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-id"
@@ -466,6 +466,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→ID (298MB)"
 speakers_millions = 200
 notes = "Indonesian"
+has_safetensors = false
 
 [[marian]]
 name = "marian-id-en"
@@ -477,10 +478,7 @@ chrf_score = 0.643
 bleu_score = 47.1
 revision = "refs/pr/4"
 description = "MarianMT ID→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# MIDDLE EASTERN LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-ar"
@@ -492,6 +490,7 @@ chrf_score = 0.44
 bleu_score = 14.4
 revision = "refs/pr/4"
 description = "MarianMT EN→AR (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-ar-en"
@@ -503,6 +502,7 @@ chrf_score = 0.617
 bleu_score = 44.9
 revision = "refs/pr/4"
 description = "MarianMT AR→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-he"
@@ -516,6 +516,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→HE (298MB)"
 speakers_millions = 9
 notes = "Hebrew"
+has_safetensors = false
 
 [[marian]]
 name = "marian-he-en"
@@ -528,6 +529,7 @@ bleu_score = 53.8
 revision = "main"
 description = "MarianMT HE→EN (298MB)"
 notes = "TC-Big variant"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-fa"
@@ -541,6 +543,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→FA (298MB)"
 speakers_millions = 110
 notes = "Persian/Farsi"
+has_safetensors = false
 
 [[marian]]
 name = "marian-fa-en"
@@ -552,6 +555,7 @@ chrf_score = 0.566
 bleu_score = 38.2
 revision = "refs/pr/4"
 description = "MarianMT FA→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-tr"
@@ -563,6 +567,7 @@ revision = "main"
 description = "MarianMT EN→TR (298MB)"
 speakers_millions = 88
 notes = "Turkish, TC-Big variant"
+has_safetensors = false
 
 [[marian]]
 name = "marian-tr-en"
@@ -574,10 +579,7 @@ chrf_score = 0.725
 bleu_score = 58.4
 revision = "refs/pr/4"
 description = "MarianMT TR→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# SOUTH ASIAN LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-hi"
@@ -591,6 +593,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→HI (298MB)"
 speakers_millions = 600
 notes = "Hindi"
+has_safetensors = false
 
 [[marian]]
 name = "marian-hi-en"
@@ -602,6 +605,7 @@ chrf_score = 0.569
 bleu_score = 39.0
 revision = "refs/pr/4"
 description = "MarianMT HI→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-bn"
@@ -615,6 +619,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→BN (298MB)"
 speakers_millions = 265
 notes = "Bengali"
+has_safetensors = false
 
 [[marian]]
 name = "marian-bn-en"
@@ -626,6 +631,7 @@ chrf_score = 0.641
 bleu_score = 49.7
 revision = "refs/pr/4"
 description = "MarianMT BN→EN (298MB)"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-ur"
@@ -639,6 +645,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→UR (298MB)"
 speakers_millions = 230
 notes = "Urdu"
+has_safetensors = false
 
 [[marian]]
 name = "marian-ur-en"
@@ -650,10 +657,7 @@ chrf_score = 0.435
 bleu_score = 23.2
 revision = "refs/pr/4"
 description = "MarianMT UR→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# OTHER EUROPEAN LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-ro"
@@ -667,6 +671,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→RO (298MB)"
 speakers_millions = 26
 notes = "Romanian"
+has_safetensors = false
 
 [[marian]]
 name = "marian-ro-en"
@@ -678,6 +683,7 @@ chrf_score = 0.733
 bleu_score = 59.3
 revision = "refs/pr/4"
 description = "MarianMT RO→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-hu"
@@ -691,6 +697,7 @@ revision = "main"
 description = "MarianMT EN→HU (298MB)"
 speakers_millions = 13
 notes = "Hungarian, TC-Big variant"
+has_safetensors = true
 
 [[marian]]
 name = "marian-hu-en"
@@ -702,6 +709,7 @@ chrf_score = 0.675
 bleu_score = 51.4
 revision = "refs/pr/4"
 description = "MarianMT HU→EN (298MB)"
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-fi"
@@ -715,6 +723,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→FI (298MB)"
 speakers_millions = 6
 notes = "Finnish"
+has_safetensors = false
 
 [[marian]]
 name = "marian-fi-en"
@@ -725,6 +734,7 @@ size_mb = 298
 revision = "main"
 description = "MarianMT FI→EN (298MB)"
 notes = "TC-Big variant"
+has_safetensors = true
 
 [[marian]]
 name = "marian-en-el"
@@ -736,6 +746,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→EL (298MB)"
 speakers_millions = 13
 notes = "Greek"
+has_safetensors = false
 
 [[marian]]
 name = "marian-el-en"
@@ -747,10 +758,7 @@ chrf_score = 0.801
 bleu_score = 69.2
 revision = "refs/pr/4"
 description = "MarianMT EL→EN (298MB)"
-
-# -----------------------------------------------------------------------------
-# AFRICAN LANGUAGES
-# -----------------------------------------------------------------------------
+has_safetensors = false
 
 [[marian]]
 name = "marian-en-sw"
@@ -764,6 +772,7 @@ revision = "refs/pr/4"
 description = "MarianMT EN→SW (298MB)"
 speakers_millions = 200
 notes = "Swahili"
+has_safetensors = false
 
 [[marian]]
 name = "marian-sw-en"
@@ -775,3 +784,5 @@ chrf_score = 0.58
 bleu_score = 43.5
 revision = "refs/pr/4"
 description = "MarianMT SW→EN (298MB)"
+has_safetensors = false
+
