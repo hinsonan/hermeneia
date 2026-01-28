@@ -30,21 +30,6 @@ export interface LanguageOption {
 
 // Marian-supported languages (subset that has Marian models)
 // All pairs involve English as either source or target
-export const MARIAN_LANGUAGES: LanguageOption[] = [
-  { code: 'en', name: 'English' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'fr', name: 'French' },
-  { code: 'de', name: 'German' },
-  { code: 'nl', name: 'Dutch' },
-  { code: 'sv', name: 'Swedish' },
-  { code: 'ru', name: 'Russian' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'he', name: 'Hebrew' },
-  { code: 'bn', name: 'Bengali' },
-  { code: 'hu', name: 'Hungarian' },
-  { code: 'fi', name: 'Finnish' },
-];
-
 export const MADLAD_LANGUAGES: LanguageOption[] = [
   { code: 'en', name: 'English' },
   { code: 'es', name: 'Spanish' },

@@ -12,7 +12,7 @@ import type {
   TranslationProgress,
   TextTranslationResult,
 } from "../types/translation";
-import { MARIAN_LANGUAGES, MADLAD_LANGUAGES, getLanguageName } from "../types/translation";
+import { MADLAD_LANGUAGES, getLanguageName } from "../types/translation";
 import "./Translation.css";
 
 const Translation: Component = () => {
@@ -27,7 +27,6 @@ const Translation: Component = () => {
   // Language settings
   const [sourceLang, setSourceLang] = createSignal<string>("en");
   const [targetLang, setTargetLang] = createSignal<string>("es");
-  const [allowMadlad, setAllowMadlad] = createSignal(false);
 
   // Processing state
   const [isTranslating, setIsTranslating] = createSignal(false);
@@ -36,25 +35,23 @@ const Translation: Component = () => {
   const [translationProgress, setTranslationProgress] = createSignal<TranslationProgress | null>(null);
 
   // Pair validation
-  const [pairSupported, setPairSupported] = createSignal(true);
   const [marianSupported, setMarianSupported] = createSignal(true);
+  const isValidPair = createMemo(() => sourceLang() !== targetLang());
 
   // Track unlisten function for cleanup
   let progressUnlisten: UnlistenFn | null = null;
 
-  const activeLanguages = createMemo(() => (allowMadlad() ? MADLAD_LANGUAGES : MARIAN_LANGUAGES));
-
   // Filter target languages - must be different from source
   const availableTargetLanguages = createMemo(() => {
-    return activeLanguages().filter(lang => lang.code !== sourceLang());
+    return MADLAD_LANGUAGES.filter(lang => lang.code !== sourceLang());
   });
 
   // Filter source languages - must be different from target
   const availableSourceLanguages = createMemo(() => {
-    return activeLanguages().filter(lang => lang.code !== targetLang());
+    return MADLAD_LANGUAGES.filter(lang => lang.code !== targetLang());
   });
 
-  // Check if the selected pair is supported
+  // Check if the selected pair has high-quality support
   createEffect(async () => {
     const src = sourceLang();
     const tgt = targetLang();
@@ -65,26 +62,19 @@ const Translation: Component = () => {
           targetLang: tgt,
         });
         setMarianSupported(supported);
-        setPairSupported(allowMadlad() || supported);
       } catch {
         setMarianSupported(false);
-        setPairSupported(false);
       }
     }
     if (src && tgt && src === tgt) {
       setMarianSupported(false);
-      setPairSupported(false);
     }
   });
 
   // Auto-select a valid target if source changes to same as target
   createEffect(() => {
-    const list = activeLanguages();
-    if (!list.find(lang => lang.code === sourceLang())) {
-      setSourceLang(list[0]?.code ?? "en");
-    }
-    if (!list.find(lang => lang.code === targetLang()) || sourceLang() === targetLang()) {
-      const available = list.filter(l => l.code !== sourceLang());
+    if (sourceLang() === targetLang()) {
+      const available = MADLAD_LANGUAGES.filter(l => l.code !== sourceLang());
       if (available.length > 0) {
         setTargetLang(available[0].code);
       }
@@ -109,21 +99,16 @@ const Translation: Component = () => {
     setError(null);
   };
 
-  // Get model display name based on language pair
-  const getModelName = createMemo(() => {
-    const src = sourceLang();
-    const tgt = targetLang();
-    if (allowMadlad() && !marianSupported()) {
-      return "MADLAD-400 3B (multilingual)";
-    }
-    return `MarianMT ${src.toUpperCase()}-${tgt.toUpperCase()}`;
+  // Get quality label based on language pair
+  const getQualityLabel = createMemo(() => {
+    return marianSupported() ? "High" : "Standard";
   });
 
   // Start translation
   const handleTranslate = async () => {
     if (!filePath()) return;
-    if (!pairSupported()) {
-      setError(`No Marian model available for ${getLanguageName(sourceLang())} to ${getLanguageName(targetLang())}. Enable MADLAD to translate unsupported pairs.`);
+    if (!isValidPair()) {
+      setError("Source and target languages must be different.");
       return;
     }
 
@@ -145,7 +130,7 @@ const Translation: Component = () => {
         filePath: filePath(),
         sourceLang: sourceLang(),
         targetLang: targetLang(),
-        allowMadlad: allowMadlad(),
+        allowMadlad: true,
       });
 
       setResult(translationResult);
@@ -331,36 +316,12 @@ const Translation: Component = () => {
                   </div>
                 </div>
 
-                <div class="setting-group">
-                  <label class="label-with-info" for="madlad-toggle">
-                    Allow MADLAD fallback
-                    <InfoIcon
-                      content="Enable multilingual MADLAD when a safetensors Marian pair isn't available. This supports more languages but may reduce quality."
-                      position="right"
-                    />
-                  </label>
-                  <label class="toggle">
-                    <input
-                      id="madlad-toggle"
-                      type="checkbox"
-                      checked={allowMadlad()}
-                      onChange={(e) => setAllowMadlad(e.currentTarget.checked)}
-                    />
-                    <span class="toggle-track">
-                      <span class="toggle-thumb" />
-                    </span>
-                    <span class="toggle-label">
-                      {allowMadlad() ? "MADLAD enabled" : "Marian only"}
-                    </span>
-                  </label>
-                </div>
-
                 {/* Target Language Selection */}
                 <div class="setting-group">
                   <label for="target-lang-select" class="label-with-info">
                     Target Language
                     <InfoIcon
-                      content="The language to translate into. Marian models support high-quality translations to and from English."
+                      content="The language you want to translate into."
                       position="right"
                     />
                   </label>
@@ -386,13 +347,10 @@ const Translation: Component = () => {
 
                 {/* Model info display */}
                 <div class="model-info">
-                  <span class="model-label">Model:</span>
-                  <span class="model-name">{getModelName()}</span>
-                  <Show when={!marianSupported() && allowMadlad()}>
-                    <span class="model-note">(MADLAD fallback)</span>
-                  </Show>
-                  <Show when={!pairSupported() && !allowMadlad()}>
-                    <span class="model-warning">(Only safetensors Marian pairs are available)</span>
+                  <span class="model-label">Quality:</span>
+                  <span class="model-name">{getQualityLabel()}</span>
+                  <Show when={!marianSupported()}>
+                    <span class="model-note">(More languages supported)</span>
                   </Show>
                 </div>
 
@@ -412,8 +370,8 @@ const Translation: Component = () => {
                 <button
                   class="start-btn"
                   onClick={handleTranslate}
-                  disabled={!pairSupported()}
-                  title={!pairSupported() ? 'Enable MADLAD to translate this pair' : ''}
+                  disabled={!isValidPair()}
+                  title={!isValidPair() ? 'Source and target must be different' : ''}
                 >
                   <svg viewBox="0 0 24 24" width="20" height="20">
                     <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/>
@@ -439,7 +397,7 @@ const Translation: Component = () => {
 
                 <div class="processing-details">
                   <span>File: {fileName()}</span>
-                  <span>Model: {getModelName()}</span>
+                  <span>Quality: {getQualityLabel()}</span>
                 </div>
               </section>
             </Show>
