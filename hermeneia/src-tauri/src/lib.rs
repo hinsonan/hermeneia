@@ -246,6 +246,7 @@ async fn translate_text_file(
     file_path: String,
     source_lang: String,
     target_lang: String,
+    allow_madlad: bool,
 ) -> std::result::Result<TextTranslationResult, String> {
     use tauri::Emitter;
 
@@ -267,12 +268,12 @@ async fn translate_text_file(
             "message": "Loading translation model..."
         }));
 
-        // Set up translation parameters (Marian-only, auto-select based on pair)
+        // Set up translation parameters
         let params = translate::TranslateParams {
             source_language: source_lang.clone(),
             target_language: target_lang.clone(),
-            preferred_model: None, // Auto-select Marian model for the pair
-            fallback_enabled: false, // Marian only, no MADLAD fallback
+            preferred_model: None,
+            fallback_enabled: allow_madlad,
             force_cpu: false,
             use_quantized: false,
             max_length: Some(512),
@@ -342,45 +343,6 @@ async fn translate_text_file(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-/// Get supported Marian language pairs for the UI
-#[tauri::command]
-fn get_marian_language_pairs() -> Vec<(String, String, String)> {
-    // Returns (source_code, target_code, display_name)
-    vec![
-        // Common pairs (English as source)
-        ("en".to_string(), "es".to_string(), "English to Spanish".to_string()),
-        ("en".to_string(), "fr".to_string(), "English to French".to_string()),
-        ("en".to_string(), "de".to_string(), "English to German".to_string()),
-        ("en".to_string(), "pt".to_string(), "English to Portuguese".to_string()),
-        ("en".to_string(), "it".to_string(), "English to Italian".to_string()),
-        ("en".to_string(), "ru".to_string(), "English to Russian".to_string()),
-        ("en".to_string(), "zh".to_string(), "English to Chinese".to_string()),
-        ("en".to_string(), "ja".to_string(), "English to Japanese".to_string()),
-        ("en".to_string(), "ko".to_string(), "English to Korean".to_string()),
-        ("en".to_string(), "ar".to_string(), "English to Arabic".to_string()),
-        ("en".to_string(), "nl".to_string(), "English to Dutch".to_string()),
-        ("en".to_string(), "pl".to_string(), "English to Polish".to_string()),
-        ("en".to_string(), "tr".to_string(), "English to Turkish".to_string()),
-        ("en".to_string(), "vi".to_string(), "English to Vietnamese".to_string()),
-        ("en".to_string(), "th".to_string(), "English to Thai".to_string()),
-        ("en".to_string(), "id".to_string(), "English to Indonesian".to_string()),
-        ("en".to_string(), "hi".to_string(), "English to Hindi".to_string()),
-        ("en".to_string(), "he".to_string(), "English to Hebrew".to_string()),
-        ("en".to_string(), "el".to_string(), "English to Greek".to_string()),
-        ("en".to_string(), "sv".to_string(), "English to Swedish".to_string()),
-        // Reverse pairs (to English)
-        ("es".to_string(), "en".to_string(), "Spanish to English".to_string()),
-        ("fr".to_string(), "en".to_string(), "French to English".to_string()),
-        ("de".to_string(), "en".to_string(), "German to English".to_string()),
-        ("pt".to_string(), "en".to_string(), "Portuguese to English".to_string()),
-        ("it".to_string(), "en".to_string(), "Italian to English".to_string()),
-        ("ru".to_string(), "en".to_string(), "Russian to English".to_string()),
-        ("zh".to_string(), "en".to_string(), "Chinese to English".to_string()),
-        ("ja".to_string(), "en".to_string(), "Japanese to English".to_string()),
-        ("ko".to_string(), "en".to_string(), "Korean to English".to_string()),
-        ("ar".to_string(), "en".to_string(), "Arabic to English".to_string()),
-    ]
-}
 
 /// Check if a Marian model exists for the given language pair
 #[tauri::command]
@@ -484,7 +446,6 @@ pub fn run() {
             get_system_capabilities,
             validate_model_selection,
             translate_text_file,
-            get_marian_language_pairs,
             check_marian_pair_supported,
             play_audio,
             pause_audio,

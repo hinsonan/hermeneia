@@ -180,12 +180,72 @@
   padding: 1.5rem;
 }
 
+.settings-panel .setting-group:first-of-type {
+  margin-bottom: 1.5rem;
+}
+
 .setting-group {
   margin-bottom: 1.25rem;
 }
 
 .setting-group:last-of-type {
   margin-bottom: 1.5rem;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-family: 'Crimson Text', serif;
+  color: var(--ink-dark);
+  cursor: pointer;
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-track {
+  width: 46px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(139, 69, 69, 0.2);
+  border: 2px solid var(--border-ornament);
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.toggle-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--parchment);
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+.toggle input:checked + .toggle-track {
+  background: rgba(184, 134, 11, 0.2);
+  border-color: var(--gold-accent);
+}
+
+.toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(20px);
+  background: var(--gold-accent);
+}
+
+.toggle input:focus + .toggle-track {
+  box-shadow: 0 0 0 3px rgba(184, 134, 11, 0.15);
+}
+
+.toggle-label {
+  font-size: 0.95rem;
+  color: var(--ink-medium);
 }
 
 .setting-group > label {
@@ -281,6 +341,13 @@
 
 .model-warning {
   color: #c62828;
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.model-note {
+  color: var(--ink-medium);
   font-family: 'Crimson Text', serif;
   font-size: 0.85rem;
   font-style: italic;

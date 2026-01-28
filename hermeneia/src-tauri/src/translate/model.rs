@@ -77,6 +77,12 @@ impl ModelManager {
             return Ok(marian);
         }
 
+        if !params.fallback_enabled {
+            return Err(AudioError::ModelNotAvailable {
+                model: "MarianMT".to_string(),
+            });
+        }
+
         // 3. Fall back to MADLAD-400 3B (multilingual, supports 450+ languages)
         tracing::info!(
             "No specialized MarianMT model for {} -> {}, falling back to MADLAD-400 3B",

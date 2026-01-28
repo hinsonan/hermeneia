@@ -35,6 +35,21 @@ export const MARIAN_LANGUAGES: LanguageOption[] = [
   { code: 'es', name: 'Spanish' },
   { code: 'fr', name: 'French' },
   { code: 'de', name: 'German' },
+  { code: 'nl', name: 'Dutch' },
+  { code: 'sv', name: 'Swedish' },
+  { code: 'ru', name: 'Russian' },
+  { code: 'ar', name: 'Arabic' },
+  { code: 'he', name: 'Hebrew' },
+  { code: 'bn', name: 'Bengali' },
+  { code: 'hu', name: 'Hungarian' },
+  { code: 'fi', name: 'Finnish' },
+];
+
+export const MADLAD_LANGUAGES: LanguageOption[] = [
+  { code: 'en', name: 'English' },
+  { code: 'es', name: 'Spanish' },
+  { code: 'fr', name: 'French' },
+  { code: 'de', name: 'German' },
   { code: 'pt', name: 'Portuguese' },
   { code: 'it', name: 'Italian' },
   { code: 'ru', name: 'Russian' },
@@ -67,6 +82,6 @@ export const MARIAN_LANGUAGES: LanguageOption[] = [
 
 // Get language name from code
 export function getLanguageName(code: string): string {
-  const lang = MARIAN_LANGUAGES.find(l => l.code === code);
+  const lang = MADLAD_LANGUAGES.find(l => l.code === code);
   return lang ? lang.name : code.toUpperCase();
 }

@@ -1,7 +1,32 @@
 use crate::translate::types::TranslationModel;
 
+use crate::translate::catalog::{load_model_catalog, ModelFamily};
+use tracing::warn;
+
+/// Check if a Marian model with safetensors exists for a specific language pair
+pub fn is_safetensors_marian_pair(source: &str, target: &str) -> bool {
+    let catalog = match load_model_catalog() {
+        Ok(models) => models,
+        Err(err) => {
+            warn!(error = %err, "Failed to load model catalog");
+            return false;
+        }
+    };
+
+    catalog.iter().any(|model| {
+        model.family == ModelFamily::Marian
+            && model.has_safetensors
+            && model.source.as_deref() == Some(source)
+            && model.target.as_deref() == Some(target)
+    })
+}
+
 /// Get the best MarianMT model for a specific language pair, if available
 pub fn get_marian_for_pair(source: &str, target: &str) -> Option<TranslationModel> {
+    if !is_safetensors_marian_pair(source, target) {
+        return None;
+    }
+
     match (source, target) {
         // Romance Languages
         ("en", "es") => Some(TranslationModel::MarianEnEs),
@@ -88,49 +113,20 @@ pub fn get_marian_for_pair(source: &str, target: &str) -> Option<TranslationMode
     }
 }
 
-/// Common language codes and their names
+/// Common language codes and their names (safetensors Marian support)
 pub const SUPPORTED_LANGUAGES: &[(&str, &str)] = &[
-    // European languages
     ("en", "English"),
     ("es", "Spanish"),
     ("fr", "French"),
     ("de", "German"),
-    ("it", "Italian"),
-    ("pt", "Portuguese"),
     ("nl", "Dutch"),
-    ("pl", "Polish"),
-    ("ru", "Russian"),
-    ("cs", "Czech"),
     ("sv", "Swedish"),
-    ("fi", "Finnish"),
-    ("da", "Danish"),
-    ("no", "Norwegian"),
-    ("ro", "Romanian"),
-    ("el", "Greek"),
-    ("hu", "Hungarian"),
-    ("tr", "Turkish"),
-    // Asian languages
-    ("zh", "Chinese"),
-    ("ja", "Japanese"),
-    ("ko", "Korean"),
-    ("hi", "Hindi"),
-    ("bn", "Bengali"),
-    ("ta", "Tamil"),
-    ("te", "Telugu"),
-    ("th", "Thai"),
-    ("vi", "Vietnamese"),
-    ("id", "Indonesian"),
-    ("ms", "Malay"),
-    // Middle Eastern languages
+    ("ru", "Russian"),
     ("ar", "Arabic"),
     ("he", "Hebrew"),
-    ("fa", "Persian"),
-    ("ur", "Urdu"),
-    // African languages
-    ("sw", "Swahili"),
-    ("yo", "Yoruba"),
-    ("ha", "Hausa"),
-    ("zu", "Zulu"),
+    ("bn", "Bengali"),
+    ("hu", "Hungarian"),
+    ("fi", "Finnish"),
 ];
 
 /// Validate that a language code is recognized
@@ -163,17 +159,16 @@ mod tests {
             Some(TranslationModel::MarianFrEn)
         );
         assert_eq!(
-            get_marian_for_pair("en", "nl"),
-            Some(TranslationModel::MarianEnNl)
-        );
-        assert_eq!(
             get_marian_for_pair("sv", "en"),
             Some(TranslationModel::MarianSvEn)
         );
+        assert_eq!(get_marian_for_pair("en", "fr"), None);
         assert_eq!(
-            get_marian_for_pair("en", "sw"),
-            Some(TranslationModel::MarianEnSw)
+            get_marian_for_pair("nl", "en"),
+            Some(TranslationModel::MarianNlEn)
         );
+        assert_eq!(get_marian_for_pair("en", "nl"), None);
+        assert_eq!(get_marian_for_pair("en", "sw"), None);
         assert_eq!(get_marian_for_pair("en", "en"), None);
         assert_eq!(get_marian_for_pair("es", "fr"), None); // No direct ES->FR model
     }
@@ -183,15 +178,19 @@ mod tests {
         // Ensure we have both directions for major pairs
         assert!(get_marian_for_pair("en", "es").is_some());
         assert!(get_marian_for_pair("es", "en").is_some());
-        assert!(get_marian_for_pair("en", "fr").is_some());
-        assert!(get_marian_for_pair("fr", "en").is_some());
+        assert!(get_marian_for_pair("en", "de").is_some());
+        assert!(get_marian_for_pair("de", "en").is_some());
+        assert!(get_marian_for_pair("en", "ru").is_some());
+        assert!(get_marian_for_pair("ru", "en").is_some());
+        assert!(get_marian_for_pair("en", "ar").is_some());
+        assert!(get_marian_for_pair("ar", "en").is_some());
     }
 
     #[test]
     fn test_language_validation() {
         assert!(is_valid_language_code("en"));
         assert!(is_valid_language_code("es"));
-        assert!(is_valid_language_code("zh"));
+        assert!(is_valid_language_code("de"));
         assert!(!is_valid_language_code("xx"));
         assert!(!is_valid_language_code(""));
     }
@@ -200,7 +199,7 @@ mod tests {
     fn test_language_names() {
         assert_eq!(get_language_name("en"), Some("English"));
         assert_eq!(get_language_name("es"), Some("Spanish"));
-        assert_eq!(get_language_name("zh"), Some("Chinese"));
+        assert_eq!(get_language_name("de"), Some("German"));
         assert_eq!(get_language_name("xx"), None);
     }
 }
