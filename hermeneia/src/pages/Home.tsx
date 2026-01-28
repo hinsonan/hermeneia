@@ -5,13 +5,15 @@ import './Home.css';
 
 const Home: Component = () => {
   const navigate = useNavigate();
-  const { theme, toggleTheme } = useTheme();
+  const { toggleTheme } = useTheme();
 
   const navigateTo = (page: string) => {
     if (page === 'audio') {
       navigate('/audio-editor');
     } else if (page === 'transcribe') {
       navigate('/transcription');
+    } else if (page === 'translate') {
+      navigate('/translation');
     }
   };
 

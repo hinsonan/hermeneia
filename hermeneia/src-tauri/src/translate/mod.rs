@@ -9,11 +9,15 @@ pub mod inference;
 pub mod language;
 pub mod logits_processor;
 pub mod model;
+pub mod subtitle;
 pub mod tokenization;
 pub mod types;
 
 // Re-export commonly used types
 pub use types::{TranslateParams, TranslationModel, TranslationResult};
+
+// Re-export subtitle types
+pub use subtitle::{SubtitleFile, SubtitleSegment};
 
 // Re-export main API functions
 pub use inference::{translate_text, translate_text_with_progress};
