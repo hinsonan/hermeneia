@@ -170,3 +170,77 @@ impl std::fmt::Display for SubtitleParseError {
 }
 
 impl std::error::Error for SubtitleParseError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_and_render_roundtrip() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\nHello world\n\n2\n00:00:03,500 --> 00:00:05,500\nHow are you today?\n\n3\n00:00:06,000 --> 00:00:08,000\nThis is a test\n";
+
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        assert_eq!(srt_file.len(), 3);
+        assert_eq!(srt_file.segments[0].index, 1);
+        assert_eq!(srt_file.segments[0].text, "Hello world");
+        assert_eq!(srt_file.segments[1].index, 2);
+        assert_eq!(srt_file.segments[1].text, "How are you today?");
+        assert_eq!(srt_file.segments[2].index, 3);
+        assert_eq!(srt_file.segments[2].text, "This is a test");
+    }
+
+    #[test]
+    fn test_get_texts_preserves_order() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\nFirst\n\n2\n00:00:03,500 --> 00:00:05,500\nSecond\n\n3\n00:00:06,000 --> 00:00:08,000\nThird\n";
+
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+        let texts = srt_file.get_texts();
+
+        assert_eq!(texts.len(), 3);
+        assert_eq!(texts[0], "First");
+        assert_eq!(texts[1], "Second");
+        assert_eq!(texts[2], "Third");
+    }
+
+    #[test]
+    fn test_with_translated_text_preserves_timestamps() {
+        let srt_content =
+            "1\n00:00:01,000 --> 00:00:03,000\nHello\n\n2\n00:00:03,500 --> 00:00:05,500\nWorld\n";
+
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+        let translated = vec!["Hola".to_string(), "Mundo".to_string()];
+        let new_srt = srt_file.with_translated_text(translated);
+
+        assert_eq!(new_srt.segments[0].start, "00:00:01,000");
+        assert_eq!(new_srt.segments[0].end, "00:00:03,000");
+        assert_eq!(new_srt.segments[0].text, "Hola");
+
+        assert_eq!(new_srt.segments[1].start, "00:00:03,500");
+        assert_eq!(new_srt.segments[1].end, "00:00:05,500");
+        assert_eq!(new_srt.segments[1].text, "Mundo");
+    }
+
+    #[test]
+    fn test_render_format() {
+        let srt_content =
+            "1\n00:00:01,000 --> 00:00:03,000\nHello\n\n2\n00:00:03,500 --> 00:00:05,500\nWorld\n";
+
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+        let rendered = srt_file.render();
+
+        // Check that rendered output contains proper format
+        assert!(rendered.contains("1\n00:00:01,000 --> 00:00:03,000\nHello"));
+        assert!(rendered.contains("2\n00:00:03,500 --> 00:00:05,500\nWorld"));
+    }
+
+    #[test]
+    fn test_multiline_text() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\nLine one\nLine two\n\n2\n00:00:03,500 --> 00:00:05,500\nSingle line\n";
+
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        assert_eq!(srt_file.segments[0].text, "Line one\nLine two");
+        assert_eq!(srt_file.segments[1].text, "Single line");
+    }
+}

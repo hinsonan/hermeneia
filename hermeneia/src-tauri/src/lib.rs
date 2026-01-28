@@ -289,30 +289,27 @@ async fn translate_text_file(
             let total_segments = srt_file.len();
             let texts = srt_file.get_texts();
 
-            // Translate each segment
-            let mut translated_texts = Vec::with_capacity(texts.len());
-            let mut model_name = String::new();
-
-            for (i, text) in texts.iter().enumerate() {
-                // Emit progress
-                let _ = app_handle.emit("translation-progress", serde_json::json!({
+            // Create progress callback that emits Tauri events
+            let app_handle_clone = app_handle.clone();
+            let progress_callback: translate::BatchProgressCallback = Box::new(move |current, total, _text| {
+                let _ = app_handle_clone.emit("translation-progress", serde_json::json!({
                     "phase": "translating",
-                    "current": i + 1,
-                    "total": total_segments,
-                    "message": format!("Translating segment {} of {}", i + 1, total_segments)
+                    "current": current,
+                    "total": total,
+                    "message": format!("Translating segment {} of {}", current, total)
                 }));
+            });
 
-                // Translate this segment
-                let result = translate::translate_text(text, params.clone())
-                    .map_err(|e| format!("Translation failed at segment {}: {}", i + 1, e))?;
-
-                translated_texts.push(result.translated_text);
-                model_name = result.model_used.display_name().to_string();
-            }
+            // Translate all segments with single model load
+            let (translated_texts, model_used, _inference_time) = translate::translate_texts_batch(
+                &texts,
+                params,
+                Some(progress_callback),
+            ).map_err(|e| format!("Translation failed: {}", e))?;
 
             // Reassemble SRT with translated text
             let translated_srt = srt_file.with_translated_text(translated_texts);
-            (translated_srt.render(), model_name, total_segments)
+            (translated_srt.render(), model_used.display_name().to_string(), total_segments)
         } else {
             // Plain text file - translate as a single block
             let _ = app_handle.emit("translation-progress", serde_json::json!({

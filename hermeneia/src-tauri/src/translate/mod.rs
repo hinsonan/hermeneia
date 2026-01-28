@@ -20,4 +20,7 @@ pub use types::{TranslateParams, TranslationModel, TranslationResult};
 pub use subtitle::{SubtitleFile, SubtitleSegment};
 
 // Re-export main API functions
-pub use inference::{translate_text, translate_text_with_progress};
+pub use inference::{
+    translate_text, translate_text_with_progress, translate_texts_batch, BatchProgressCallback,
+    Translator,
+};

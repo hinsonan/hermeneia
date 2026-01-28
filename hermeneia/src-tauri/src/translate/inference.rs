@@ -10,6 +10,9 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::{marian, t5};
 use std::time::Instant;
 
+/// Callback for batch translation progress: (current_segment, total_segments, segment_text)
+pub type BatchProgressCallback = Box<dyn Fn(usize, usize, &str) + Send + Sync>;
+
 /// Enum to handle different model architectures
 enum TranslationModelType {
     /// T5-based models (MADLAD-400 uses T5 architecture)
@@ -354,6 +357,169 @@ fn generate_translation(
             Ok((output_ids, decoder_start_token_id))
         }
     }
+}
+
+// ============================================================================
+// Translator struct for batch translation (model loaded once)
+// ============================================================================
+
+/// A translator that holds a loaded model for efficient batch translation
+///
+/// This avoids reloading the model for each text segment, which is essential
+/// for translating SRT files with many segments.
+pub struct Translator {
+    tokenizer: TranslationTokenizer,
+    model: TranslationModelType,
+    device: Device,
+    selected_model: TranslationModel,
+    params: TranslateParams,
+}
+
+impl Translator {
+    /// Create a new translator by loading the model for the given parameters
+    pub fn new(params: TranslateParams) -> Result<Self> {
+        tracing::info!(
+            "Initializing translator: {} -> {}",
+            params.source_language,
+            params.target_language
+        );
+
+        // 1. Select best model
+        let model_manager = ModelManager::new()?;
+        let selected_model = model_manager.select_model(&params)?;
+        tracing::info!("Selected model: {}", selected_model.display_name());
+
+        // 2. Download/load model (on-demand, cached for future use)
+        let model_files = model_manager.ensure_model(selected_model, params.use_quantized)?;
+        let device = get_device(params.force_cpu)?;
+        tracing::info!("Using device: {}", device_name(&device));
+
+        // 3. Load model and tokenizer
+        let (tokenizer, model) = load_model(&model_files, selected_model, &device)?;
+
+        Ok(Self {
+            tokenizer,
+            model,
+            device,
+            selected_model,
+            params,
+        })
+    }
+
+    /// Get the model that was selected
+    pub fn model_used(&self) -> TranslationModel {
+        self.selected_model
+    }
+
+    /// Translate a single text using the loaded model
+    pub fn translate(&mut self, text: &str) -> Result<String> {
+        let start_time = Instant::now();
+
+        // Reset KV cache before each translation to avoid interference
+        // from previous translations when reusing the model
+        self.reset_kv_cache();
+
+        // 1. Tokenize input
+        let input_ids = self.tokenizer.encode(
+            text,
+            &self.params.source_language,
+            &self.params.target_language,
+        )?;
+
+        tracing::debug!("Input tokenized: {} tokens", input_ids.len());
+
+        // 2. Generate translation
+        let (output_ids, decoder_start_token_id) = generate_translation(
+            &mut self.model,
+            &input_ids,
+            &self.params,
+            &self.device,
+            None,
+        )?;
+
+        tracing::debug!("Generated {} tokens", output_ids.len());
+
+        // 3. Decode output (skip decoder start token)
+        let tokens_to_decode = if !output_ids.is_empty() && output_ids[0] == decoder_start_token_id
+        {
+            &output_ids[1..]
+        } else {
+            &output_ids
+        };
+        let translated_text = self.tokenizer.decode(tokens_to_decode)?;
+
+        let inference_time = start_time.elapsed().as_secs_f64();
+        tracing::debug!("Segment translated in {:.2}s", inference_time);
+
+        Ok(translated_text)
+    }
+
+    /// Reset the KV cache for decoder models
+    /// This must be called between translations when reusing the same model
+    fn reset_kv_cache(&mut self) {
+        match &mut self.model {
+            TranslationModelType::Marian { model, .. } => {
+                model.reset_kv_cache();
+            }
+            TranslationModelType::T5 { model, .. } => {
+                model.clear_kv_cache();
+            }
+        }
+    }
+
+    /// Translate multiple texts efficiently (model loaded once)
+    ///
+    /// This is the recommended way to translate SRT segments or multiple paragraphs.
+    pub fn translate_batch(
+        &mut self,
+        texts: &[String],
+        progress_callback: Option<&BatchProgressCallback>,
+    ) -> Result<Vec<String>> {
+        let total = texts.len();
+        let mut results = Vec::with_capacity(total);
+
+        for (i, text) in texts.iter().enumerate() {
+            if let Some(callback) = progress_callback {
+                callback(i + 1, total, text);
+            }
+
+            let translated = self.translate(text)?;
+            results.push(translated);
+        }
+
+        Ok(results)
+    }
+}
+
+/// Translate multiple texts with a single model load
+///
+/// This is the main API for batch translation - use this for SRT files
+/// or any case where you need to translate multiple texts with the same
+/// language pair.
+pub fn translate_texts_batch(
+    texts: &[String],
+    params: TranslateParams,
+    progress_callback: Option<BatchProgressCallback>,
+) -> Result<(Vec<String>, TranslationModel, f64)> {
+    let start_time = Instant::now();
+
+    // Create translator (loads model once)
+    let mut translator = Translator::new(params)?;
+
+    // Translate all texts
+    let results = translator.translate_batch(texts, progress_callback.as_ref())?;
+
+    let total_time = start_time.elapsed().as_secs_f64();
+    let model_used = translator.model_used();
+
+    tracing::info!(
+        "Batch translation complete: {} segments in {:.2}s ({:.2}s/segment avg)",
+        texts.len(),
+        total_time,
+        total_time / texts.len() as f64
+    );
+
+    Ok((results, model_used, total_time))
 }
 
 #[cfg(test)]
