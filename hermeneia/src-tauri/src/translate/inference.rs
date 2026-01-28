@@ -172,12 +172,29 @@ fn load_model(
 
     let model_wrapper = if model_type.is_marian() {
         // Load Marian model
+        let config_file = std::fs::File::open(&model_files.config)?;
+        let mut config_value: serde_json::Value =
+            serde_json::from_reader(config_file).map_err(|e| AudioError::ModelLoad {
+                model: model_type.model_id().to_string(),
+                details: format!("Failed to parse Marian config JSON: {}", e),
+            })?;
+        if let Some(obj) = config_value.as_object_mut() {
+            if !obj.contains_key("share_encoder_decoder_embeddings") {
+                obj.insert(
+                    "share_encoder_decoder_embeddings".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+        } else {
+            return Err(AudioError::ModelLoad {
+                model: model_type.model_id().to_string(),
+                details: "Marian config JSON is not an object".to_string(),
+            });
+        }
         let config: marian::Config =
-            serde_json::from_reader(std::fs::File::open(&model_files.config)?).map_err(|e| {
-                AudioError::ModelLoad {
-                    model: model_type.model_id().to_string(),
-                    details: format!("Failed to parse Marian config: {}", e),
-                }
+            serde_json::from_value(config_value).map_err(|e| AudioError::ModelLoad {
+                model: model_type.model_id().to_string(),
+                details: format!("Failed to parse Marian config: {}", e),
             })?;
         let model = marian::MTModel::new(&config, vb).map_err(|e| AudioError::ModelLoad {
             model: model_type.model_id().to_string(),
