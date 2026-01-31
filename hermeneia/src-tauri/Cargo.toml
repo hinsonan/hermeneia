@@ -104,3 +104,13 @@ nvml-wrapper = { version = "0.10", optional = true }
 [features]
 default = []
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "nvml-wrapper"]
+
+# Optimized release profile for CPU inference performance
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.release.build-override]
+opt-level = 3
