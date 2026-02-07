@@ -121,13 +121,13 @@ fn detect_gpu() -> Result<Option<GpuInfo>, String> {
         }
     }
 
-    // Check for Metal (macOS)
-    #[cfg(target_os = "macos")]
+    // Check for Metal (macOS with metal feature)
+    #[cfg(all(target_os = "macos", feature = "metal"))]
     {
         if candle_core::utils::metal_is_available() {
             return Ok(Some(GpuInfo {
                 device_type: GpuDeviceType::AppleMetal,
-                vram_total_gb: None, // Unified memory, hard to estimate
+                vram_total_gb: None, // Unified memory, validated via system RAM
                 vram_available_gb: None,
                 compute_capability: None,
             }));

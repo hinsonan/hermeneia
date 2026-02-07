@@ -86,7 +86,28 @@ const Home: Component = () => {
           {/* Divider */}
           <div class="divider">
             <span class="divider-line"></span>
-            <span class="divider-symbol">✤</span>
+            <span class="divider-symbol">
+              <svg viewBox="0 0 28 28" width="26" height="26">
+                {/* Trunk */}
+                <line x1="14" y1="26" x2="14" y2="4" stroke="var(--gold-accent)" stroke-width="1.5"/>
+                {/* Bottom branches */}
+                <path d="M14 21 C11 19, 8 18, 6 15" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                <path d="M14 21 C17 19, 20 18, 22 15" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                {/* Middle branches */}
+                <path d="M14 15 C12 13, 9 12, 7 9" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                <path d="M14 15 C16 13, 19 12, 21 9" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                {/* Top branches */}
+                <path d="M14 9 C13 7, 11 5, 10 3" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                <path d="M14 9 C15 7, 17 5, 18 3" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                {/* Leaf dots at branch tips */}
+                <circle cx="6" cy="15" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="22" cy="15" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="7" cy="9" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="21" cy="9" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="10" cy="3" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="18" cy="3" r="1.3" fill="var(--gold-accent)"/>
+              </svg>
+            </span>
             <span class="divider-line"></span>
           </div>
 
@@ -154,7 +175,27 @@ const Home: Component = () => {
           {/* Scripture Quote */}
           <div class="divider">
             <span class="divider-line"></span>
-            <span class="divider-symbol">❦</span>
+            <span class="divider-symbol">
+              <svg viewBox="0 0 32 32" width="28" height="28">
+                {/* Left page - curved to look open */}
+                <path d="M3 6 C3 5, 4 4, 6 4 L15 4 C16 4, 16 5, 16 6 L16 27 C16 26, 15 25, 14 25 L6 25 C4 25, 3 24, 3 23 Z" fill="none" stroke="var(--gold-accent)" stroke-width="1.5"/>
+                {/* Right page */}
+                <path d="M29 6 C29 5, 28 4, 26 4 L17 4 C16 4, 16 5, 16 6 L16 27 C16 26, 17 25, 18 25 L26 25 C28 25, 29 24, 29 23 Z" fill="none" stroke="var(--gold-accent)" stroke-width="1.5"/>
+                {/* Spine */}
+                <line x1="16" y1="4" x2="16" y2="27" stroke="var(--gold-accent)" stroke-width="1.5"/>
+                {/* Text lines - left */}
+                <line x1="6" y1="10" x2="13" y2="10" stroke="var(--gold-accent)" stroke-width="1" opacity="0.5"/>
+                <line x1="6" y1="14" x2="13" y2="14" stroke="var(--gold-accent)" stroke-width="1" opacity="0.5"/>
+                <line x1="6" y1="18" x2="13" y2="18" stroke="var(--gold-accent)" stroke-width="1" opacity="0.5"/>
+                {/* Text lines - right */}
+                <line x1="19" y1="10" x2="26" y2="10" stroke="var(--gold-accent)" stroke-width="1" opacity="0.5"/>
+                <line x1="19" y1="14" x2="26" y2="14" stroke="var(--gold-accent)" stroke-width="1" opacity="0.5"/>
+                <line x1="19" y1="18" x2="26" y2="18" stroke="var(--gold-accent)" stroke-width="1" opacity="0.5"/>
+                {/* Cross - centered on right page */}
+                <line x1="22.5" y1="20.5" x2="22.5" y2="24" stroke="var(--gold-accent)" stroke-width="1.2" opacity="0.7"/>
+                <line x1="21" y1="21.5" x2="24" y2="21.5" stroke="var(--gold-accent)" stroke-width="1.2" opacity="0.7"/>
+              </svg>
+            </span>
             <span class="divider-line"></span>
           </div>
 

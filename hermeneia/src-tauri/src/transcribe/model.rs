@@ -90,7 +90,11 @@ impl ModelManager {
     }
 }
 
-/// Get compute device (CPU or CUDA)
+// Prevent enabling both CUDA and Metal simultaneously
+#[cfg(all(feature = "cuda", feature = "metal"))]
+compile_error!("Features `cuda` and `metal` are mutually exclusive. Enable only one.");
+
+/// Get compute device (CPU, CUDA, or Metal)
 pub fn get_device(force_cpu: bool) -> Result<Device> {
     if force_cpu {
         return Ok(Device::Cpu);
@@ -98,13 +102,18 @@ pub fn get_device(force_cpu: bool) -> Result<Device> {
 
     #[cfg(feature = "cuda")]
     {
-        Device::cuda_if_available(0).map_err(|e| AudioError::GpuError(e.to_string()))
+        return Device::cuda_if_available(0)
+            .map_err(|e| AudioError::GpuError(e.to_string()));
     }
 
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(feature = "metal")]
     {
-        Ok(Device::Cpu)
+        return Device::new_metal(0)
+            .map_err(|e| AudioError::GpuError(e.to_string()));
     }
+
+    #[allow(unreachable_code)]
+    Ok(Device::Cpu)
 }
 
 #[cfg(test)]

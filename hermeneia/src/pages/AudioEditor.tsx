@@ -283,7 +283,28 @@ const AudioEditor: Component = () => {
 
           <div class="divider">
             <span class="divider-line"></span>
-            <span class="divider-symbol">✤</span>
+            <span class="divider-symbol">
+              <svg viewBox="0 0 28 28" width="26" height="26">
+                {/* Trunk */}
+                <line x1="14" y1="26" x2="14" y2="4" stroke="var(--gold-accent)" stroke-width="1.5"/>
+                {/* Bottom branches */}
+                <path d="M14 21 C11 19, 8 18, 6 15" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                <path d="M14 21 C17 19, 20 18, 22 15" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                {/* Middle branches */}
+                <path d="M14 15 C12 13, 9 12, 7 9" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                <path d="M14 15 C16 13, 19 12, 21 9" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                {/* Top branches */}
+                <path d="M14 9 C13 7, 11 5, 10 3" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                <path d="M14 9 C15 7, 17 5, 18 3" fill="none" stroke="var(--gold-accent)" stroke-width="1.2"/>
+                {/* Leaf dots at branch tips */}
+                <circle cx="6" cy="15" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="22" cy="15" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="7" cy="9" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="21" cy="9" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="10" cy="3" r="1.3" fill="var(--gold-accent)"/>
+                <circle cx="18" cy="3" r="1.3" fill="var(--gold-accent)"/>
+              </svg>
+            </span>
             <span class="divider-line"></span>
           </div>
 

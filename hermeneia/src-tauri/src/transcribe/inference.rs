@@ -297,7 +297,8 @@ fn load_model(
 
                     let device_name = match device {
                         Device::Cuda(_) => "VRAM",
-                        _ => "RAM",
+                        Device::Metal(_) => "Unified Memory",
+                        Device::Cpu => "RAM",
                     };
 
                     AudioError::OutOfMemory {
@@ -327,7 +328,8 @@ fn load_model(
 
             let device_name = match device {
                 Device::Cuda(_) => "VRAM",
-                _ => "RAM",
+                Device::Metal(_) => "Unified Memory",
+                Device::Cpu => "RAM",
             };
 
             AudioError::OutOfMemory {

@@ -4,7 +4,7 @@
 //! Provides warnings for suboptimal configurations and errors for impossible ones.
 
 use super::WhisperModel;
-use crate::system_info::{get_system_capabilities, SystemCapabilities};
+use crate::system_info::{get_system_capabilities, GpuDeviceType, SystemCapabilities};
 
 /// Result of model validation
 #[derive(Debug, Clone)]
@@ -58,38 +58,53 @@ impl ModelValidator {
             // GPU path validation
             let gpu = self.capabilities.gpu_info.as_ref().unwrap();
 
-            // Check VRAM availability
-            if let Some(vram_available) = gpu.vram_available_gb {
-                if vram_available < reqs.min_vram_gb {
-                    // Hard error: Not enough VRAM
+            if matches!(gpu.device_type, GpuDeviceType::AppleMetal) {
+                // Metal uses unified memory -- validate against system RAM
+                if self.capabilities.available_ram_gb < reqs.min_ram_gb {
                     return ValidationResult::Error(format!(
-                        "Insufficient VRAM for {} model. Need {:.1}GB, have {:.1}GB available. Try a smaller model or use --cpu flag.",
+                        "Insufficient unified memory for {} model. Need {:.1}GB, have {:.1}GB available. Try a smaller model.",
                         model.size_category(),
-                        reqs.min_vram_gb,
-                        vram_available
+                        reqs.min_ram_gb,
+                        self.capabilities.available_ram_gb
                     ));
-                } else if vram_available < reqs.min_vram_gb * 1.5 {
-                    // Warning: VRAM is tight
+                } else if self.capabilities.available_ram_gb < reqs.min_ram_gb * 1.5 {
                     warnings.push(format!(
-                        "VRAM is close to minimum ({:.1}GB available, {:.1}GB required). Consider a smaller model for better performance.",
-                        vram_available,
-                        reqs.min_vram_gb
+                        "Unified memory is close to minimum ({:.1}GB available, {:.1}GB required). Close other applications for better performance.",
+                        self.capabilities.available_ram_gb,
+                        reqs.min_ram_gb
                     ));
                 }
             } else {
-                // VRAM info not available, warn user
-                warnings.push(
-                    "Could not detect VRAM. Ensure your GPU has sufficient memory.".to_string()
-                );
-            }
+                // Discrete GPU (CUDA/ROCm) -- validate against VRAM
+                if let Some(vram_available) = gpu.vram_available_gb {
+                    if vram_available < reqs.min_vram_gb {
+                        return ValidationResult::Error(format!(
+                            "Insufficient VRAM for {} model. Need {:.1}GB, have {:.1}GB available. Try a smaller model or use --cpu flag.",
+                            model.size_category(),
+                            reqs.min_vram_gb,
+                            vram_available
+                        ));
+                    } else if vram_available < reqs.min_vram_gb * 1.5 {
+                        warnings.push(format!(
+                            "VRAM is close to minimum ({:.1}GB available, {:.1}GB required). Consider a smaller model for better performance.",
+                            vram_available,
+                            reqs.min_vram_gb
+                        ));
+                    }
+                } else {
+                    warnings.push(
+                        "Could not detect VRAM. Ensure your GPU has sufficient memory.".to_string()
+                    );
+                }
 
-            // Check compute capability
-            if let (Some(min_cc), Some(actual_cc)) = (reqs.min_compute_capability, gpu.compute_capability) {
-                if actual_cc < min_cc {
-                    warnings.push(format!(
-                        "GPU compute capability {}.{} is below recommended {}.{}. Performance may be degraded.",
-                        actual_cc.0, actual_cc.1, min_cc.0, min_cc.1
-                    ));
+                // Check compute capability (only relevant for CUDA)
+                if let (Some(min_cc), Some(actual_cc)) = (reqs.min_compute_capability, gpu.compute_capability) {
+                    if actual_cc < min_cc {
+                        warnings.push(format!(
+                            "GPU compute capability {}.{} is below recommended {}.{}. Performance may be degraded.",
+                            actual_cc.0, actual_cc.1, min_cc.0, min_cc.1
+                        ));
+                    }
                 }
             }
         } else {
