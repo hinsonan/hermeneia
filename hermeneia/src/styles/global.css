@@ -228,6 +228,13 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--gold-accent);
   padding: 0 1rem;
   transition: color 0.5s ease;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.divider-symbol svg {
+  display: block;
 }
 
 /* Theme Toggle */
