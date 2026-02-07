@@ -8,6 +8,7 @@ import TextFileUploader from "../components/TextFileUploader";
 import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranslationProgressBar from "../components/TranslationProgressBar";
 import InfoIcon from "../components/InfoIcon";
+import ConfirmDialog from "../components/ConfirmDialog";
 import type {
   TranslationProgress,
   TextTranslationResult,
@@ -33,6 +34,9 @@ const Translation: Component = () => {
   const [error, setError] = createSignal<string | null>(null);
   const [result, setResult] = createSignal<TextTranslationResult | null>(null);
   const [translationProgress, setTranslationProgress] = createSignal<TranslationProgress | null>(null);
+
+  // Cancel dialog
+  const [showCancelDialog, setShowCancelDialog] = createSignal(false);
 
   // Pair validation
   const [marianSupported, setMarianSupported] = createSignal(true);
@@ -135,7 +139,12 @@ const Translation: Component = () => {
 
       setResult(translationResult);
     } catch (err) {
-      setError(String(err));
+      const errStr = String(err);
+      if (errStr.includes("Operation cancelled")) {
+        navigate("/");
+        return;
+      }
+      setError(errStr);
     } finally {
       // Clean up progress listener
       if (progressUnlisten) {
@@ -200,6 +209,25 @@ const Translation: Component = () => {
     }
   };
 
+  // Handle back button - show confirm dialog if translating
+  const handleBack = () => {
+    if (isTranslating()) {
+      setShowCancelDialog(true);
+    } else {
+      navigate("/");
+    }
+  };
+
+  // Confirm cancellation and navigate home immediately
+  const handleConfirmCancel = () => {
+    setShowCancelDialog(false);
+    // Fire-and-forget: set the cancel flag, then navigate immediately
+    // The backend spawn_blocking will detect the flag, return Err(Cancelled),
+    // and drop all model data (freeing CPU RAM / GPU VRAM automatically)
+    invoke("cancel_inference").catch(() => {});
+    navigate("/");
+  };
+
   // Reset for new file
   const handleNewFile = () => {
     setFilePath("");
@@ -239,7 +267,7 @@ const Translation: Component = () => {
         <main class="parchment">
           {/* Header */}
           <header class="page-header">
-            <button class="back-button" onClick={() => navigate("/")}>
+            <button class="back-button" onClick={handleBack}>
               <svg viewBox="0 0 24 24" width="20" height="20">
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
@@ -489,6 +517,16 @@ const Translation: Component = () => {
 
         <div class="scroll-rod"></div>
       </div>
+
+      <ConfirmDialog
+        open={showCancelDialog()}
+        title="Stop Translation?"
+        message="A translation is currently in progress. Stopping will discard any partial results."
+        confirmLabel="Stop & Go Back"
+        cancelLabel="Keep Working"
+        onConfirm={handleConfirmCancel}
+        onCancel={() => setShowCancelDialog(false)}
+      />
     </>
   );
 };

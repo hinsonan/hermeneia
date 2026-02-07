@@ -8,6 +8,8 @@ use crate::translate::{
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::{marian, t5};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Callback for batch translation progress: (current_segment, total_segments, segment_text)
@@ -37,7 +39,7 @@ fn device_name(device: &Device) -> &'static str {
 
 /// Main translation function - simple API
 pub fn translate_text(text: &str, params: TranslateParams) -> Result<TranslationResult> {
-    translate_text_with_progress(text, params, None)
+    translate_text_with_progress(text, params, None, None)
 }
 
 /// Translation with optional progress callback for CLI
@@ -45,6 +47,7 @@ pub fn translate_text_with_progress(
     text: &str,
     params: TranslateParams,
     progress_callback: Option<ProgressCallback>,
+    cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranslationResult> {
     let start_time = Instant::now();
 
@@ -61,17 +64,39 @@ pub fn translate_text_with_progress(
 
     // 2. Download/load model (on-demand, cached for future use)
     let model_files = model_manager.ensure_model(selected_model, params.use_quantized)?;
+
+    // Check for cancellation after model download
+    if let Some(ref flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
+
     let device = get_device(params.force_cpu)?;
     tracing::info!("Using device: {}", device_name(&device));
 
     // 3. Load model and tokenizer
     let (tokenizer, mut model) = load_model(&model_files, selected_model, &device)?;
 
+    // Check for cancellation after model load
+    if let Some(ref flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
+
     // 4. Tokenize input
     let input_ids = tokenizer.encode(text, &params.source_language, &params.target_language)?;
 
     tracing::info!("Input tokenized: {} tokens", input_ids.len());
     tracing::debug!("Input token IDs: {:?}", input_ids);
+
+    // Check for cancellation before generation
+    if let Some(ref flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
 
     // 5. Generate translation
     let (output_ids, decoder_start_token_id) = generate_translation(
@@ -80,6 +105,7 @@ pub fn translate_text_with_progress(
         &params,
         &device,
         progress_callback.as_ref(),
+        cancel_flag.as_ref(),
     )?;
 
     tracing::info!("Generated {} tokens", output_ids.len());
@@ -228,6 +254,7 @@ fn generate_translation(
     params: &TranslateParams,
     device: &Device,
     progress_callback: Option<&ProgressCallback>,
+    cancel_flag: Option<&Arc<AtomicBool>>,
 ) -> Result<(Vec<u32>, u32)> {
     // Create input tensor
     let input_tensor = Tensor::new(input_ids, device)
@@ -242,10 +269,25 @@ fn generate_translation(
             model: t5_model,
             config,
         } => {
+            // Check for cancellation before expensive encoder pass
+            if let Some(flag) = cancel_flag {
+                if flag.load(Ordering::SeqCst) {
+                    return Err(AudioError::Cancelled);
+                }
+            }
+
             tracing::info!("Running T5-based encoder (MADLAD)...");
             let encoder_output = t5_model
                 .encode(&input_tensor)
                 .map_err(|e| AudioError::TranslationFailed(format!("Encoder failed: {}", e)))?;
+
+            // Check for cancellation after encoder (before token generation loop)
+            if let Some(flag) = cancel_flag {
+                if flag.load(Ordering::SeqCst) {
+                    tracing::info!("T5 translation cancelled after encoder pass");
+                    return Err(AudioError::Cancelled);
+                }
+            }
 
             // Get special tokens
             let decoder_start_token_id =
@@ -280,6 +322,7 @@ fn generate_translation(
                 eos_token_id,
                 use_cache,
                 progress_callback,
+                cancel_flag,
             )?;
 
             Ok((output_ids, decoder_start_token_id))
@@ -288,6 +331,13 @@ fn generate_translation(
             model: marian_model,
             config,
         } => {
+            // Check for cancellation before expensive encoder pass
+            if let Some(flag) = cancel_flag {
+                if flag.load(Ordering::SeqCst) {
+                    return Err(AudioError::Cancelled);
+                }
+            }
+
             tracing::info!("Running Marian encoder...");
             let encoder_output = marian_model
                 .encoder()
@@ -295,6 +345,14 @@ fn generate_translation(
                 .map_err(|e| {
                     AudioError::TranslationFailed(format!("Marian encoder failed: {}", e))
                 })?;
+
+            // Check for cancellation after encoder (before token generation loop)
+            if let Some(flag) = cancel_flag {
+                if flag.load(Ordering::SeqCst) {
+                    tracing::info!("Marian translation cancelled after encoder pass");
+                    return Err(AudioError::Cancelled);
+                }
+            }
 
             // Get special tokens from config (MarianMT uses decoder_start_token_id from config)
             // For Helsinki-NLP MarianMT models: decoder_start_token_id=65000, eos_token_id=0
@@ -314,6 +372,14 @@ fn generate_translation(
             let mut token_ids = vec![decoder_start_token_id];
 
             for index in 0..max_length {
+                // Check for cancellation
+                if let Some(flag) = cancel_flag {
+                    if flag.load(Ordering::SeqCst) {
+                        tracing::info!("Marian translation cancelled by user at token {}", index);
+                        return Err(AudioError::Cancelled);
+                    }
+                }
+
                 // First iteration: full sequence, subsequent: only last token (KV cache)
                 let context_size = if index >= 1 { 1 } else { token_ids.len() };
                 let start_pos = token_ids.len().saturating_sub(context_size);
@@ -394,7 +460,7 @@ pub struct Translator {
 
 impl Translator {
     /// Create a new translator by loading the model for the given parameters
-    pub fn new(params: TranslateParams) -> Result<Self> {
+    pub fn new(params: TranslateParams, cancel_flag: Option<&Arc<AtomicBool>>) -> Result<Self> {
         tracing::info!(
             "Initializing translator: {} -> {}",
             params.source_language,
@@ -408,11 +474,26 @@ impl Translator {
 
         // 2. Download/load model (on-demand, cached for future use)
         let model_files = model_manager.ensure_model(selected_model, params.use_quantized)?;
+
+        // Check for cancellation after model download
+        if let Some(flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return Err(AudioError::Cancelled);
+            }
+        }
+
         let device = get_device(params.force_cpu)?;
         tracing::info!("Using device: {}", device_name(&device));
 
         // 3. Load model and tokenizer
         let (tokenizer, model) = load_model(&model_files, selected_model, &device)?;
+
+        // Check for cancellation after model load
+        if let Some(flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return Err(AudioError::Cancelled);
+            }
+        }
 
         Ok(Self {
             tokenizer,
@@ -429,8 +510,15 @@ impl Translator {
     }
 
     /// Translate a single text using the loaded model
-    pub fn translate(&mut self, text: &str) -> Result<String> {
+    pub fn translate(&mut self, text: &str, cancel_flag: Option<&Arc<AtomicBool>>) -> Result<String> {
         let start_time = Instant::now();
+
+        // Check for cancellation before starting
+        if let Some(flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return Err(AudioError::Cancelled);
+            }
+        }
 
         // Reset KV cache before each translation to avoid interference
         // from previous translations when reusing the model
@@ -452,6 +540,7 @@ impl Translator {
             &self.params,
             &self.device,
             None,
+            cancel_flag,
         )?;
 
         tracing::debug!("Generated {} tokens", output_ids.len());
@@ -491,6 +580,7 @@ impl Translator {
         &mut self,
         texts: &[String],
         progress_callback: Option<&BatchProgressCallback>,
+        cancel_flag: Option<&Arc<AtomicBool>>,
     ) -> Result<Vec<String>> {
         let total = texts.len();
         let mut results = Vec::with_capacity(total);
@@ -500,7 +590,7 @@ impl Translator {
                 callback(i + 1, total, text);
             }
 
-            let translated = self.translate(text)?;
+            let translated = self.translate(text, cancel_flag)?;
             results.push(translated);
         }
 
@@ -517,14 +607,15 @@ pub fn translate_texts_batch(
     texts: &[String],
     params: TranslateParams,
     progress_callback: Option<BatchProgressCallback>,
+    cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<(Vec<String>, TranslationModel, f64)> {
     let start_time = Instant::now();
 
     // Create translator (loads model once)
-    let mut translator = Translator::new(params)?;
+    let mut translator = Translator::new(params, cancel_flag.as_ref())?;
 
     // Translate all texts
-    let results = translator.translate_batch(texts, progress_callback.as_ref())?;
+    let results = translator.translate_batch(texts, progress_callback.as_ref(), cancel_flag.as_ref())?;
 
     let total_time = start_time.elapsed().as_secs_f64();
     let model_used = translator.model_used();

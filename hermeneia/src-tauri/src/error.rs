@@ -101,6 +101,10 @@ pub enum AudioError {
     /// Tokenization error
     #[error("Tokenization error: {0}")]
     TokenizationError(String),
+
+    /// Operation was cancelled by the user
+    #[error("Operation cancelled")]
+    Cancelled,
 }
 
 /// Convenient Result type that uses our AudioError
