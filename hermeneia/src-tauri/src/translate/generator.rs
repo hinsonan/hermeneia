@@ -3,6 +3,8 @@ use crate::translate::logits_processor::LogitsProcessor;
 use crate::translate::types::ProgressCallback;
 use candle_core::{Device, IndexOp, Tensor};
 use candle_transformers::models::t5;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Configuration for text generation
 #[derive(Debug, Clone)]
@@ -58,11 +60,20 @@ impl Generator {
         eos_token_id: u32,
         use_cache: bool,
         progress_callback: Option<&ProgressCallback>,
+        cancel_flag: Option<&Arc<AtomicBool>>,
     ) -> Result<Vec<u32>> {
         let mut tokens = vec![decoder_start_token_id];
         let device = encoder_output.device();
 
         for step in 0..self.config.max_length {
+            // Check for cancellation
+            if let Some(flag) = cancel_flag {
+                if flag.load(Ordering::SeqCst) {
+                    tracing::info!("T5 translation cancelled by user at step {}", step);
+                    return Err(AudioError::Cancelled);
+                }
+            }
+
             // Report progress
             if let Some(callback) = progress_callback {
                 callback(step + 1, self.config.max_length);

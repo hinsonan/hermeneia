@@ -10,6 +10,8 @@ use crate::transcribe::{
 use candle_core::Device;
 use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as m, Config};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tokenizers::Tokenizer;
 
@@ -88,7 +90,7 @@ pub fn transcribe_audio_with_progress(
         &params_with_token,
         language_token,
     )?;
-    let raw_segments = decoder.run(&mel, progress_callback)?;
+    let raw_segments = decoder.run(&mel, progress_callback, None)?;
 
     // Debug logging
     tracing::info!("Raw segments count: {}", raw_segments.len());
@@ -128,6 +130,7 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     file_path: &str,
     params: TranscribeParams,
     reporter: &P,
+    cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranscriptResult> {
     let start_time = Instant::now();
 
@@ -135,10 +138,24 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     let audio_data = decode_audio_file(file_path)?;
     let duration = audio_data.duration_seconds();
 
+    // Check for cancellation after audio decode
+    if let Some(ref flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
+
     // Download/load model
     let model_manager = ModelManager::new()?;
     let model_files = model_manager
         .ensure_model(params.model, params.use_quantized)?;
+
+    // Check for cancellation after model download
+    if let Some(ref flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
 
     let device = get_device(params.force_cpu)?;
     tracing::info!("Using device: {}", device_name(&device));
@@ -147,8 +164,22 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     let (config, tokenizer, mut model) = load_model(&model_files, &device)
         .map_err(|e| enrich_oom_error(e, params.model))?;
 
+    // Check for cancellation after model load
+    if let Some(ref flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
+
     // Preprocess to mel-spectrogram (needs config for mel bins)
     let mel = preprocess_audio(&audio_data, &config, &device)?;
+
+    // Check for cancellation after preprocessing
+    if let Some(ref flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
 
     // Detect language if not specified and model is multilingual
     let language_token = match (params.model.is_multilingual(), &params.language) {
@@ -194,7 +225,7 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
         &params_with_token,
         language_token,
     )?;
-    let raw_segments = decoder.run(&mel, Some(callback))?;
+    let raw_segments = decoder.run(&mel, Some(callback), cancel_flag)?;
     let segments = decoder.extract_segments(raw_segments);
 
     // Signal completion

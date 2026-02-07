@@ -5,7 +5,8 @@ pub mod system_info;
 pub mod transcribe;
 pub mod translate;
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 // Re-export for convenience
 pub use audio::*;
@@ -17,12 +18,21 @@ pub use transcribe::*;
 /// Global audio player state managed by Tauri
 pub struct AppState {
     pub player: Mutex<AudioPlayer>,
+    pub cancel_inference: Mutex<Arc<AtomicBool>>,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+/// Cancel a running inference operation (transcription or translation)
+#[tauri::command]
+fn cancel_inference(state: tauri::State<AppState>) {
+    let flag = state.cancel_inference.lock().unwrap();
+    flag.store(true, Ordering::SeqCst);
+    tracing::info!("Inference cancellation requested");
 }
 
 /// Extract waveform peaks from an audio file for visualization
@@ -97,12 +107,21 @@ async fn trim_audio_file(
 #[tauri::command]
 async fn transcribe_audio_file(
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     file_path: String,
     model: String,
     task: String,
     language: Option<String>,
     timestamps: bool,
 ) -> std::result::Result<TranscriptResult, String> {
+    // Swap in a fresh cancel flag so any previous job's flag stays true
+    let cancel_flag = {
+        let mut guard = state.cancel_inference.lock().unwrap();
+        let new_flag = Arc::new(AtomicBool::new(false));
+        *guard = new_flag.clone();
+        new_flag
+    };
+
     tokio::task::spawn_blocking(move || {
         let model_enum = parse_whisper_model(&model)
             .ok_or_else(|| format!("Invalid model: {}", model))?;
@@ -126,7 +145,7 @@ async fn transcribe_audio_file(
         let reporter = TauriProgressReporter::new(app_handle);
         reporter.start();
 
-        transcribe::transcribe_audio_with_reporter(&file_path, params, &reporter)
+        transcribe::transcribe_audio_with_reporter(&file_path, params, &reporter, Some(cancel_flag))
             .map_err(|e| e.to_string())
     })
     .await
@@ -243,12 +262,21 @@ pub struct TextTranslationResult {
 #[tauri::command]
 async fn translate_text_file(
     app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     file_path: String,
     source_lang: String,
     target_lang: String,
     allow_madlad: bool,
 ) -> std::result::Result<TextTranslationResult, String> {
     use tauri::Emitter;
+
+    // Swap in a fresh cancel flag so any previous job's flag stays true
+    let cancel_flag = {
+        let mut guard = state.cancel_inference.lock().unwrap();
+        let new_flag = Arc::new(AtomicBool::new(false));
+        *guard = new_flag.clone();
+        new_flag
+    };
 
     tokio::task::spawn_blocking(move || {
         let start_time = std::time::Instant::now();
@@ -306,6 +334,7 @@ async fn translate_text_file(
                 &texts,
                 params,
                 Some(progress_callback),
+                Some(cancel_flag),
             ).map_err(|e| format!("Translation failed: {}", e))?;
 
             // Reassemble SRT with translated text
@@ -320,7 +349,7 @@ async fn translate_text_file(
                 "message": "Translating text..."
             }));
 
-            let result = translate::translate_text(&content, params)
+            let result = translate::translate_text_with_progress(&content, params, None, Some(cancel_flag))
                 .map_err(|e| format!("Translation failed: {}", e))?;
 
             (result.translated_text, result.model_used.display_name().to_string(), 1)
@@ -436,6 +465,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             player: Mutex::new(AudioPlayer::new()),
+            cancel_inference: Mutex::new(Arc::new(AtomicBool::new(false))),
         })
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -447,6 +477,7 @@ pub fn run() {
             validate_model_selection,
             translate_text_file,
             check_marian_pair_supported,
+            cancel_inference,
             play_audio,
             pause_audio,
             resume_audio,

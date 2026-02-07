@@ -138,7 +138,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     // Run translation
-    let result = translate_text_with_progress(&input_text, params, progress_callback)?;
+    let result = translate_text_with_progress(&input_text, params, progress_callback, None)?;
 
     // Finish progress bar
     if let Some(pb) = progress_bar {

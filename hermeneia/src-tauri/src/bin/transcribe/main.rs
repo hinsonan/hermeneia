@@ -177,7 +177,7 @@ fn main() -> anyhow::Result<()> {
 
     let progress = TranscriptionProgress::new();
 
-    let result = transcribe_audio_with_reporter(&args.input, params, &progress)?;
+    let result = transcribe_audio_with_reporter(&args.input, params, &progress, None)?;
 
     println!();
     info!(

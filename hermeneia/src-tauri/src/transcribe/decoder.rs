@@ -5,6 +5,8 @@ use candle_nn::ops::{log_softmax, softmax};
 use candle_transformers::models::whisper::{self as m, Config};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::SeedableRng;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokenizers::Tokenizer;
 
 /// Decoding result with tokens and metadata
@@ -503,7 +505,7 @@ impl<'a> Decoder<'a> {
     }
 
     /// Run decoding on full audio
-    pub fn run(&mut self, mel: &Tensor, progress_callback: Option<ProgressCallback>) -> Result<Vec<Segment>> {
+    pub fn run(&mut self, mel: &Tensor, progress_callback: Option<ProgressCallback>, cancel_flag: Option<Arc<AtomicBool>>) -> Result<Vec<Segment>> {
         let (_, _, content_frames) = mel
             .dims3()
             .map_err(|e| AudioError::TranscriptionFailed(format!("Dims3: {}", e)))?;
@@ -515,6 +517,14 @@ impl<'a> Decoder<'a> {
         self.total_frames = content_frames;
 
         while seek < content_frames {
+            // Check for cancellation
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(Ordering::SeqCst) {
+                    tracing::info!("Transcription cancelled by user at frame {}/{}", seek, content_frames);
+                    return Err(AudioError::Cancelled);
+                }
+            }
+
             // Report progress at segment level (before processing)
             if let Some(ref callback) = self.progress_callback {
                 callback(seek, content_frames);
