@@ -130,7 +130,9 @@ services:
         echo '🔗 Creating libcuda.so.1 stub for linuxdeploy...' &&
         ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
         npm ci &&
-        npx tauri build --verbose --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
+        npx tauri build --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
+        echo '' &&
+        sh /project/scripts/fix-appimage-cuda.sh &&
         echo '' &&
         echo '✅ Bundle complete! Copying to cuda-bundles/...' &&
         rm -rf /cuda-bundles/* &&
