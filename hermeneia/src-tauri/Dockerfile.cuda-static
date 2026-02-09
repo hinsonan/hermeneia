@@ -1,10 +1,10 @@
 # Dockerfile for building Hermeneia with CUDA 12.8
-# Multi-stage: base (toolchain) → builder (transcribe CLI) / bundler (full app bundles)
+# Two stages: base (toolchain + CUDA libs) → bundler (+ Node.js for Tauri bundles)
 # Only requires NVIDIA driver on host, NOT full CUDA toolkit
 
 # ============================================================================
 # Base stage: CUDA toolkit + Rust + system deps + CUDA runtime libs
-# Used by: build-dev, and as foundation for builder and bundler stages
+# Used by: build-dev (mounts source), bundler (adds Node.js)
 # ============================================================================
 FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS base
 
@@ -66,52 +66,8 @@ RUN mkdir -p /build/lib && \
     echo "=== Bundled libraries ===" && \
     ls -lh /build/lib/
 
-# Copy project files
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY build.rs ./
-COPY tauri.conf.json ./
-COPY assets ./assets
-COPY icons ./icons
-COPY capabilities ./capabilities
-COPY gen ./gen
-
 # Add our lib directory to the library path during build
 ENV LD_LIBRARY_PATH=/build/lib:${LD_LIBRARY_PATH}
-
-# ============================================================================
-# Builder stage: builds standalone transcribe CLI with bundled CUDA libs
-# Used by: build-cuda-static service
-# ============================================================================
-FROM base AS builder
-
-RUN cargo build --release --features cuda --bin transcribe
-
-# Create distribution package with RPATH set
-RUN mkdir -p /dist/lib && \
-    cp /build/target/release/transcribe /dist/ && \
-    # Use cp -a to preserve symlinks (reduces size from 4GB to 1.4GB)
-    cp -a /build/lib/* /dist/lib/ && \
-    # Set RPATH so binary looks for libraries in ./lib relative to binary location
-    patchelf --set-rpath '$ORIGIN/lib' /dist/transcribe && \
-    echo "" && \
-    echo "=== Verifying RPATH ===" && \
-    patchelf --print-rpath /dist/transcribe && \
-    echo "" && \
-    echo "=== Distribution package ===" && \
-    ls -lh /dist/ && \
-    echo "" && \
-    echo "=== CUDA libraries (with symlinks) ===" && \
-    ls -lh /dist/lib/ && \
-    echo "" && \
-    echo "=== Actual library sizes (unique files only) ===" && \
-    du -ch /dist/lib/*.so.*.* 2>/dev/null | tail -1 && \
-    echo "" && \
-    echo "=== All binary dependencies ===" && \
-    LD_LIBRARY_PATH=/dist/lib ldd /dist/transcribe && \
-    echo "" && \
-    echo "=== CUDA/NVIDIA dependencies ===" && \
-    (LD_LIBRARY_PATH=/dist/lib ldd /dist/transcribe | grep -E "cuda|nvidia" || echo "No direct CUDA deps - may use driver API only")
 
 # ============================================================================
 # Bundler stage: base + Node.js for tauri build (.deb/.rpm/.AppImage)
@@ -134,18 +90,3 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 RUN curl -fsSL -o /usr/local/bin/appimagetool \
     "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" && \
     chmod +x /usr/local/bin/appimagetool
-
-# ============================================================================
-# Runtime stage: minimal image for testing the standalone CLI
-# ============================================================================
-FROM ubuntu:22.04 AS runtime
-
-# Only install NVIDIA driver stubs for testing
-# Real host will have actual drivers
-RUN apt-get update && apt-get install -y \
-    libnvidia-compute-545 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /build/target/release/transcribe /usr/local/bin/transcribe
-
-ENTRYPOINT ["transcribe"]

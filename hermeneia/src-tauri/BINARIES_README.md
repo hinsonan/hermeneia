@@ -449,7 +449,7 @@ This approach provides flexibility during development:
 - Easy to switch between CPU and CUDA builds
 - Same method works for all CUDA-enabled binaries
 
-For distribution, use `./build-static-cuda.sh` which bundles libraries with RPATH.
+For distribution, use `npm run build:cuda:bundle` which produces .deb, .rpm, and .AppImage packages with bundled CUDA libraries and RPATH set at link time.
 
 ---
 

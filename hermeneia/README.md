@@ -151,29 +151,6 @@ Each package includes the CUDA runtime libraries (`libcudart`, `libcublas`, `lib
 
 The build uses a separate Docker target directory (`cuda-bundle-target` volume) so it doesn't interfere with CPU builds.
 
-### Building for Distribution (Standalone CLI with Bundled CUDA)
-
-For a portable standalone CLI binary (not a full Tauri app package):
-
-```bash
-cd src-tauri && ./build-static-cuda.sh
-```
-
-This produces a portable distribution package in `src-tauri/dist/`:
-
-```
-dist/
-  transcribe          # Release binary with RPATH set to $ORIGIN/lib
-  lib/
-    libcudart.so.12
-    libcublas.so.12
-    libcublasLt.so.12
-    libnvrtc.so.12
-    libcurand.so.12
-```
-
-The binary uses `patchelf` to set `RPATH=$ORIGIN/lib`, so it finds the bundled CUDA libraries relative to itself.
-
 ### Docker Services Reference
 
 The `src-tauri/docker-compose.cuda.yml` defines these services:
@@ -182,7 +159,6 @@ The `src-tauri/docker-compose.cuda.yml` defines these services:
 |---------|---------|---------|
 | `extract-cuda-libs` | One-time extraction of CUDA 12.8 runtime libs | `docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs` |
 | `build-dev` | Incremental dev builds with Cargo caching | `docker-compose -f docker-compose.cuda.yml run --rm build-dev` |
-| `build-cuda-static` | Standalone CLI with bundled CUDA libs | `docker-compose -f docker-compose.cuda.yml run --rm build-cuda-static` |
 | `bundle-cuda` | Full app bundles (.deb/.rpm/.AppImage) with CUDA | `docker-compose -f docker-compose.cuda.yml run --rm bundle-cuda` |
 
 ---
@@ -406,7 +382,6 @@ hermeneia/
 │   ├── Cargo.toml                 # Rust dependencies & feature flags
 │   ├── docker-compose.cuda.yml    # CUDA build services
 │   ├── Dockerfile.cuda-static     # Multi-stage CUDA build image
-│   ├── build-static-cuda.sh       # Standalone CLI distribution packaging
 │   └── tauri.cuda.conf.json       # Bundle config overlay for CUDA builds
 │
 ├── scripts/
