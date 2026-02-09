@@ -130,6 +130,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# appimagetool for post-processing AppImages (remove bundled libcuda stub)
+RUN curl -fsSL -o /usr/local/bin/appimagetool \
+    "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" && \
+    chmod +x /usr/local/bin/appimagetool
+
 # ============================================================================
 # Runtime stage: minimal image for testing the standalone CLI
 # ============================================================================
