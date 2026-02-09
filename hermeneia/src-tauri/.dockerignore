@@ -1,6 +1,9 @@
 # Rust build artifacts
 target/
+target-cuda/
+target-cuda-bundle/
 dist/
+cuda-bundles/
 **/*.rs.bk
 *.pdb
 

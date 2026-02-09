@@ -1,8 +1,12 @@
-# Dockerfile for building Hermeneia with bundled CUDA 12.8 libraries
-# Output: binary + lib/ folder with CUDA .so files
+# Dockerfile for building Hermeneia with CUDA 12.8
+# Multi-stage: base (toolchain) → builder (transcribe CLI) / bundler (full app bundles)
 # Only requires NVIDIA driver on host, NOT full CUDA toolkit
 
-FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS builder
+# ============================================================================
+# Base stage: CUDA toolkit + Rust + system deps + CUDA runtime libs
+# Used by: build-dev, and as foundation for builder and bundler stages
+# ============================================================================
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS base
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -72,9 +76,15 @@ COPY icons ./icons
 COPY capabilities ./capabilities
 COPY gen ./gen
 
-# Build with CUDA feature, using our bundled libraries
 # Add our lib directory to the library path during build
 ENV LD_LIBRARY_PATH=/build/lib:${LD_LIBRARY_PATH}
+
+# ============================================================================
+# Builder stage: builds standalone transcribe CLI with bundled CUDA libs
+# Used by: build-cuda-static service
+# ============================================================================
+FROM base AS builder
+
 RUN cargo build --release --features cuda --bin transcribe
 
 # Create distribution package with RPATH set
@@ -103,7 +113,26 @@ RUN mkdir -p /dist/lib && \
     echo "=== CUDA/NVIDIA dependencies ===" && \
     (LD_LIBRARY_PATH=/dist/lib ldd /dist/transcribe | grep -E "cuda|nvidia" || echo "No direct CUDA deps - may use driver API only")
 
-# Runtime stage - minimal image for testing
+# ============================================================================
+# Bundler stage: base + Node.js for tauri build (.deb/.rpm/.AppImage)
+# Used by: bundle-cuda service
+# ============================================================================
+FROM base AS bundler
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y \
+    nodejs \
+    # RPM bundling
+    rpm \
+    # AppImage bundling
+    libfuse2 \
+    file \
+    xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================================
+# Runtime stage: minimal image for testing the standalone CLI
+# ============================================================================
 FROM ubuntu:22.04 AS runtime
 
 # Only install NVIDIA driver stubs for testing

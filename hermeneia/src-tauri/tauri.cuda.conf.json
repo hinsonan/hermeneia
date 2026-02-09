@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/lib/hermeneia/libcudart.so.12": "cuda-libs/libcudart.so.12",
+          "/usr/lib/hermeneia/libcublas.so.12": "cuda-libs/libcublas.so.12",
+          "/usr/lib/hermeneia/libcublasLt.so.12": "cuda-libs/libcublasLt.so.12",
+          "/usr/lib/hermeneia/libnvrtc.so.12": "cuda-libs/libnvrtc.so.12",
+          "/usr/lib/hermeneia/libcurand.so.10": "cuda-libs/libcurand.so.10"
+        }
+      },
+      "appimage": {
+        "files": {
+          "usr/lib/libcudart.so.12": "cuda-libs/libcudart.so.12",
+          "usr/lib/libcublas.so.12": "cuda-libs/libcublas.so.12",
+          "usr/lib/libcublasLt.so.12": "cuda-libs/libcublasLt.so.12",
+          "usr/lib/libnvrtc.so.12": "cuda-libs/libnvrtc.so.12",
+          "usr/lib/libcurand.so.10": "cuda-libs/libcurand.so.10"
+        }
+      },
+      "rpm": {
+        "compression": {
+          "type": "none"
+        },
+        "files": {
+          "/usr/lib/hermeneia/libcudart.so.12": "cuda-libs/libcudart.so.12",
+          "/usr/lib/hermeneia/libcublas.so.12": "cuda-libs/libcublas.so.12",
+          "/usr/lib/hermeneia/libcublasLt.so.12": "cuda-libs/libcublasLt.so.12",
+          "/usr/lib/hermeneia/libnvrtc.so.12": "cuda-libs/libnvrtc.so.12",
+          "/usr/lib/hermeneia/libcurand.so.10": "cuda-libs/libcurand.so.10"
+        }
+      }
+    }
+  }
+}
