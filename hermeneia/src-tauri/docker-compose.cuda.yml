@@ -26,8 +26,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cuda-static
-      target: builder
-    image: hermeneia-cuda-dev:12.8
+      target: base
+    image: hermeneia-cuda-base:12.8
     volumes:
       # Mount source for incremental builds
       - ./src:/build/src
@@ -92,6 +92,55 @@ services:
         echo '   ./dist/transcribe --input audio.mp3'
       "
 
+  # Bundle Tauri app with CUDA as .deb, .rpm, .AppImage
+  # Usage: docker-compose -f docker-compose.cuda.yml run --rm bundle-cuda
+  bundle-cuda:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda-static
+      target: bundler
+    image: hermeneia-cuda-bundler:12.8
+    volumes:
+      # Mount full project (one level up from src-tauri)
+      - ..:/project
+      # Separate target dir so CUDA builds don't conflict with CPU builds
+      - cuda-bundle-target:/project/src-tauri/target
+      # Output bundles to host
+      - ./cuda-bundles:/cuda-bundles
+      # Cargo cache for faster rebuilds
+      - cargo-cache:/root/.cargo/registry
+      - cargo-git:/root/.cargo/git
+    working_dir: /project
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      - CUDA_COMPUTE_CAP=75
+      - NO_STRIP=true
+      # linuxdeploy can't use FUSE inside Docker, extract instead
+      - APPIMAGE_EXTRACT_AND_RUN=1
+      # Set RPATH so binary finds CUDA libs relative to itself:
+      #   ../lib/hermeneia/ for .deb/.rpm (binary at /usr/bin/, libs at /usr/lib/hermeneia/)
+      #   ../lib/ for .AppImage (binary at usr/bin/, libs at usr/lib/)
+      - RUSTFLAGS=-C link-args=-Wl,-rpath,$$ORIGIN/../lib/hermeneia:$$ORIGIN/../lib
+    command: |
+      sh -c "
+        echo '📦 Building CUDA bundles (.deb, .rpm, .AppImage)...' &&
+        echo '🔗 Creating libcuda.so.1 stub for linuxdeploy...' &&
+        ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
+        npm ci &&
+        npx tauri build --verbose --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
+        echo '' &&
+        echo '✅ Bundle complete! Copying to cuda-bundles/...' &&
+        rm -rf /cuda-bundles/* &&
+        cp -r /project/src-tauri/target/release/bundle/* /cuda-bundles/ &&
+        echo '' &&
+        echo '📦 Output:' &&
+        ls -lhR /cuda-bundles/
+      "
+
 volumes:
   cargo-cache:
   cargo-git:
+  cuda-bundle-target:
