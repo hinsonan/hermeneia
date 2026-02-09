@@ -15,6 +15,7 @@ services:
         cp -P /usr/local/cuda/lib64/libcublasLt.so* /output/ &&
         cp -P /usr/local/cuda/lib64/libnvrtc.so* /output/ &&
         cp -P /usr/local/cuda/lib64/libcurand.so* /output/ &&
+        cp -P /usr/local/cuda/lib64/libcufft.so* /output/ 2>/dev/null || true &&
         echo '' &&
         echo '✅ CUDA 12.8 libs extracted to cuda-libs/' &&
         ls -lh /output/
@@ -44,8 +45,6 @@ services:
       # Cargo cache for faster rebuilds
       - cargo-cache:/root/.cargo/registry
       - cargo-git:/root/.cargo/git
-    environment:
-      - CUDA_COMPUTE_CAP=75
     command: |
       sh -c "
         echo '🔨 Building Tauri app with CUDA...' &&
@@ -56,40 +55,6 @@ services:
         echo '' &&
         echo '🚀 To run:' &&
         echo '   LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/hermeneia'
-      "
-
-  # Build service - creates binary with bundled CUDA libraries
-  build-cuda-static:
-    build:
-      context: .
-      dockerfile: Dockerfile.cuda-static
-      target: builder
-    image: hermeneia-cuda-bundled:12.8
-    volumes:
-      # Extract distribution package (binary + lib/) to host
-      - ./dist:/dist-out
-      # Cache dependencies for faster rebuilds
-      - cargo-cache:/root/.cargo/registry
-      - cargo-git:/root/.cargo/git
-    command: |
-      sh -c "
-        echo '=== Copying distribution package to host ===' &&
-        rm -rf /dist-out/* &&
-        cp -r /dist/* /dist-out/ &&
-        echo '' &&
-        echo '✅ Build complete!' &&
-        echo '' &&
-        echo '📦 Output:' &&
-        echo '   Binary: ./dist/transcribe' &&
-        echo '   Libraries: ./dist/lib/' &&
-        echo '' &&
-        echo '📊 Package contents:' &&
-        ls -lh /dist-out/ &&
-        echo '' &&
-        ls -lh /dist-out/lib/ &&
-        echo '' &&
-        echo '🚀 To run (binary finds libs via RPATH):' &&
-        echo '   ./dist/transcribe --input audio.mp3'
       "
 
   # Bundle Tauri app with CUDA as .deb, .rpm, .AppImage
@@ -111,12 +76,7 @@ services:
       - cargo-cache:/root/.cargo/registry
       - cargo-git:/root/.cargo/git
     working_dir: /project
-    devices:
-      - /dev/fuse
-    cap_add:
-      - SYS_ADMIN
     environment:
-      - CUDA_COMPUTE_CAP=75
       - NO_STRIP=true
       # linuxdeploy can't use FUSE inside Docker, extract instead
       - APPIMAGE_EXTRACT_AND_RUN=1
