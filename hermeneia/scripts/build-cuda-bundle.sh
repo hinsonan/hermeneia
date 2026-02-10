@@ -10,6 +10,10 @@ if [ ! -d "src-tauri/cuda-libs" ] || [ -z "$(ls -A src-tauri/cuda-libs 2>/dev/nu
     echo ""
 fi
 
+# Pass host UID/GID so Docker can fix file ownership after build
+export HOST_UID=$(id -u)
+export HOST_GID=$(id -g)
+
 # Build the Docker image (bundler stage with Node.js), then run the bundle
 echo "Building CUDA bundles (.deb, .rpm, .AppImage)..."
 echo ""

@@ -45,6 +45,9 @@ services:
       # Cargo cache for faster rebuilds
       - cargo-cache:/root/.cargo/registry
       - cargo-git:/root/.cargo/git
+    environment:
+      - HOST_UID=${HOST_UID:-1000}
+      - HOST_GID=${HOST_GID:-1000}
     command: |
       sh -c "
         echo '🔨 Building Tauri app with CUDA...' &&
@@ -54,7 +57,10 @@ services:
         echo '📦 Binary: ./target-cuda/debug/hermeneia' &&
         echo '' &&
         echo '🚀 To run:' &&
-        echo '   LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/hermeneia'
+        echo '   LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/hermeneia' &&
+        echo '' &&
+        echo '🔧 Fixing file ownership...' &&
+        chown -R \$$HOST_UID:\$$HOST_GID /build/target 2>/dev/null || true
       "
 
   # Bundle Tauri app with CUDA as .deb, .rpm, .AppImage
@@ -84,6 +90,9 @@ services:
       #   ../lib/hermeneia/ for .deb/.rpm (binary at /usr/bin/, libs at /usr/lib/hermeneia/)
       #   ../lib/ for .AppImage (binary at usr/bin/, libs at usr/lib/)
       - RUSTFLAGS=-C link-args=-Wl,-rpath,$$ORIGIN/../lib/hermeneia:$$ORIGIN/../lib
+      # Host user's UID/GID so we can fix file ownership after build
+      - HOST_UID=${HOST_UID:-1000}
+      - HOST_GID=${HOST_GID:-1000}
     command: |
       sh -c "
         echo '📦 Building CUDA bundles (.deb, .rpm, .AppImage)...' &&
@@ -99,7 +108,10 @@ services:
         cp -r /project/src-tauri/target/release/bundle/* /cuda-bundles/ &&
         echo '' &&
         echo '📦 Output:' &&
-        ls -lhR /cuda-bundles/
+        ls -lhR /cuda-bundles/ &&
+        echo '' &&
+        echo '🔧 Fixing file ownership...' &&
+        chown -R \$$HOST_UID:\$$HOST_GID /project/node_modules /project/src-tauri/dist /cuda-bundles 2>/dev/null || true
       "
 
 volumes:
