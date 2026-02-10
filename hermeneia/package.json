@@ -10,7 +10,7 @@
     "dev:tauri:debug": "cross-env RUST_LOG=debug tauri dev",
     "dev:nvidia": "cross-env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
     "dev:nvidia:debug": "cross-env RUST_LOG=debug __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
-    "build:cuda": "cd src-tauri && docker-compose -f docker-compose.cuda.yml run --rm build-dev",
+    "build:cuda": "export HOST_UID=$(id -u) && export HOST_GID=$(id -g) && cd src-tauri && docker-compose -f docker-compose.cuda.yml run --rm build-dev",
     "build:cuda:bundle": "./scripts/build-cuda-bundle.sh",
     "dev:cuda": "./scripts/dev-cuda.sh",
     "build:cpu": "NO_STRIP=true tauri build",
