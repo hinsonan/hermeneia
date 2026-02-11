@@ -7,6 +7,10 @@
 		{
 			"name": "ml-research",
 			"path": "ml-research"
+		},
+		{
+			"name": "top_level",
+			"path": "."
 		}
 	],
 	"settings": {}

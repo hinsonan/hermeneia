@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermeneia-ml-research"
+version = "0.1.0"
+description = "ML research tools for Hermeneia translation app"
+authors = [
+    {name = "Hermeneia Team", email = "team@hermeneia.ai"}
+]
+dependencies = [
+    "toml>=0.10.2",
+    "requests>=2.31.0"
+]
+
+[project.scripts]
+update-marian-safetensors = "hermeneia_ml_research.scripts.update_marian_safetensors:main"
