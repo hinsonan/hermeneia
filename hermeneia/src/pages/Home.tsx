@@ -113,11 +113,9 @@ const Home: Component = () => {
 
           {/* Introduction */}
           <p class="intro">
-            <span class="drop-cap">P</span>reserve and share the sacred word with clarity and precision.
-            Hermeneia brings together powerful tools for transcribing sermons,
-            translating scripture, and preparing audio for distribution—all
-            running locally on your machine, respecting both your privacy and
-            the sanctity of the message.
+            <span class="drop-cap">T</span>ranscribe and translate sermons with clarity.
+            Powerful local tools for turning spoken word into text and
+            bridging languages—all on your machine, fully private.
           </p>
 
           {/* Feature Cards */}

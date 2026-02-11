@@ -11,11 +11,14 @@ Transcribe and translate sermons, teachings, and documents entirely on your comp
 ```
 Hermeneia/
 ├── LICENSE              # GNU Affero General Public License v3.0
-└── hermeneia/          # Main application folder
-    ├── src/            # Frontend (SolidJS + TypeScript)
-    ├── src-tauri/      # Backend (Rust + Tauri 2)
-    ├── package.json    # Node dependencies & scripts
-    └── README.md       # Installation & usage guide
+├── hermeneia/           # Main application folder
+│   ├── src/             # Frontend (SolidJS + TypeScript)
+│   ├── src-tauri/       # Backend (Rust + Tauri 2)
+│   ├── scripts/         # Build & packaging scripts
+│   ├── package.json     # Node dependencies & scripts
+│   └── README.md        # Installation & usage guide
+└── ml-research/         # Python workspace for model evaluation
+    └── src/             # Safetensors conversion & model scripts
 ```
 
 ### What is the `hermeneia/` folder?
@@ -23,7 +26,11 @@ Hermeneia/
 The `hermeneia/` directory contains the complete application:
 - **Frontend**: SolidJS-based UI for audio editing, transcription, and translation
 - **Backend**: Rust-powered audio and AI processing with GPU acceleration
-- **Privacy-first**: All processing happens locally—Windows and Linux builds available
+- **Privacy-first**: All processing happens locally — Windows and Linux builds available
+
+### What is the `ml-research/` folder?
+
+Python workspace for evaluating and converting ML models (e.g. safetensors conversion for MarianMT). Not required to run the app.
 
 See `hermeneia/README.md` for installation and usage instructions.
 
@@ -32,28 +39,29 @@ See `hermeneia/README.md` for installation and usage instructions.
 ## 🗺️ Development Roadmap (MVP)
 
 ### ✅ Phase 1: Audio Processing (Complete)
-Complete high-performance audio processing engine with streaming playback
+High-performance audio processing engine with streaming playback
 - Multi-format audio support (MP3, FLAC, WAV, OGG, AAC)
 - Real-time waveform visualization
 - Audio playback with full controls (play, pause, seek)
-- fast audio trimming
+- Fast audio trimming
 - GPU optimization for Linux NVIDIA
-- Complete audio editor UI with dark mode
+- Audio editor UI with dark mode
 
-### ✅ Phase 2: Transcription
+### ✅ Phase 2: Transcription (Complete)
 Convert sermon audio to text using local AI models
 - Local speech-to-text engine with GPU acceleration
 - Word-level timestamps for precise editing
 - Export to multiple formats (TXT, SRT)
+- Cancellable inference with real-time progress
 
-### ☐ Phase 3: Translation
+### ✅ Phase 3: Translation (Complete)
 Translate transcriptions to multiple languages offline
-- Local translation model integration
-- Side-by-side editor for source and translation
-- English ↔ Greek as primary language pair
-- Custom theological terminology glossary
-- Translation memory for consistency
-- Review tools with revision history
+- Local translation engine using MarianMT models via candle-transformers
+- 50+ language pairs supported via curated model catalog
+- Translation UI with language selection, progress display, and cancellation
+- Subtitle/segment-aware translation preserving timestamps
+- CLI binary for standalone translation testing
+- CUDA and Metal feature flags for GPU acceleration
 
 ### ☐ Phase 4: Deployment & Distribution
 Package and distribute application for Windows and Linux
