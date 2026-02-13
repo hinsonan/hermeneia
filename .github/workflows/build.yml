@@ -171,11 +171,12 @@ jobs:
               cp /build/lib/libcurand.so.10 src-tauri/cuda-libs/ &&
               npm ci &&
               npx tauri build --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
-              sh /project/hermeneia/scripts/fix-appimage-cuda.sh
+              sh /project/hermeneia/scripts/fix-appimage-cuda.sh /project/hermeneia/src-tauri/target/release/bundle/appimage
             '
 
       - name: Rename CUDA artifacts
         run: |
+          sudo chown -R $(id -u):$(id -g) src-tauri/target/release/bundle
           cd src-tauri/target/release/bundle
           # Rename deb
           for f in deb/*.deb; do
