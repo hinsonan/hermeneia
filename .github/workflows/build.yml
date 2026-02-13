@@ -9,6 +9,10 @@ on:
         description: 'Only build CUDA variants (for testing)'
         type: boolean
         default: false
+      use_sccache:
+        description: 'Use sccache to speed up Rust compilation'
+        type: boolean
+        default: true
       build_cuda:
         description: 'Build CUDA variants'
         type: boolean
@@ -51,6 +55,10 @@ jobs:
         with:
           workspaces: hermeneia/src-tauri
 
+      - name: Set up sccache
+        if: inputs.use_sccache != false
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -83,9 +91,27 @@ jobs:
       - name: Free disk space
         working-directory: .
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/go \
+            /opt/hostedtoolcache/Ruby \
+            /opt/hostedtoolcache/Java* \
+            /opt/hostedtoolcache/PyPy \
+            /opt/hostedtoolcache/node \
+            /usr/local/share/chromium \
+            /usr/local/share/powershell \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /usr/lib/google-cloud-sdk \
+            /usr/lib/jvm \
+            /usr/lib/mono \
+            /usr/lib/heroku
           sudo docker image prune --all --force
+          sudo apt-get clean
           df -h /
 
       - uses: actions/checkout@v4
@@ -106,6 +132,10 @@ jobs:
           key: cargo-docker-${{ hashFiles('hermeneia/src-tauri/Cargo.lock') }}
           restore-keys: cargo-docker-
 
+      - name: Set up sccache
+        if: inputs.use_sccache != false
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - name: Build Docker image
         working-directory: hermeneia/src-tauri
         run: |
@@ -122,6 +152,13 @@ jobs:
       - name: Build CUDA bundles in Docker
         run: |
           mkdir -p ~/.cargo-docker-cache/registry ~/.cargo-docker-cache/git
+
+          SCCACHE_ARGS=""
+          SCCACHE_PATH=$(which sccache 2>/dev/null || true)
+          if [ -n "$SCCACHE_PATH" ]; then
+            SCCACHE_ARGS="-v ${SCCACHE_PATH}:/usr/local/bin/sccache:ro -e RUSTC_WRAPPER=sccache -e SCCACHE_GHA_ENABLED=true -e ACTIONS_CACHE_URL -e ACTIONS_RUNTIME_TOKEN"
+          fi
+
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/project" \
             -v "$HOME/.cargo-docker-cache/registry:/root/.cargo/registry" \
@@ -130,6 +167,7 @@ jobs:
             -e NO_STRIP=true \
             -e APPIMAGE_EXTRACT_AND_RUN=1 \
             -e "RUSTFLAGS=-C link-args=-Wl,-rpath,\$ORIGIN/../lib/hermeneia:\$ORIGIN/../lib" \
+            $SCCACHE_ARGS \
             hermeneia-cuda-bundler:12.8 \
             sh -c '
               ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
@@ -210,6 +248,10 @@ jobs:
         with:
           workspaces: hermeneia/src-tauri
 
+      - name: Set up sccache
+        if: inputs.use_sccache != false
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - run: npm ci
 
       - name: Build Tauri (CPU)
@@ -242,6 +284,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: hermeneia/src-tauri
+
+      - name: Set up sccache
+        if: inputs.use_sccache != false
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
@@ -317,6 +363,10 @@ jobs:
         with:
           workspaces: hermeneia/src-tauri
 
+      - name: Set up sccache
+        if: inputs.use_sccache != false
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - run: npm ci
 
       - name: Build Tauri (Intel)
@@ -348,6 +398,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: hermeneia/src-tauri
+
+      - name: Set up sccache
+        if: inputs.use_sccache != false
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - run: npm ci
 
