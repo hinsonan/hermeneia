@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "cuda-libs/cudart64_*.dll": "./",
+      "cuda-libs/cublas64_*.dll": "./",
+      "cuda-libs/cublasLt64_*.dll": "./",
+      "cuda-libs/nvrtc64_*.dll": "./",
+      "cuda-libs/curand64_*.dll": "./"
+    }
+  }
+}
