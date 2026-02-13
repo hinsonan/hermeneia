@@ -133,6 +133,12 @@ jobs:
             hermeneia-cuda-bundler:12.8 \
             sh -c '
               ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
+              mkdir -p src-tauri/cuda-libs &&
+              cp /build/lib/libcudart.so.12 src-tauri/cuda-libs/ &&
+              cp /build/lib/libcublas.so.12 src-tauri/cuda-libs/ &&
+              cp /build/lib/libcublasLt.so.12 src-tauri/cuda-libs/ &&
+              cp /build/lib/libnvrtc.so.12 src-tauri/cuda-libs/ &&
+              cp /build/lib/libcurand.so.10 src-tauri/cuda-libs/ &&
               npm ci &&
               npx tauri build --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
               sh /project/hermeneia/scripts/fix-appimage-cuda.sh
@@ -255,6 +261,8 @@ jobs:
           Copy-Item "$env:CUDA_PATH\bin\curand64_*.dll" "src-tauri\cuda-libs\"
           Write-Host "CUDA DLLs copied:"
           Get-ChildItem src-tauri/cuda-libs/
+
+      - uses: ilammy/msvc-dev-cmd@v1
 
       - run: npm ci
 
