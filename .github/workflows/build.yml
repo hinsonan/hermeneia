@@ -5,16 +5,17 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      cuda_only:
-        description: 'Only build CUDA variants (for testing)'
-        type: boolean
-        default: false
+      build_target:
+        description: 'What to build'
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - cuda-both
+          - cuda-linux
+          - cuda-windows
       use_sccache:
         description: 'Use sccache to speed up Rust compilation'
-        type: boolean
-        default: true
-      build_cuda:
-        description: 'Build CUDA variants'
         type: boolean
         default: true
       build_metal:
@@ -42,7 +43,7 @@ jobs:
   # ===========================================================================
   linux-cpu:
     runs-on: ubuntu-22.04
-    if: inputs.cuda_only != true
+    if: inputs.build_target == 'all' || inputs.build_target == ''
     steps:
       - uses: actions/checkout@v4
 
@@ -89,7 +90,7 @@ jobs:
   linux-cuda:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_cuda == true
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_target == 'all' || inputs.build_target == 'cuda-both' || inputs.build_target == 'cuda-linux'
     steps:
       - name: Free disk space
         working-directory: .
@@ -135,10 +136,6 @@ jobs:
           key: cargo-docker-${{ hashFiles('hermeneia/src-tauri/Cargo.lock') }}
           restore-keys: cargo-docker-
 
-      - name: Set up sccache
-        if: inputs.use_sccache != false
-        uses: mozilla-actions/sccache-action@v0.0.7
-
       - name: Build Docker image
         working-directory: hermeneia/src-tauri
         run: |
@@ -155,13 +152,6 @@ jobs:
       - name: Build CUDA bundles in Docker
         run: |
           mkdir -p ~/.cargo-docker-cache/registry ~/.cargo-docker-cache/git
-
-          SCCACHE_ARGS=""
-          SCCACHE_PATH=$(which sccache 2>/dev/null || true)
-          if [ -n "$SCCACHE_PATH" ]; then
-            SCCACHE_ARGS="-v ${SCCACHE_PATH}:/usr/local/bin/sccache:ro -e RUSTC_WRAPPER=sccache -e SCCACHE_GHA_ENABLED=true -e SCCACHE_IGNORE_SERVER_IO_ERROR=1 -e ACTIONS_CACHE_URL -e ACTIONS_RUNTIME_TOKEN"
-          fi
-
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/project" \
             -v "$HOME/.cargo-docker-cache/registry:/root/.cargo/registry" \
@@ -170,7 +160,6 @@ jobs:
             -e NO_STRIP=true \
             -e APPIMAGE_EXTRACT_AND_RUN=1 \
             -e "RUSTFLAGS=-C link-args=-Wl,-rpath,\$ORIGIN/../lib/hermeneia:\$ORIGIN/../lib" \
-            $SCCACHE_ARGS \
             hermeneia-cuda-bundler:12.8 \
             sh -c '
               ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
@@ -235,7 +224,7 @@ jobs:
   # ===========================================================================
   windows-cpu:
     runs-on: windows-latest
-    if: inputs.cuda_only != true
+    if: inputs.build_target == 'all' || inputs.build_target == ''
     steps:
       - uses: actions/checkout@v4
 
@@ -272,7 +261,7 @@ jobs:
   windows-cuda:
     runs-on: windows-latest
     timeout-minutes: 120
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_cuda == true
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_target == 'all' || inputs.build_target == 'cuda-both' || inputs.build_target == 'cuda-windows'
     steps:
       - uses: actions/checkout@v4
 
@@ -350,7 +339,7 @@ jobs:
   # ===========================================================================
   macos-intel:
     runs-on: macos-15-intel
-    if: inputs.cuda_only != true
+    if: inputs.build_target == 'all' || inputs.build_target == ''
     steps:
       - uses: actions/checkout@v4
 
@@ -386,7 +375,7 @@ jobs:
   # ===========================================================================
   macos-arm-metal:
     runs-on: macos-latest
-    if: (startsWith(github.ref, 'refs/tags/v') || inputs.build_metal == true) && inputs.cuda_only != true
+    if: (startsWith(github.ref, 'refs/tags/v') || inputs.build_metal == true) && (inputs.build_target == 'all' || inputs.build_target == '')
     steps:
       - uses: actions/checkout@v4
 
