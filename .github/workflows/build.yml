@@ -5,6 +5,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
+      cuda_only:
+        description: 'Only build CUDA variants (for testing)'
+        type: boolean
+        default: false
       build_cuda:
         description: 'Build CUDA variants'
         type: boolean
@@ -31,6 +35,7 @@ jobs:
   # ===========================================================================
   linux-cpu:
     runs-on: ubuntu-22.04
+    if: inputs.cuda_only != true
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +80,13 @@ jobs:
     timeout-minutes: 120
     if: startsWith(github.ref, 'refs/tags/v') || inputs.build_cuda == true
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
@@ -175,6 +187,7 @@ jobs:
   # ===========================================================================
   windows-cpu:
     runs-on: windows-latest
+    if: inputs.cuda_only != true
     steps:
       - uses: actions/checkout@v4
 
@@ -224,7 +237,7 @@ jobs:
           workspaces: hermeneia/src-tauri
 
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@v0.2.19
+        uses: Jimver/cuda-toolkit@v0.2.30
         with:
           cuda: '12.8.0'
           method: 'network'
@@ -279,6 +292,7 @@ jobs:
   # ===========================================================================
   macos-intel:
     runs-on: macos-15-intel
+    if: inputs.cuda_only != true
     steps:
       - uses: actions/checkout@v4
 
@@ -310,7 +324,7 @@ jobs:
   # ===========================================================================
   macos-arm-metal:
     runs-on: macos-latest
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.build_metal == true
+    if: (startsWith(github.ref, 'refs/tags/v') || inputs.build_metal == true) && inputs.cuda_only != true
     steps:
       - uses: actions/checkout@v4
 
