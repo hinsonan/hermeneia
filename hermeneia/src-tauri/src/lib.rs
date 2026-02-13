@@ -228,6 +228,67 @@ async fn validate_model_selection(
 // Text Translation Commands
 // ============================================================================
 
+/// Split plain text into translation-friendly chunks.
+/// Splits on paragraph boundaries first, then sentences if paragraphs are too long.
+fn split_text_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+
+    for paragraph in text.split("\n\n") {
+        let trimmed = paragraph.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.len() <= max_chars {
+            chunks.push(trimmed.to_string());
+        } else {
+            // Split long paragraphs on sentence boundaries (". ", "! ", "? ")
+            // We split by finding sentence-ending punctuation followed by a space,
+            // which avoids breaking on ellipses, abbreviations, etc.
+            let mut current = String::new();
+            let mut rest = trimmed;
+            while !rest.is_empty() {
+                // Find the next sentence boundary: punctuation followed by a space
+                let split_pos = rest
+                    .char_indices()
+                    .skip(1) // don't split at pos 0
+                    .find(|&(i, c)| {
+                        (c == ' ' || c == '\n')
+                            && i > 0
+                            && matches!(rest.as_bytes().get(i - 1), Some(b'.' | b'!' | b'?'))
+                    })
+                    .map(|(i, _)| i);
+
+                let sentence = match split_pos {
+                    Some(pos) => {
+                        let (s, remainder) = rest.split_at(pos);
+                        rest = remainder.trim_start();
+                        s
+                    }
+                    None => {
+                        let s = rest;
+                        rest = "";
+                        s
+                    }
+                };
+
+                if !current.is_empty() && current.len() + sentence.len() + 1 > max_chars {
+                    chunks.push(current.trim().to_string());
+                    current = String::new();
+                }
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(sentence);
+            }
+            if !current.trim().is_empty() {
+                chunks.push(current.trim().to_string());
+            }
+        }
+    }
+
+    chunks
+}
+
 /// Result of a text file translation
 #[derive(serde::Serialize)]
 pub struct TextTranslationResult {
@@ -341,18 +402,37 @@ async fn translate_text_file(
             let translated_srt = srt_file.with_translated_text(translated_texts);
             (translated_srt.render(), model_used.display_name().to_string(), total_segments)
         } else {
-            // Plain text file - translate as a single block
-            let _ = app_handle.emit("translation-progress", serde_json::json!({
-                "phase": "translating",
-                "current": 1,
-                "total": 1,
-                "message": "Translating text..."
-            }));
+            // Plain text file - split into chunks and batch translate
+            // Keep chunks small (~125 tokens ≈ 500 chars) to match the scale
+            // that Marian models handle well (similar to SRT subtitle segments).
+            // Longer inputs cause quality degradation and hallucination.
+            let chunks = split_text_into_chunks(&content, 500);
+            let total_chunks = chunks.len();
 
-            let result = translate::translate_text_with_progress(&content, params, None, Some(cancel_flag))
-                .map_err(|e| format!("Translation failed: {}", e))?;
+            let app_handle_clone = app_handle.clone();
+            let progress_callback: translate::BatchProgressCallback =
+                Box::new(move |current, total, _text| {
+                    let _ = app_handle_clone.emit(
+                        "translation-progress",
+                        serde_json::json!({
+                            "phase": "translating",
+                            "current": current,
+                            "total": total,
+                            "message": format!("Translating chunk {} of {}", current, total)
+                        }),
+                    );
+                });
 
-            (result.translated_text, result.model_used.display_name().to_string(), 1)
+            let (translated_chunks, model_used, _time) = translate::translate_texts_batch(
+                &chunks,
+                params,
+                Some(progress_callback),
+                Some(cancel_flag),
+            )
+            .map_err(|e| format!("Translation failed: {}", e))?;
+
+            let translated_text = translated_chunks.join("\n\n");
+            (translated_text, model_used.display_name().to_string(), total_chunks)
         };
 
         let inference_time = start_time.elapsed().as_secs_f64();
