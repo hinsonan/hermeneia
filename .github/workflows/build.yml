@@ -29,6 +29,9 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+
 defaults:
   run:
     working-directory: hermeneia
@@ -156,7 +159,7 @@ jobs:
           SCCACHE_ARGS=""
           SCCACHE_PATH=$(which sccache 2>/dev/null || true)
           if [ -n "$SCCACHE_PATH" ]; then
-            SCCACHE_ARGS="-v ${SCCACHE_PATH}:/usr/local/bin/sccache:ro -e RUSTC_WRAPPER=sccache -e SCCACHE_GHA_ENABLED=true -e ACTIONS_CACHE_URL -e ACTIONS_RUNTIME_TOKEN"
+            SCCACHE_ARGS="-v ${SCCACHE_PATH}:/usr/local/bin/sccache:ro -e RUSTC_WRAPPER=sccache -e SCCACHE_GHA_ENABLED=true -e SCCACHE_IGNORE_SERVER_IO_ERROR=1 -e ACTIONS_CACHE_URL -e ACTIONS_RUNTIME_TOKEN"
           fi
 
           docker run --rm \
