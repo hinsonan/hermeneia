@@ -8,7 +8,6 @@ use crate::transcribe::{
     types::{ModelFiles, ProgressCallback, ProgressReporter, TranscribeParams, TranscriptResult},
 };
 use candle_core::Device;
-use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as m, Config};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -49,71 +48,79 @@ pub fn transcribe_audio_with_progress(
     let device = get_device(params.force_cpu)?;
     tracing::info!("Using device: {}", device_name(&device));
 
-    // Load model and tokenizer
-    let (config, tokenizer, mut model) = load_model(&model_files, &device)
-        .map_err(|e| enrich_oom_error(e, params.model))?;
+    // Scope model lifetime so GPU memory is freed before building result
+    let (segments, text) = {
+        // Load model and tokenizer
+        let (config, tokenizer, mut model) = load_model(&model_files, &device)
+            .map_err(|e| enrich_oom_error(e, params.model))?;
 
-    // Preprocess to mel-spectrogram (needs config for mel bins)
-    let mel = preprocess_audio(&audio_data, &config, &device)?;
+        // Preprocess to mel-spectrogram (needs config for mel bins)
+        let mel = preprocess_audio(&audio_data, &config, &device)?;
 
-    // Detect language if not specified and model is multilingual
-    let language_token = match (params.model.is_multilingual(), &params.language) {
-        (true, None) => {
-            tracing::info!("Auto-detecting language...");
-            Some(detect_language(&mut model, &tokenizer, &mel, &device)?)
-        }
-        (false, None) => None,
-        (true, Some(lang)) => {
-            let token = tokenizer
-                .token_to_id(&format!("<|{lang}|>"))
-                .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
-            Some(token)
-        }
-        (false, Some(lang)) => {
-            // English-only models don't support language selection - ignore and continue
-            tracing::warn!(
-                "Ignoring language '{}' for English-only model; these models only support English",
-                lang
+        // Detect language if not specified and model is multilingual
+        let language_token = match (params.model.is_multilingual(), &params.language) {
+            (true, None) => {
+                tracing::info!("Auto-detecting language...");
+                Some(detect_language(&mut model, &tokenizer, &mel, &device)?)
+            }
+            (false, None) => None,
+            (true, Some(lang)) => {
+                let token = tokenizer
+                    .token_to_id(&format!("<|{lang}|>"))
+                    .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
+                Some(token)
+            }
+            (false, Some(lang)) => {
+                // English-only models don't support language selection - ignore and continue
+                tracing::warn!(
+                    "Ignoring language '{}' for English-only model; these models only support English",
+                    lang
+                );
+                None
+            }
+        };
+
+        // Run inference with full decoder
+        let mut params_with_token = params.clone();
+        params_with_token.language = None; // Clear language string, we'll use token directly
+        let mut decoder = Decoder::new_with_language_token(
+            &mut model,
+            &tokenizer,
+            &config,
+            &device,
+            &params_with_token,
+            language_token,
+        )?;
+        let raw_segments = decoder.run(&mel, progress_callback, None)?;
+
+        // Debug logging
+        tracing::info!("Raw segments count: {}", raw_segments.len());
+        for (i, seg) in raw_segments.iter().enumerate() {
+            tracing::info!(
+                "Raw segment {}: start={:.2}s, text='{}', tokens={:?}",
+                i, seg.start, seg.dr.text, seg.dr.tokens
             );
-            None
         }
+
+        let segments = decoder.extract_segments(raw_segments);
+
+        tracing::info!("Extracted segments count: {}", segments.len());
+        for seg in &segments {
+            tracing::info!("Extracted segment {}: text='{}'", seg.id, seg.text);
+        }
+
+        let text = segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Sync GPU before model/mel/decoder drop at end of scope
+        crate::gpu_cleanup::synchronize_device(&device);
+        tracing::info!("Model resources released from {}", device_name(&device));
+
+        (segments, text)
     };
-
-    // Run inference with full decoder
-    let mut params_with_token = params.clone();
-    params_with_token.language = None; // Clear language string, we'll use token directly
-    let mut decoder = Decoder::new_with_language_token(
-        &mut model,
-        &tokenizer,
-        &config,
-        &device,
-        &params_with_token,
-        language_token,
-    )?;
-    let raw_segments = decoder.run(&mel, progress_callback, None)?;
-
-    // Debug logging
-    tracing::info!("Raw segments count: {}", raw_segments.len());
-    for (i, seg) in raw_segments.iter().enumerate() {
-        tracing::info!(
-            "Raw segment {}: start={:.2}s, text='{}', tokens={:?}",
-            i, seg.start, seg.dr.text, seg.dr.tokens
-        );
-    }
-
-    let segments = decoder.extract_segments(raw_segments);
-
-    tracing::info!("Extracted segments count: {}", segments.len());
-    for seg in &segments {
-        tracing::info!("Extracted segment {}: text='{}'", seg.id, seg.text);
-    }
-
-    // Build result
-    let text = segments
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
 
     Ok(TranscriptResult {
         segments,
@@ -160,83 +167,91 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     let device = get_device(params.force_cpu)?;
     tracing::info!("Using device: {}", device_name(&device));
 
-    // Load model and tokenizer
-    let (config, tokenizer, mut model) = load_model(&model_files, &device)
-        .map_err(|e| enrich_oom_error(e, params.model))?;
+    // Scope model lifetime so GPU memory is freed before building result
+    let (segments, text) = {
+        // Load model and tokenizer
+        let (config, tokenizer, mut model) = load_model(&model_files, &device)
+            .map_err(|e| enrich_oom_error(e, params.model))?;
 
-    // Check for cancellation after model load
-    if let Some(ref flag) = cancel_flag {
-        if flag.load(Ordering::SeqCst) {
-            return Err(AudioError::Cancelled);
+        // Check for cancellation after model load
+        if let Some(ref flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return Err(AudioError::Cancelled);
+            }
         }
-    }
 
-    // Preprocess to mel-spectrogram (needs config for mel bins)
-    let mel = preprocess_audio(&audio_data, &config, &device)?;
+        // Preprocess to mel-spectrogram (needs config for mel bins)
+        let mel = preprocess_audio(&audio_data, &config, &device)?;
 
-    // Check for cancellation after preprocessing
-    if let Some(ref flag) = cancel_flag {
-        if flag.load(Ordering::SeqCst) {
-            return Err(AudioError::Cancelled);
+        // Check for cancellation after preprocessing
+        if let Some(ref flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return Err(AudioError::Cancelled);
+            }
         }
-    }
 
-    // Detect language if not specified and model is multilingual
-    let language_token = match (params.model.is_multilingual(), &params.language) {
-        (true, None) => {
-            tracing::info!("Auto-detecting language...");
-            Some(detect_language(&mut model, &tokenizer, &mel, &device)?)
-        }
-        (false, None) => None,
-        (true, Some(lang)) => {
-            let token = tokenizer
-                .token_to_id(&format!("<|{lang}|>"))
-                .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
-            Some(token)
-        }
-        (false, Some(lang)) => {
-            // English-only models don't support language selection - ignore and continue
-            tracing::warn!(
-                "Ignoring language '{}' for English-only model; these models only support English",
-                lang
-            );
-            None
-        }
+        // Detect language if not specified and model is multilingual
+        let language_token = match (params.model.is_multilingual(), &params.language) {
+            (true, None) => {
+                tracing::info!("Auto-detecting language...");
+                Some(detect_language(&mut model, &tokenizer, &mel, &device)?)
+            }
+            (false, None) => None,
+            (true, Some(lang)) => {
+                let token = tokenizer
+                    .token_to_id(&format!("<|{lang}|>"))
+                    .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
+                Some(token)
+            }
+            (false, Some(lang)) => {
+                // English-only models don't support language selection - ignore and continue
+                tracing::warn!(
+                    "Ignoring language '{}' for English-only model; these models only support English",
+                    lang
+                );
+                None
+            }
+        };
+
+        // Use raw pointer to avoid lifetime issues with the closure
+        let reporter_ptr = reporter as *const P as usize;
+
+        let callback: ProgressCallback = Box::new(move |current, total| {
+            unsafe {
+                let reporter_ref = &*(reporter_ptr as *const P);
+                reporter_ref.report(current, total);
+            }
+        });
+
+        // Run inference with full decoder
+        let mut params_with_token = params.clone();
+        params_with_token.language = None;
+        let mut decoder = Decoder::new_with_language_token(
+            &mut model,
+            &tokenizer,
+            &config,
+            &device,
+            &params_with_token,
+            language_token,
+        )?;
+        let raw_segments = decoder.run(&mel, Some(callback), cancel_flag)?;
+        let segments = decoder.extract_segments(raw_segments);
+
+        // Signal completion
+        reporter.finish();
+
+        let text = segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Sync GPU before model/mel/decoder drop at end of scope
+        crate::gpu_cleanup::synchronize_device(&device);
+        tracing::info!("Model resources released from {}", device_name(&device));
+
+        (segments, text)
     };
-
-    // Use raw pointer to avoid lifetime issues with the closure
-    let reporter_ptr = reporter as *const P as usize;
-
-    let callback: ProgressCallback = Box::new(move |current, total| {
-        unsafe {
-            let reporter_ref = &*(reporter_ptr as *const P);
-            reporter_ref.report(current, total);
-        }
-    });
-
-    // Run inference with full decoder
-    let mut params_with_token = params.clone();
-    params_with_token.language = None;
-    let mut decoder = Decoder::new_with_language_token(
-        &mut model,
-        &tokenizer,
-        &config,
-        &device,
-        &params_with_token,
-        language_token,
-    )?;
-    let raw_segments = decoder.run(&mel, Some(callback), cancel_flag)?;
-    let segments = decoder.extract_segments(raw_segments);
-
-    // Signal completion
-    reporter.finish();
-
-    // Build result
-    let text = segments
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
 
     Ok(TranscriptResult {
         segments,
@@ -282,69 +297,12 @@ fn load_model(
         }
     })?;
 
-    // Load model weights
-    let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[files.weights.clone()], m::DTYPE, device)
-            .map_err(|e| {
-                let err_str = e.to_string();
-                // Detect OOM errors from various sources
-                if err_str.contains("out of memory")
-                    || err_str.contains("OutOfMemory")
-                    || err_str.contains("OOM")
-                    || err_str.contains("CUDA_ERROR_OUT_OF_MEMORY")
-                    || err_str.contains("failed to allocate")
-                    || err_str.contains("Cannot allocate memory") {
+    // Load model weights (platform-safe: buffered on Windows, mmap on Linux/macOS)
+    let vb = crate::gpu_cleanup::load_safetensors_varbuilder(&files.weights, m::DTYPE, device)
+        .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, "weights"))?;
 
-                    let device_name = match device {
-                        Device::Cuda(_) => "VRAM",
-                        Device::Metal(_) => "Unified Memory",
-                        Device::Cpu => "RAM",
-                    };
-
-                    AudioError::OutOfMemory {
-                        message: format!("Failed to load model into {}. The model is too large for your system.", device_name),
-                        device: device_name.to_string(),
-                        required_gb: 0.0, // Will be filled by caller if available
-                        model_name: "unknown".to_string(),
-                    }
-                } else {
-                    AudioError::ModelLoad {
-                        model: "weights".to_string(),
-                        details: e.to_string(),
-                    }
-                }
-            })?
-    };
-
-    let model = m::model::Whisper::load(&vb, config.clone()).map_err(|e| {
-        let err_str = e.to_string();
-        // Detect OOM during model construction
-        if err_str.contains("out of memory")
-            || err_str.contains("OutOfMemory")
-            || err_str.contains("OOM")
-            || err_str.contains("CUDA_ERROR_OUT_OF_MEMORY")
-            || err_str.contains("failed to allocate")
-            || err_str.contains("Cannot allocate memory") {
-
-            let device_name = match device {
-                Device::Cuda(_) => "VRAM",
-                Device::Metal(_) => "Unified Memory",
-                Device::Cpu => "RAM",
-            };
-
-            AudioError::OutOfMemory {
-                message: format!("Failed to initialize model in {}. The model is too large for your system.", device_name),
-                device: device_name.to_string(),
-                required_gb: 0.0,
-                model_name: "unknown".to_string(),
-            }
-        } else {
-            AudioError::ModelLoad {
-                model: "model".to_string(),
-                details: e.to_string(),
-            }
-        }
-    })?;
+    let model = m::model::Whisper::load(&vb, config.clone())
+        .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, device, "whisper"))?;
 
     Ok((config, tokenizer, model))
 }
