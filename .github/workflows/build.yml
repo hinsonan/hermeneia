@@ -27,8 +27,9 @@ on:
         type: boolean
         default: false
       release_tag:
-        description: 'Release tag (e.g. v0.1.0) — required if create_release is checked'
+        description: 'Release tag (e.g. v0.1.0)'
         type: string
+        default: 'v0.0.0-test'
 
 permissions:
   contents: write
@@ -428,14 +429,6 @@ jobs:
         working-directory: .
     steps:
       - uses: actions/checkout@v4
-
-      - name: Validate release tag
-        if: inputs.create_release == true
-        run: |
-          if [ -z "${{ inputs.release_tag }}" ]; then
-            echo "::error::release_tag is required when create_release is checked"
-            exit 1
-          fi
 
       - uses: actions/download-artifact@v4
         with:
