@@ -75,55 +75,65 @@ pub fn translate_text_with_progress(
     let device = get_device(params.force_cpu)?;
     tracing::info!("Using device: {}", device_name(&device));
 
-    // 3. Load model and tokenizer
-    let (tokenizer, mut model) = load_model(&model_files, selected_model, &device)?;
+    // Scope model lifetime so GPU memory is freed before building result
+    let (translated_text, token_count) = {
+        // 3. Load model and tokenizer
+        let (tokenizer, mut model) = load_model(&model_files, selected_model, &device)?;
 
-    // Check for cancellation after model load
-    if let Some(ref flag) = cancel_flag {
-        if flag.load(Ordering::SeqCst) {
-            return Err(AudioError::Cancelled);
+        // Check for cancellation after model load
+        if let Some(ref flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return Err(AudioError::Cancelled);
+            }
         }
-    }
 
-    // 4. Tokenize input
-    let input_ids = tokenizer.encode(text, &params.source_language, &params.target_language)?;
+        // 4. Tokenize input
+        let input_ids = tokenizer.encode(text, &params.source_language, &params.target_language)?;
 
-    tracing::info!("Input tokenized: {} tokens", input_ids.len());
-    tracing::debug!("Input token IDs: {:?}", input_ids);
+        tracing::info!("Input tokenized: {} tokens", input_ids.len());
+        tracing::debug!("Input token IDs: {:?}", input_ids);
 
-    // Check for cancellation before generation
-    if let Some(ref flag) = cancel_flag {
-        if flag.load(Ordering::SeqCst) {
-            return Err(AudioError::Cancelled);
+        // Check for cancellation before generation
+        if let Some(ref flag) = cancel_flag {
+            if flag.load(Ordering::SeqCst) {
+                return Err(AudioError::Cancelled);
+            }
         }
-    }
 
-    // 5. Generate translation
-    let (output_ids, decoder_start_token_id) = generate_translation(
-        &mut model,
-        &input_ids,
-        &params,
-        &device,
-        progress_callback.as_ref(),
-        cancel_flag.as_ref(),
-    )?;
+        // 5. Generate translation
+        let (output_ids, decoder_start_token_id) = generate_translation(
+            &mut model,
+            &input_ids,
+            &params,
+            &device,
+            progress_callback.as_ref(),
+            cancel_flag.as_ref(),
+        )?;
 
-    tracing::info!("Generated {} tokens", output_ids.len());
-    tracing::debug!("Output token IDs: {:?}", output_ids);
+        tracing::info!("Generated {} tokens", output_ids.len());
+        tracing::debug!("Output token IDs: {:?}", output_ids);
 
-    // 6. Decode output
-    // Skip the decoder start token (first token) which is used to prime the decoder
-    // but is not part of the actual translation output
-    let tokens_to_decode = if !output_ids.is_empty() && output_ids[0] == decoder_start_token_id {
-        tracing::debug!(
-            "Skipping decoder start token {} from output",
-            decoder_start_token_id
-        );
-        &output_ids[1..]
-    } else {
-        &output_ids
+        // 6. Decode output
+        // Skip the decoder start token (first token) which is used to prime the decoder
+        // but is not part of the actual translation output
+        let tokens_to_decode = if !output_ids.is_empty() && output_ids[0] == decoder_start_token_id {
+            tracing::debug!(
+                "Skipping decoder start token {} from output",
+                decoder_start_token_id
+            );
+            &output_ids[1..]
+        } else {
+            &output_ids
+        };
+        let translated_text = tokenizer.decode(tokens_to_decode)?;
+        let token_count = output_ids.len();
+
+        // Sync GPU before model drops at end of scope
+        crate::gpu_cleanup::synchronize_device(&device);
+        tracing::info!("Model resources released from {}", device_name(&device));
+
+        (translated_text, token_count)
     };
-    let translated_text = tokenizer.decode(tokens_to_decode)?;
 
     let inference_time = start_time.elapsed().as_secs_f64();
     tracing::info!("Translation completed in {:.2}s", inference_time);
@@ -134,7 +144,7 @@ pub fn translate_text_with_progress(
         target_language: params.target_language,
         model_used: selected_model,
         inference_time,
-        token_count: output_ids.len(),
+        token_count,
     })
 }
 
@@ -161,24 +171,21 @@ fn load_model(
     };
 
     tracing::info!("Loading model weights...");
+    let model_id = model_type.model_id().to_string();
     let vb = if model_files.weights.extension().and_then(|s| s.to_str()) == Some("safetensors") {
-        unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[model_files.weights.clone()],
-                candle_core::DType::F32,
-                device,
-            )
-            .map_err(|e| AudioError::ModelLoad {
-                model: model_type.model_id().to_string(),
-                details: format!("Failed to load safetensors: {}", e),
-            })?
-        }
+        // Platform-safe loading: buffered on Windows, mmap on Linux/macOS
+        crate::gpu_cleanup::load_safetensors_varbuilder(
+            &model_files.weights,
+            candle_core::DType::F32,
+            device,
+        )
+        .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, &model_id))?
     } else {
         // Load pytorch pickle-based checkpoint using candle's pickle reader
         tracing::info!("Loading pytorch pickle checkpoint...");
         let tensors = candle_core::pickle::read_all(&model_files.weights).map_err(|e| {
             AudioError::ModelLoad {
-                model: model_type.model_id().to_string(),
+                model: model_id.clone(),
                 details: format!("Failed to read pytorch pickle: {}", e),
             }
         })?;
@@ -222,10 +229,8 @@ fn load_model(
                 model: model_type.model_id().to_string(),
                 details: format!("Failed to parse Marian config: {}", e),
             })?;
-        let model = marian::MTModel::new(&config, vb).map_err(|e| AudioError::ModelLoad {
-            model: model_type.model_id().to_string(),
-            details: format!("Failed to initialize Marian model: {}", e),
-        })?;
+        let model = marian::MTModel::new(&config, vb)
+            .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, device, &model_id))?;
         TranslationModelType::Marian { model, config }
     } else {
         // Load T5-based model (MADLAD-400 uses T5 architecture)
@@ -234,12 +239,8 @@ fn load_model(
                 model: model_type.model_id().to_string(),
                 details: format!("Failed to parse T5 config: {}", e),
             })?;
-        let model = t5::T5ForConditionalGeneration::load(vb, &config).map_err(|e| {
-            AudioError::ModelLoad {
-                model: model_type.model_id().to_string(),
-                details: format!("Failed to initialize T5-based model: {}", e),
-            }
-        })?;
+        let model = t5::T5ForConditionalGeneration::load(vb, &config)
+            .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, device, &model_id))?;
         TranslationModelType::T5 { model, config }
     };
 
@@ -573,7 +574,7 @@ impl Translator {
         }
     }
 
-    /// Translate multiple texts efficiently (model loaded once)
+    /// Translate multiple texts efficiently (model loaded once).
     ///
     /// This is the recommended way to translate SRT segments or multiple paragraphs.
     pub fn translate_batch(
@@ -595,6 +596,13 @@ impl Translator {
         }
 
         Ok(results)
+    }
+}
+
+impl Drop for Translator {
+    fn drop(&mut self) {
+        crate::gpu_cleanup::synchronize_device(&self.device);
+        tracing::debug!("Translator dropped, GPU resources synchronized");
     }
 }
 

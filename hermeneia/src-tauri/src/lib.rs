@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod error;
 pub mod gpu;
+pub mod gpu_cleanup;
 pub mod system_info;
 pub mod transcribe;
 pub mod translate;
