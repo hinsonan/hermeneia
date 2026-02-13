@@ -22,6 +22,13 @@ on:
         description: 'Build Metal variant'
         type: boolean
         default: true
+      create_release:
+        description: 'Create a draft GitHub Release (requires build_target=all)'
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag (e.g. v0.1.0) — required if create_release is checked'
+        type: string
 
 permissions:
   contents: write
@@ -197,20 +204,21 @@ jobs:
             mv "$f" "appimage/${base}-cuda.AppImage"
           done
 
-      # On tag pushes: attach directly to the Release (bypasses 500MB artifact limit)
+      # Attach directly to Release (bypasses 500MB artifact limit)
       - name: Attach CUDA artifacts to Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
           files: |
             hermeneia/src-tauri/target/release/bundle/deb/*-cuda.deb
             hermeneia/src-tauri/target/release/bundle/rpm/*-cuda.rpm
             hermeneia/src-tauri/target/release/bundle/appimage/*-cuda.AppImage
 
-      # On workflow_dispatch (no tag): upload as artifact for inspection
+      # No release: upload as artifact for inspection
       - name: Upload CUDA artifacts
-        if: "!startsWith(github.ref, 'refs/tags/v')"
+        if: "!startsWith(github.ref, 'refs/tags/v') && inputs.create_release != true"
         uses: actions/upload-artifact@v4
         with:
           name: linux-cuda
@@ -318,17 +326,16 @@ jobs:
             Rename-Item $_.FullName -NewName $newName
           }
 
-      # On tag pushes: attach directly to the Release
       - name: Attach CUDA artifacts to Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
           files: hermeneia/src-tauri/target/release/bundle/nsis/*-cuda.exe
 
-      # On workflow_dispatch: upload as artifact
       - name: Upload CUDA artifacts
-        if: "!startsWith(github.ref, 'refs/tags/v')"
+        if: "!startsWith(github.ref, 'refs/tags/v') && inputs.create_release != true"
         uses: actions/upload-artifact@v4
         with:
           name: windows-cuda
@@ -415,12 +422,20 @@ jobs:
   release:
     runs-on: ubuntu-22.04
     needs: [linux-cpu, linux-cuda, windows-cpu, windows-cuda, macos-intel, macos-arm-metal]
-    if: always() && startsWith(github.ref, 'refs/tags/v')
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true)
     defaults:
       run:
         working-directory: .
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate release tag
+        if: inputs.create_release == true
+        run: |
+          if [ -z "${{ inputs.release_tag }}" ]; then
+            echo "::error::release_tag is required when create_release is checked"
+            exit 1
+          fi
 
       - uses: actions/download-artifact@v4
         with:
@@ -474,6 +489,7 @@ jobs:
       - name: Create draft Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
           generate_release_notes: true
           body_path: .github/RELEASE_NOTES_HEADER.md
