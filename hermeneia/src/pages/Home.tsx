@@ -25,10 +25,19 @@ const Home: Component = () => {
         onClick={() => navigate('/models')}
         aria-label="Model Library"
       >
-        <svg viewBox="0 0 24 24" width="20" height="20">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
+        <svg viewBox="0 0 24 24" width="22" height="22">
+          {/* Top roll */}
+          <ellipse cx="12" cy="4" rx="8" ry="2.5" />
+          {/* Bottom roll */}
+          <ellipse cx="12" cy="20" rx="8" ry="2.5" />
+          {/* Left edge */}
+          <line x1="4" y1="4" x2="4" y2="20" />
+          {/* Right edge */}
+          <line x1="20" y1="4" x2="20" y2="20" />
+          {/* Text lines on scroll */}
+          <line x1="8" y1="9" x2="16" y2="9" />
+          <line x1="8" y1="12" x2="16" y2="12" />
+          <line x1="8" y1="15" x2="14" y2="15" />
         </svg>
       </button>
 
