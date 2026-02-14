@@ -119,17 +119,16 @@ const Translation: Component = () => {
     return marianSupported() ? "High" : "Standard";
   });
 
-  // Check if the MADLAD fallback model needs downloading.
-  // MarianMT models are small (~298MB) and download quickly during inference,
-  // but MADLAD-3B (11.8GB) benefits from a pre-download with progress.
+  // Pre-download the translation model (MarianMT or MADLAD) with progress UI.
   const ensureTranslationModelDownloaded = async (): Promise<boolean> => {
-    // Only pre-download for MADLAD fallback (large model)
-    const hasMarian = marianSupported();
-    if (hasMarian) return true; // MarianMT is small, let backend handle it
+    // Resolve which model the backend will use for this language pair
+    const [modelId, modelName] = await invoke<[string, string]>(
+      "resolve_translation_model",
+      { sourceLang: sourceLang(), targetLang: targetLang(), allowMadlad: true }
+    );
 
-    // MADLAD-3B is the fallback - check if cached
-    const madladId = "jbochi/madlad400-3b-mt";
-    const cached = await invoke<boolean>("is_model_cached", { modelId: madladId });
+    // Check if it's already cached
+    const cached = await invoke<boolean>("is_model_cached", { modelId });
     if (cached) return true;
 
     setIsDownloading(true);
@@ -148,10 +147,7 @@ const Translation: Component = () => {
     }
 
     try {
-      await invoke("download_model", {
-        modelId: madladId,
-        modelName: "MADLAD-400 3B",
-      });
+      await invoke("download_model", { modelId, modelName });
       return true;
     } catch (err) {
       const errStr = String(err);

@@ -25,7 +25,7 @@ pub struct ModelManager {
 impl ModelManager {
     /// Create new model manager using HuggingFace default cache
     pub fn new() -> Result<Self> {
-        let api = ApiBuilder::new().with_progress(true).build().map_err(|e| {
+        let api = ApiBuilder::new().with_progress(false).build().map_err(|e| {
             AudioError::ModelDownload {
                 model: "N/A".to_string(),
                 details: format!("API init failed: {}", e),

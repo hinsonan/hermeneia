@@ -12,7 +12,7 @@ impl ModelManager {
     /// Create new model manager using HuggingFace default cache
     pub fn new() -> Result<Self> {
         let api = ApiBuilder::new()
-            .with_progress(true)
+            .with_progress(false)
             .build()
             .map_err(|e| AudioError::ModelDownload {
                 model: "N/A".to_string(),
