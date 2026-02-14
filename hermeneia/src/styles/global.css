@@ -281,6 +281,45 @@ h1, h2, h3, h4, h5, h6 {
 [data-theme="dark"] .theme-toggle .sun-icon { display: none; }
 [data-theme="dark"] .theme-toggle .moon-icon { display: block; }
 
+/* Models Library Button */
+.models-btn {
+  position: fixed;
+  top: 1.5rem;
+  right: 5rem;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--aged-paper);
+  border: 2px solid var(--border-ornament);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px var(--shadow-color);
+  transition: all 0.3s ease;
+  z-index: 100;
+}
+
+.models-btn:hover {
+  transform: scale(1.08);
+  border-color: var(--gold-accent);
+}
+
+.models-btn:focus {
+  outline: 2px solid var(--gold-accent);
+  outline-offset: 2px;
+}
+
+.models-btn svg {
+  width: 22px;
+  height: 22px;
+  stroke: var(--gold-accent);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Responsive Design for Shared Components */
 @media (max-width: 768px) {
   .scroll-container {
@@ -301,5 +340,12 @@ h1, h2, h3, h4, h5, h6 {
     height: 48px;
     top: 1rem;
     right: 1rem;
+  }
+
+  .models-btn {
+    width: 48px;
+    height: 48px;
+    top: 1rem;
+    right: 4rem;
   }
 }

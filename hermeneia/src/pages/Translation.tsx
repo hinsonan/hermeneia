@@ -9,10 +9,12 @@ import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranslationProgressBar from "../components/TranslationProgressBar";
 import InfoIcon from "../components/InfoIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DownloadProgressBar from "../components/DownloadProgressBar";
 import type {
   TranslationProgress,
   TextTranslationResult,
 } from "../types/translation";
+import type { DownloadProgress } from "../types/models";
 import { MADLAD_LANGUAGES, getLanguageName } from "../types/translation";
 import "./Translation.css";
 
@@ -38,12 +40,17 @@ const Translation: Component = () => {
   // Cancel dialog
   const [showCancelDialog, setShowCancelDialog] = createSignal(false);
 
+  // Model download state
+  const [isDownloading, setIsDownloading] = createSignal(false);
+  const [modelDownloadProgress, setModelDownloadProgress] = createSignal<DownloadProgress | null>(null);
+
   // Pair validation
   const [marianSupported, setMarianSupported] = createSignal(true);
   const isValidPair = createMemo(() => sourceLang() !== targetLang());
 
-  // Track unlisten function for cleanup
+  // Track unlisten functions for cleanup
   let progressUnlisten: UnlistenFn | null = null;
+  let downloadUnlisten: UnlistenFn | null = null;
 
   // Filter target languages - must be different from source
   const availableTargetLanguages = createMemo(() => {
@@ -91,6 +98,10 @@ const Translation: Component = () => {
       progressUnlisten();
       progressUnlisten = null;
     }
+    if (downloadUnlisten) {
+      downloadUnlisten();
+      downloadUnlisten = null;
+    }
   });
 
   // Handle file selection
@@ -108,6 +119,55 @@ const Translation: Component = () => {
     return marianSupported() ? "High" : "Standard";
   });
 
+  // Check if the MADLAD fallback model needs downloading.
+  // MarianMT models are small (~298MB) and download quickly during inference,
+  // but MADLAD-3B (11.8GB) benefits from a pre-download with progress.
+  const ensureTranslationModelDownloaded = async (): Promise<boolean> => {
+    // Only pre-download for MADLAD fallback (large model)
+    const hasMarian = marianSupported();
+    if (hasMarian) return true; // MarianMT is small, let backend handle it
+
+    // MADLAD-3B is the fallback - check if cached
+    const madladId = "jbochi/madlad400-3b-mt";
+    const cached = await invoke<boolean>("is_model_cached", { modelId: madladId });
+    if (cached) return true;
+
+    setIsDownloading(true);
+    setModelDownloadProgress(null);
+
+    // Set up listener BEFORE invoking download
+    try {
+      downloadUnlisten = await listen<DownloadProgress>("download-progress", (event) => {
+        setModelDownloadProgress(event.payload);
+        if (event.payload.phase === "complete" || event.payload.phase === "cancelled") {
+          setModelDownloadProgress(null);
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to set up download listener:", err);
+    }
+
+    try {
+      await invoke("download_model", {
+        modelId: madladId,
+        modelName: "MADLAD-400 3B",
+      });
+      return true;
+    } catch (err) {
+      const errStr = String(err);
+      if (errStr.includes("cancelled") || errStr.includes("Download cancelled")) return false;
+      setError(`Model download failed: ${errStr}`);
+      return false;
+    } finally {
+      setIsDownloading(false);
+      setModelDownloadProgress(null);
+      if (downloadUnlisten) {
+        downloadUnlisten();
+        downloadUnlisten = null;
+      }
+    }
+  };
+
   // Start translation
   const handleTranslate = async () => {
     if (!filePath()) return;
@@ -116,8 +176,13 @@ const Translation: Component = () => {
       return;
     }
 
-    setIsTranslating(true);
     setError(null);
+
+    // Check if model needs downloading
+    const modelReady = await ensureTranslationModelDownloaded();
+    if (!modelReady) return;
+
+    setIsTranslating(true);
     setTranslationProgress(null);
 
     // Set up progress event listener
@@ -312,8 +377,8 @@ const Translation: Component = () => {
               </div>
             </Show>
 
-            {/* Settings panel - hidden during translation and when showing results */}
-            <Show when={!isTranslating() && !result()}>
+            {/* Settings panel - hidden during translation, download, and when showing results */}
+            <Show when={!isTranslating() && !isDownloading() && !result()}>
               <section class="settings-panel">
                 {/* Source Language Selection */}
                 <div class="setting-group">
@@ -406,6 +471,18 @@ const Translation: Component = () => {
                   </svg>
                   Begin Translation
                 </button>
+              </section>
+            </Show>
+
+            {/* Model download progress */}
+            <Show when={isDownloading()}>
+              <section class="processing-section">
+                <h2>Downloading Model...</h2>
+                <p>Downloading translation model before starting</p>
+                <DownloadProgressBar
+                  progress={modelDownloadProgress()}
+                  onCancel={() => invoke("cancel_download").catch(() => {})}
+                />
               </section>
             </Show>
 

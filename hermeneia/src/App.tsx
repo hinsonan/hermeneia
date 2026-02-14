@@ -4,6 +4,7 @@ import Home from "./pages/Home";
 import AudioEditor from "./pages/AudioEditor";
 import Transcription from "./pages/Transcription";
 import Translation from "./pages/Translation";
+import ModelLibrary from "./pages/ModelLibrary";
 import "./styles/global.css";
 
 const App: Component = () => {
@@ -13,6 +14,7 @@ const App: Component = () => {
       <Route path="/audio-editor" component={AudioEditor} />
       <Route path="/transcription" component={Transcription} />
       <Route path="/translation" component={Translation} />
+      <Route path="/models" component={ModelLibrary} />
     </Router>
   );
 };

@@ -105,6 +105,14 @@ pub enum AudioError {
     /// Operation was cancelled by the user
     #[error("Operation cancelled")]
     Cancelled,
+
+    /// Download was cancelled by the user
+    #[error("Download cancelled")]
+    DownloadCancelled,
+
+    /// Failed to delete model cache
+    #[error("Failed to delete model '{model}': {details}")]
+    ModelDelete { model: String, details: String },
 }
 
 /// Convenient Result type that uses our AudioError
