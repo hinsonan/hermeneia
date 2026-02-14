@@ -624,6 +624,27 @@ fn get_playback_state(state: tauri::State<AppState>) -> std::result::Result<Play
     })
 }
 
+#[tauri::command]
+async fn resolve_translation_model(
+    source_lang: String,
+    target_lang: String,
+    allow_madlad: bool,
+) -> std::result::Result<(String, String), String> {
+    tokio::task::spawn_blocking(move || {
+        let params = translate::TranslateParams {
+            source_language: source_lang,
+            target_language: target_lang,
+            fallback_enabled: allow_madlad,
+            ..Default::default()
+        };
+        let mm = translate::model::ModelManager::new().map_err(|e| e.to_string())?;
+        let model = mm.select_model(&params).map_err(|e| e.to_string())?;
+        Ok((model.model_id().to_string(), model.display_name().to_string()))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     gpu::apply_optimizations();
@@ -647,6 +668,7 @@ pub fn run() {
             validate_model_selection,
             translate_text_file,
             check_marian_pair_supported,
+            resolve_translation_model,
             cancel_inference,
             list_models,
             download_model,

@@ -66,20 +66,25 @@ fn model_cache_path(model_id: &str) -> PathBuf {
     hf_cache_dir().join(model_cache_dir_name(model_id))
 }
 
-/// Check whether a model appears to be cached by looking for config.json in snapshots.
+/// Check whether a model appears to be cached by looking for weight files in snapshots.
 /// Uses metadata() to follow symlinks and verify the target file actually exists.
+/// We check for weight files (not just config.json) to avoid treating partially-downloaded
+/// models as cached — config.json is small and downloaded first, so an interrupted download
+/// may leave only config.json behind.
 fn is_model_cached_on_disk(model_id: &str) -> bool {
     let snapshots_dir = model_cache_path(model_id).join("snapshots");
     if !snapshots_dir.is_dir() {
         return false;
     }
-    // Look for a snapshot directory containing config.json (present in all models)
     if let Ok(entries) = std::fs::read_dir(&snapshots_dir) {
         for entry in entries.flatten() {
             if entry.path().is_dir() {
-                let config_path = entry.path().join("config.json");
-                // metadata() follows symlinks - returns Err if target doesn't exist
-                if config_path.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                let dir = entry.path();
+                // Check for weight files - the large files that actually matter
+                let has_weights = dir.join("model.safetensors").metadata().map(|m| m.is_file()).unwrap_or(false)
+                    || dir.join("pytorch_model.bin").metadata().map(|m| m.is_file()).unwrap_or(false)
+                    || dir.join("model-q8_0.gguf").metadata().map(|m| m.is_file()).unwrap_or(false);
+                if has_weights {
                     return true;
                 }
             }
