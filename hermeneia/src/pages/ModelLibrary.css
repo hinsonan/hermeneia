@@ -1,0 +1,279 @@
+/* ═══════════════════════════════════════════════════════════════
+   Model Library Page Styles
+   Parchment theme with burgundy/gold colors
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Cache Summary */
+.cache-summary {
+  display: flex;
+  gap: 2rem;
+  justify-content: center;
+  padding: 1rem 1.5rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-ornament);
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+}
+
+.cache-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.cache-label {
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+  color: var(--ink-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.cache-value {
+  font-family: 'Cinzel', serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--burgundy);
+}
+
+/* Tabs */
+.model-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.5rem;
+  border-bottom: 2px solid var(--border-ornament);
+}
+
+.model-tab {
+  flex: 1;
+  padding: 0.75rem 1.5rem;
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: var(--ink-medium);
+  font-family: 'Cinzel', serif;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: -2px;
+}
+
+.model-tab:hover {
+  color: var(--ink-dark);
+}
+
+.model-tab.active {
+  color: var(--burgundy);
+  border-bottom-color: var(--burgundy);
+  font-weight: 600;
+}
+
+/* Loading */
+.models-loading {
+  text-align: center;
+  padding: 3rem;
+  color: var(--ink-medium);
+  font-family: 'Crimson Text', serif;
+  font-size: 1.1rem;
+  font-style: italic;
+}
+
+/* Section */
+.model-section {
+  margin-bottom: 2rem;
+}
+
+.section-title {
+  font-family: 'Cinzel', serif;
+  font-size: 1.3rem;
+  color: var(--burgundy);
+  margin: 0 0 0.5rem;
+}
+
+.section-desc {
+  font-family: 'Crimson Text', serif;
+  font-size: 0.95rem;
+  color: var(--ink-medium);
+  margin: 0 0 1rem;
+}
+
+/* Model Grid */
+.model-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.model-grid.compact .model-card {
+  padding: 0.75rem 1rem;
+}
+
+/* Model Card */
+.model-card {
+  padding: 1rem 1.25rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-ornament);
+  border-radius: 8px;
+  transition: border-color 0.2s ease;
+}
+
+.model-card.cached {
+  border-left: 3px solid var(--gold-accent);
+}
+
+.model-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+
+.model-card-name {
+  font-family: 'Crimson Text', serif;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink-dark);
+}
+
+.model-badge {
+  font-family: 'Crimson Text', serif;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.badge-cached {
+  background: var(--gold-accent);
+  color: var(--ink-dark);
+}
+
+.badge-available {
+  background: transparent;
+  border: 1px solid var(--border-ornament);
+  color: var(--ink-medium);
+}
+
+.model-card-meta {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.model-card-size {
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+  color: var(--ink-medium);
+}
+
+.model-card-langs {
+  font-family: 'Cinzel', serif;
+  font-size: 0.8rem;
+  color: var(--burgundy);
+  font-weight: 600;
+}
+
+/* Actions */
+.model-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.model-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 4px;
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.model-action-btn svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.download-btn {
+  background: var(--burgundy);
+  color: var(--parchment);
+  border: none;
+}
+
+.download-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.download-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-btn {
+  background: transparent;
+  color: var(--ink-medium);
+  border: 1px solid var(--border-ornament);
+}
+
+.delete-btn:hover:not(:disabled) {
+  color: #c0392b;
+  border-color: #c0392b;
+}
+
+.delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Search */
+.model-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-ornament);
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+.model-search svg {
+  stroke: var(--ink-medium);
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.model-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.model-search input::placeholder {
+  color: var(--ink-medium);
+  opacity: 0.7;
+}
+
+.no-results {
+  text-align: center;
+  padding: 2rem;
+  color: var(--ink-medium);
+  font-family: 'Crimson Text', serif;
+  font-style: italic;
+}

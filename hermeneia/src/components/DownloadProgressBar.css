@@ -1,0 +1,157 @@
+/* ═══════════════════════════════════════════════════════════════
+   Download Progress Bar Styles
+   Parchment theme with burgundy/gold colors
+   ═══════════════════════════════════════════════════════════════ */
+
+.download-progress {
+  width: 100%;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: var(--card-bg);
+  border: 1px solid var(--border-ornament);
+  border-radius: 8px;
+}
+
+.download-progress-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  gap: 0.75rem;
+}
+
+.download-progress-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.download-progress-name {
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.download-progress-file {
+  color: var(--ink-medium);
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.download-cancel-btn {
+  background: none;
+  border: 1px solid var(--burgundy);
+  color: var(--burgundy);
+  padding: 0.3rem 0.8rem;
+  border-radius: 4px;
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.download-cancel-btn:hover {
+  background: var(--burgundy);
+  color: var(--parchment);
+}
+
+.download-progress-bar-container {
+  width: 100%;
+  height: 12px;
+  background: var(--card-bg);
+  border: 2px solid var(--border-ornament);
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+
+.download-progress-bar-container .progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--burgundy) 0%,
+    var(--gold-accent) 50%,
+    var(--burgundy) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease-out;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.download-progress-bar-container .progress-bar-indeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--gold-accent) 50%,
+    transparent 100%
+  );
+  border-radius: 4px;
+  animation: indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+.download-progress-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.download-progress-bytes {
+  color: var(--ink-medium);
+  font-family: 'Crimson Text', serif;
+  font-size: 0.85rem;
+}
+
+.download-progress-pct {
+  color: var(--burgundy);
+  font-family: 'Cinzel', serif;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* Status messages */
+.download-progress-status {
+  text-align: center;
+  padding: 0.5rem;
+  font-family: 'Crimson Text', serif;
+  font-size: 0.95rem;
+  font-style: italic;
+}
+
+.download-progress-status.complete {
+  color: var(--gold-accent);
+}
+
+.download-progress-status.cancelled {
+  color: var(--ink-medium);
+}
+
+/* Dark mode */
+[data-theme="dark"] .download-progress-bar-container .progress-bar-fill {
+  background: linear-gradient(
+    90deg,
+    var(--gold-accent) 0%,
+    var(--burgundy) 50%,
+    var(--gold-accent) 100%
+  );
+  background-size: 200% 100%;
+}

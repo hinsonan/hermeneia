@@ -10,6 +10,7 @@ import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranscriptionProgressBar from "../components/TranscriptionProgressBar";
 import InfoIcon from "../components/InfoIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DownloadProgressBar from "../components/DownloadProgressBar";
 import type {
   WhisperModel,
   TranscriptionTask,
@@ -20,6 +21,7 @@ import type {
   SystemCapabilities,
   ModelValidation
 } from "../types/transcription";
+import type { DownloadProgress } from "../types/models";
 import "./Transcription.css";
 
 const MODEL_OPTIONS: ModelOption[] = [
@@ -82,12 +84,17 @@ const Transcription: Component = () => {
   // Cancel dialog
   const [showCancelDialog, setShowCancelDialog] = createSignal(false);
 
+  // Model download state
+  const [isDownloading, setIsDownloading] = createSignal(false);
+  const [modelDownloadProgress, setModelDownloadProgress] = createSignal<DownloadProgress | null>(null);
+
   // System capability detection
   const [systemCapabilities, setSystemCapabilities] = createSignal<SystemCapabilities | null>(null);
   const [modelValidation, setModelValidation] = createSignal<ModelValidation | null>(null);
 
-  // Track unlisten function for cleanup
+  // Track unlisten functions for cleanup
   let progressUnlisten: UnlistenFn | null = null;
+  let downloadUnlisten: UnlistenFn | null = null;
 
   // Check if selected model is English-only
   const isEnglishOnlyModel = createMemo(() => {
@@ -114,6 +121,10 @@ const Transcription: Component = () => {
     if (progressUnlisten) {
       progressUnlisten();
       progressUnlisten = null;
+    }
+    if (downloadUnlisten) {
+      downloadUnlisten();
+      downloadUnlisten = null;
     }
   });
 
@@ -207,12 +218,66 @@ const Transcription: Component = () => {
            err.includes('OutOfMemory');
   };
 
+  // Map whisper model key to HuggingFace model ID for cache checks
+  const whisperModelId = (model: string): string => `openai/whisper-${model}`;
+
+  // Download a model before transcription if not cached
+  const ensureModelDownloaded = async (): Promise<boolean> => {
+    const hfId = whisperModelId(selectedModel());
+    const cached = await invoke<boolean>("is_model_cached", { modelId: hfId });
+    if (cached) return true;
+
+    // Need to download first
+    setIsDownloading(true);
+    setModelDownloadProgress(null);
+
+    // Set up listener BEFORE invoking download to avoid race condition
+    try {
+      downloadUnlisten = await listen<DownloadProgress>("download-progress", (event) => {
+        setModelDownloadProgress(event.payload);
+        if (event.payload.phase === "complete" || event.payload.phase === "cancelled") {
+          setModelDownloadProgress(null);
+        }
+      });
+    } catch (err) {
+      console.warn("Failed to set up download listener:", err);
+    }
+
+    try {
+      const modelLabel = MODEL_OPTIONS.find(m => m.value === selectedModel())?.label || selectedModel();
+      await invoke("download_model", {
+        modelId: hfId,
+        modelName: `Whisper ${modelLabel}`,
+      });
+      return true;
+    } catch (err) {
+      const errStr = String(err);
+      if (errStr.includes("cancelled") || errStr.includes("Download cancelled")) {
+        return false;
+      }
+      setError(`Model download failed: ${errStr}`);
+      return false;
+    } finally {
+      setIsDownloading(false);
+      setModelDownloadProgress(null);
+      if (downloadUnlisten) {
+        downloadUnlisten();
+        downloadUnlisten = null;
+      }
+    }
+  };
+
   // Start transcription
   const handleTranscribe = async () => {
     if (!filePath()) return;
 
-    setIsTranscribing(true);
     setError(null);
+
+    // Check if model needs downloading
+    const modelReady = await ensureModelDownloaded();
+    if (!modelReady) return;
+
+    setIsTranscribing(true);
     setTranscriptionProgress(null);
 
     // Set up progress event listener
@@ -440,8 +505,8 @@ const Transcription: Component = () => {
               </div>
             </Show>
 
-            {/* Settings panel - hidden during transcription and when showing results */}
-            <Show when={!isTranscribing() && !result()}>
+            {/* Settings panel - hidden during transcription, download, and when showing results */}
+            <Show when={!isTranscribing() && !isDownloading() && !result()}>
               <section class="settings-panel">
                 {/* Model Selection */}
                 <div class="setting-group">
@@ -576,6 +641,18 @@ const Transcription: Component = () => {
                   </svg>
                   Begin Transcription
                 </button>
+              </section>
+            </Show>
+
+            {/* Model download progress */}
+            <Show when={isDownloading()}>
+              <section class="processing-section">
+                <h2>Downloading Model...</h2>
+                <p>Downloading the {selectedModel()} model before transcription</p>
+                <DownloadProgressBar
+                  progress={modelDownloadProgress()}
+                  onCancel={() => invoke("cancel_download").catch(() => {})}
+                />
               </section>
             </Show>
 

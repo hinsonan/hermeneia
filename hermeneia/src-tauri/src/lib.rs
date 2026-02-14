@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod download;
 pub mod error;
 pub mod gpu;
 pub mod gpu_cleanup;
@@ -20,6 +21,8 @@ pub use transcribe::*;
 pub struct AppState {
     pub player: Mutex<AudioPlayer>,
     pub cancel_inference: Mutex<Arc<AtomicBool>>,
+    pub cancel_download: Mutex<Arc<AtomicBool>>,
+    pub is_downloading: Arc<AtomicBool>,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -454,6 +457,90 @@ async fn translate_text_file(
 }
 
 
+// ============================================================================
+// Model Download & Cache Management Commands
+// ============================================================================
+
+/// List all available models with their cache status
+#[tauri::command]
+async fn list_models() -> std::result::Result<Vec<download::ModelInfo>, String> {
+    tokio::task::spawn_blocking(|| {
+        download::list_all_models().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Download a model by its HuggingFace model ID with progress events
+#[tauri::command]
+async fn download_model(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+    model_name: String,
+) -> std::result::Result<(), String> {
+    // Prevent concurrent downloads
+    if state.is_downloading.swap(true, Ordering::SeqCst) {
+        return Err("A download is already in progress".to_string());
+    }
+
+    let cancel_flag = {
+        let mut guard = state.cancel_download.lock().unwrap();
+        let new_flag = Arc::new(AtomicBool::new(false));
+        *guard = new_flag.clone();
+        new_flag
+    };
+
+    let downloading_flag = state.is_downloading.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let res = download::download_model(&model_id, &model_name, &app_handle, &cancel_flag)
+            .map_err(|e| e.to_string());
+        downloading_flag.store(false, Ordering::SeqCst);
+        res
+    })
+    .await
+    .map_err(|e| {
+        state.is_downloading.store(false, Ordering::SeqCst);
+        format!("Task join error: {}", e)
+    })?;
+
+    result
+}
+
+/// Cancel a running model download
+#[tauri::command]
+fn cancel_download(state: tauri::State<AppState>) {
+    let flag = state.cancel_download.lock().unwrap();
+    flag.store(true, Ordering::SeqCst);
+    tracing::info!("Download cancellation requested");
+}
+
+/// Delete a cached model
+#[tauri::command]
+async fn delete_model(model_id: String) -> std::result::Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        download::delete_model_cache(&model_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Get total cache size in bytes
+#[tauri::command]
+async fn get_cache_size() -> std::result::Result<u64, String> {
+    tokio::task::spawn_blocking(download::total_cache_size)
+        .await
+        .map_err(|e| format!("Task join error: {}", e))
+}
+
+/// Check if a specific model is cached
+#[tauri::command]
+async fn is_model_cached(model_id: String) -> std::result::Result<bool, String> {
+    tokio::task::spawn_blocking(move || download::check_model_cached(&model_id))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))
+}
+
 /// Check if a Marian model exists for the given language pair
 #[tauri::command]
 fn check_marian_pair_supported(source_lang: String, target_lang: String) -> bool {
@@ -547,6 +634,8 @@ pub fn run() {
         .manage(AppState {
             player: Mutex::new(AudioPlayer::new()),
             cancel_inference: Mutex::new(Arc::new(AtomicBool::new(false))),
+            cancel_download: Mutex::new(Arc::new(AtomicBool::new(false))),
+            is_downloading: Arc::new(AtomicBool::new(false)),
         })
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -559,6 +648,12 @@ pub fn run() {
             translate_text_file,
             check_marian_pair_supported,
             cancel_inference,
+            list_models,
+            download_model,
+            cancel_download,
+            delete_model,
+            get_cache_size,
+            is_model_cached,
             play_audio,
             pause_audio,
             resume_audio,
