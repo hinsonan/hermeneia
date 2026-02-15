@@ -440,17 +440,17 @@ jobs:
 
           # Linux CPU
           if [ -d artifacts/linux-cpu ]; then
-            for f in artifacts/linux-cpu/src-tauri/target/release/bundle/deb/*.deb; do
+            for f in artifacts/linux-cpu/deb/*.deb; do
               [ -f "$f" ] || continue
               base=$(basename "$f" .deb)
               cp "$f" "release-assets/${base}-cpu.deb"
             done
-            for f in artifacts/linux-cpu/src-tauri/target/release/bundle/rpm/*.rpm; do
+            for f in artifacts/linux-cpu/rpm/*.rpm; do
               [ -f "$f" ] || continue
               base=$(basename "$f" .rpm)
               cp "$f" "release-assets/${base}-cpu.rpm"
             done
-            for f in artifacts/linux-cpu/src-tauri/target/release/bundle/appimage/*.AppImage; do
+            for f in artifacts/linux-cpu/appimage/*.AppImage; do
               [ -f "$f" ] || continue
               base=$(basename "$f" .AppImage)
               cp "$f" "release-assets/${base}-cpu.AppImage"
