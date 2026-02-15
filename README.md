@@ -1,3 +1,13 @@
+<p align="center">
+  <img src="assets/hermeneia_banner.png" alt="Hermeneia Banner" height="250" width="100%">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Local--First-blue?style=for-the-badge" alt="Local-First">
+  <img src="https://img.shields.io/badge/Privacy%20Respecting-orange?style=for-the-badge" alt="Privacy Respecting">
+  <img src="https://img.shields.io/badge/Local%20AI%2FML%20Models-purple?style=for-the-badge" alt="Local AI/ML Models">
+</p>
+
 # Hermeneia
 
 **Private, Offline Audio Transcription & Translation**
@@ -26,7 +36,7 @@ Hermeneia/
 The `hermeneia/` directory contains the complete application:
 - **Frontend**: SolidJS-based UI for audio editing, transcription, and translation
 - **Backend**: Rust-powered audio and AI processing with GPU acceleration
-- **Privacy-first**: All processing happens locally — Windows and Linux builds available
+- **Privacy-first**: All processing happens locally — Windows, Linux and macOS builds available
 
 ### What is the `ml-research/` folder?
 
@@ -65,10 +75,9 @@ Translate transcriptions to multiple languages offline
 
 ### ☐ Phase 4: Deployment & Distribution
 Package and distribute application for Windows and Linux
-- Windows installer (.exe, .msi)
+- Windows installer (.exe)
+- MacOS (ARM, Intel)
 - Linux packages (.deb, .AppImage, .rpm)
-- Code signing for both platforms
-- Automatic update system
 - CI/CD pipeline for releases
 - Complete user documentation   
 

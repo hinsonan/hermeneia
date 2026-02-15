@@ -173,10 +173,16 @@ const AudioEditor: Component = () => {
 
   const handleStop = async () => {
     console.log("🛑 handleStop called");
+    const file = audioFile();
     try {
       await invoke("stop_audio");
       setIsPlaying(false);
       setCurrentTime(0);
+      // Re-initialize playback in paused state so seeking still works
+      if (file.filePath) {
+        await invoke("play_audio", { filePath: file.filePath });
+        await invoke("pause_audio");
+      }
     } catch (err) {
       console.error("Stop error:", err);
     }

@@ -186,8 +186,8 @@ const Home: Component = () => {
               </div>
               <h2 class="feature-title">Audio Tools</h2>
               <p class="feature-desc">
-                Prepare sermon recordings for distribution with trimming,
-                noise reduction, and format conversion utilities.
+                Prepare sermon recordings for distribution with trimming
+                and format conversion utilities.
               </p>
             </article>
           </section>
