@@ -4,8 +4,8 @@ Pick the right file for your system:
 
 | You have | Download |
 |----------|----------|
-| **Linux** + NVIDIA GPU | `hermeneia_*-cuda.deb` or `*-cuda.AppImage` |
-| **Linux**, no NVIDIA | `hermeneia_*-cpu.deb` or `*-cpu.AppImage` |
+| **Linux** + NVIDIA GPU | `hermeneia_*-cuda.deb`, `*-cuda.rpm`, or `*-cuda.AppImage` |
+| **Linux**, no NVIDIA | `hermeneia_*-cpu.deb`, `*-cpu.rpm`, or `*-cpu.AppImage` |
 | **Windows** + NVIDIA GPU | `hermeneia_*-cuda.exe` |
 | **Windows**, no NVIDIA | `hermeneia_*-cpu.exe` |
 | **Mac** (Apple Silicon M1-M4) | `hermeneia_*_aarch64.dmg` |
