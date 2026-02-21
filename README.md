@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/hermeneia_banner.png" alt="Hermeneia Banner" height="300" width="100%">
+  <img src="assets/hermeneia_banner.png" alt="Hermeneia Banner" height="300" width="50%">
 </p>
 
 <p align="center">
