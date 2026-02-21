@@ -40,3 +40,40 @@ update-marian-safetensors \
 | Command | Description |
 |---------|-------------|
 | `update-marian-safetensors` | Checks every Marian model in the catalog for SafeTensors availability via the Hugging Face API and writes an updated TOML file. |
+
+---
+
+## Background Removal (`remove_bg.py`)
+
+Removes the background from a PNG image using [rembg](https://github.com/danielgatis/rembg) (U2Net neural network). Unlike color-based approaches, this works correctly on subjects with complex or irregular edges — such as the Hermeneia stone tablet logo.
+
+### Setup
+
+Install `rembg` and its dependencies (already included in `pyproject.toml`):
+
+```bash
+pip install -e .
+```
+
+The U2Net model (~176 MB) is downloaded automatically on first run to `~/.u2net/u2net.onnx`.
+
+### Usage
+
+```bash
+python src/hermeneia_ml_research/remove_bg.py <input.png> [output.png]
+```
+
+Examples:
+
+```bash
+# Output saved as logo_nobg.png alongside the input
+python src/hermeneia_ml_research/remove_bg.py ~/Downloads/logo.png
+
+# Explicit output path
+python src/hermeneia_ml_research/remove_bg.py ~/Downloads/logo.png logo_transparent.png
+```
+
+### Notes
+
+- If you have `rembg[gpu]` installed but CUDA libraries are missing, onnxruntime will log a warning and fall back to CPU automatically — this is fine.
+- For CPU-only systems, `rembg` (without `[gpu]`) is sufficient.

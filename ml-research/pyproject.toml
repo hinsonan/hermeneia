@@ -11,7 +11,11 @@ authors = [
 ]
 dependencies = [
     "toml>=0.10.2",
-    "requests>=2.31.0"
+    "requests>=2.31.0",
+    "pillow>=10.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+    "rembg[gpu]>=2.0.0"
 ]
 
 [project.scripts]
