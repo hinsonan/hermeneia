@@ -1,11 +1,33 @@
-import { Component } from 'solid-js';
+import { Component, Show, createSignal, onMount } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import { useTheme } from '../utils/theme';
+import { invoke } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import './Home.css';
+
+interface UpdateInfo {
+  available: boolean;
+  current_version: string;
+  latest_version: string;
+  release_url: string;
+  release_notes: string;
+}
 
 const Home: Component = () => {
   const navigate = useNavigate();
   const { toggleTheme } = useTheme();
+
+  const [updateInfo, setUpdateInfo] = createSignal<UpdateInfo | null>(null);
+  const [updateDismissed, setUpdateDismissed] = createSignal(false);
+
+  onMount(async () => {
+    try {
+      const info = await invoke<UpdateInfo>('check_for_updates', { force: import.meta.env.DEV });
+      if (info.available) setUpdateInfo(info);
+    } catch {
+      // Silently ignore — no internet or API error
+    }
+  });
 
   const navigateTo = (page: string) => {
     if (page === 'audio') {
@@ -98,6 +120,27 @@ const Home: Component = () => {
               <circle cx="8" cy="8" r="3" fill="var(--gold-accent)"/>
             </svg>
           </div>
+
+          {/* Update Banner */}
+          <Show when={updateInfo() && !updateDismissed()}>
+            <div class="update-banner">
+              <span class="update-banner-text">
+                Update available: v{updateInfo()!.latest_version}
+              </span>
+              <button
+                class="update-banner-link"
+                onClick={() => openUrl(updateInfo()!.release_url)}
+              >
+                View Release
+              </button>
+              <button
+                class="update-banner-dismiss"
+                onClick={() => setUpdateDismissed(true)}
+              >
+                ✕
+              </button>
+            </div>
+          </Show>
 
           {/* Header */}
           <header class="header">

@@ -17,6 +17,15 @@ pub use transcribe::*;
 
 
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UpdateInfo {
+    pub available: bool,
+    pub current_version: String,
+    pub latest_version: String,
+    pub release_url: String,
+    pub release_notes: String,
+}
+
 /// Global audio player state managed by Tauri
 pub struct AppState {
     pub player: Mutex<AudioPlayer>,
@@ -645,6 +654,63 @@ async fn resolve_translation_model(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// Check GitHub releases for a newer version of the app
+#[tauri::command]
+async fn check_for_updates(force: Option<bool>) -> std::result::Result<UpdateInfo, String> {
+    let current = env!("CARGO_PKG_VERSION");
+
+    // In debug builds, `force: true` returns a fake update for UI testing
+    #[cfg(debug_assertions)]
+    if force.unwrap_or(false) {
+        return Ok(UpdateInfo {
+            available: true,
+            current_version: current.to_string(),
+            latest_version: "99.99.99".to_string(),
+            release_url: "https://github.com/hinsonan/hermeneia/releases".to_string(),
+            release_notes: "[Test] Simulated update for development testing.".to_string(),
+        });
+    }
+
+    let url = "https://api.github.com/repos/hinsonan/hermeneia/releases/latest";
+
+    let client = reqwest::Client::builder()
+        .user_agent("hermeneia-app")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp: serde_json::Value = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let tag = resp["tag_name"].as_str().unwrap_or("").trim_start_matches('v');
+    let release_url = resp["html_url"].as_str().unwrap_or("").to_string();
+    let release_notes = resp["body"].as_str().unwrap_or("").to_string();
+
+    let available = is_newer(tag, current);
+
+    Ok(UpdateInfo {
+        available,
+        current_version: current.to_string(),
+        latest_version: tag.to_string(),
+        release_url,
+        release_notes,
+    })
+}
+
+/// Returns true if `remote` semver is greater than `local`.
+fn is_newer(remote: &str, local: &str) -> bool {
+    fn parse(v: &str) -> [u64; 3] {
+        let mut parts = v.splitn(3, '.').map(|p| p.parse().unwrap_or(0));
+        [parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0)]
+    }
+    parse(remote) > parse(local)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     gpu::apply_optimizations();
@@ -682,7 +748,8 @@ pub fn run() {
             toggle_audio,
             seek_audio,
             stop_audio,
-            get_playback_state
+            get_playback_state,
+            check_for_updates
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

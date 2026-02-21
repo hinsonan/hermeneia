@@ -3,6 +3,60 @@
    ═══════════════════════════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════════════════════════
+   Update Banner
+   ═══════════════════════════════════════════════════════════════ */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--gold-accent);
+  color: var(--ink-dark);
+  border: 1px solid var(--border-ornament);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+
+.update-banner-text {
+  flex: 1;
+  font-weight: 500;
+}
+
+.update-banner-link {
+  background: var(--burgundy);
+  color: var(--parchment);
+  border: none;
+  border-radius: 4px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.update-banner-link:hover {
+  opacity: 0.85;
+}
+
+.update-banner-dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-dark);
+  font-size: 1rem;
+  padding: 8px 12px;
+  margin: -8px -12px -8px 0;
+  opacity: 0.7;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.update-banner-dismiss:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
    Header
    ═══════════════════════════════════════════════════════════════ */
 .header {
