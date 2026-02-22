@@ -656,12 +656,12 @@ async fn resolve_translation_model(
 
 /// Check GitHub releases for a newer version of the app
 #[tauri::command]
-async fn check_for_updates(force: Option<bool>) -> std::result::Result<UpdateInfo, String> {
+async fn check_for_updates(_force: Option<bool>) -> std::result::Result<UpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION");
 
     // In debug builds, `force: true` returns a fake update for UI testing
     #[cfg(debug_assertions)]
-    if force.unwrap_or(false) {
+    if _force.unwrap_or(false) {
         return Ok(UpdateInfo {
             available: true,
             current_version: current.to_string(),
