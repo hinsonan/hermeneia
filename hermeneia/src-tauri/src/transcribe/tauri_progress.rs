@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tauri::{AppHandle, Emitter};
 
 use crate::transcribe::types::{ProgressReporter, TranscriptionProgress};
@@ -10,6 +10,7 @@ pub const TRANSCRIPTION_PROGRESS_EVENT: &str = "transcription-progress";
 pub struct TauriProgressReporter {
     app_handle: AppHandle,
     first_report: AtomicBool,
+    last_logged_pct: AtomicUsize,
 }
 
 impl TauriProgressReporter {
@@ -18,6 +19,7 @@ impl TauriProgressReporter {
         Self {
             app_handle,
             first_report: AtomicBool::new(true),
+            last_logged_pct: AtomicUsize::new(0),
         }
     }
 
@@ -31,18 +33,28 @@ impl TauriProgressReporter {
 
 impl ProgressReporter for TauriProgressReporter {
     fn start(&self) {
+        tracing::info!("Transcription starting: loading model...");
         self.emit(TranscriptionProgress::loading_model());
     }
 
     fn report(&self, current: usize, total: usize) {
-        // On first report, we're now in transcribing phase
         if self.first_report.swap(false, Ordering::Relaxed) {
-            tracing::info!("Transcription started: {}/{} frames", current, total);
+            tracing::info!("Transcription started: {} frames total", total);
         }
+
+        // Log every 10% of progress
+        let pct = if total > 0 { current * 100 / total } else { 0 };
+        let last = self.last_logged_pct.load(Ordering::Relaxed);
+        if pct / 10 > last / 10 {
+            self.last_logged_pct.store(pct, Ordering::Relaxed);
+            tracing::info!("Transcription progress: {}% ({}/{})", pct, current, total);
+        }
+
         self.emit(TranscriptionProgress::transcribing(current, total));
     }
 
     fn finish(&self) {
+        tracing::info!("Transcription complete");
         self.emit(TranscriptionProgress::completed());
     }
 }
