@@ -98,11 +98,10 @@ fn trim_wav_direct<P: AsRef<Path>>(
     let end_frame = end_frame.min(total_frames);
     let frames_to_read = end_frame - start_frame;
 
-    // Seek to the start position
-    // Hound seeks by *samples* (individual values), not frames. 
-    // So for stereo, we must multiply by channel count.
-    let start_sample_idx = start_frame * spec.channels as u32;
-    reader.seek(start_sample_idx)
+    // Seek to the start position.
+    // Hound 3.5.1 seek() takes a frame index (samples per channel, independent of channel count).
+    // Per hound docs: "multiply number of seconds with sample_rate" — channels are NOT included.
+    reader.seek(start_frame)
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to seek WAV: {}", e)))?;
 
     let mut writer = WavWriter::create(output_path, spec)
