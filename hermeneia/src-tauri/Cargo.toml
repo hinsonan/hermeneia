@@ -50,6 +50,11 @@ path = "src/bin/transcribe/main.rs"
 name = "translate"
 path = "src/bin/translate/main.rs"
 
+# Binary for speaker diarization testing
+[[bin]]
+name = "speaker"
+path = "src/bin/speaker/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -91,6 +96,9 @@ byteorder = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# Speaker diarization via sherpa-onnx ONNX runtime
+sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries"] }
+
 # custom
 thiserror = "1"
 anyhow = "1"
@@ -104,7 +112,7 @@ nvml-wrapper = { version = "0.10", optional = true }
 
 [features]
 default = []
-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "nvml-wrapper"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "nvml-wrapper", "sherpa-rs/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
 # Optimized release profile for CPU inference performance

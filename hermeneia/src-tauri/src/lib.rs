@@ -3,6 +3,7 @@ pub mod download;
 pub mod error;
 pub mod gpu;
 pub mod gpu_cleanup;
+pub mod speaker;
 pub mod system_info;
 pub mod transcribe;
 pub mod translate;

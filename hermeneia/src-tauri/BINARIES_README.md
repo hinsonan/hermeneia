@@ -347,9 +347,80 @@ cargo run --release --bin transcribe -- \
 
 ---
 
+### 7. `speaker`
+Identify who speaks when in an audio file (speaker diarization) using pyannote segmentation + 3DSpeaker embeddings via sherpa-onnx.
+
+**Note:** Models (~32–46 MB) are downloaded automatically from HuggingFace on first use and cached in `~/.cache/huggingface/hub/`.
+
+**Usage:**
+```bash
+cargo run --release --bin speaker -- \
+  --input audio.mp3 \
+  --num-speakers 2
+```
+
+**Arguments:**
+- `--input, -i` - Input audio file (MP3, WAV, FLAC, etc.) — required unless `--list-models`
+- `--output, -o` - Output file path (optional, prints to stdout if not specified)
+- `--model, -m` - Model bundle: `english`, `multilingual` (default: english)
+- `--num-speakers` - Expected speaker count (optional; auto-detect via threshold if omitted)
+- `--threshold` - Clustering threshold 0.0–1.0, lower = more speakers (default: 0.5)
+- `--device` - Inference device: `cpu`, `cuda`, `coreml` (default: cpu)
+- `--format, -f` - Output format: `text`, `json` (default: text)
+- `--list-models` - Print available model bundles with cache status, then exit
+
+**Model Bundles:**
+| Key | Embedding Model | Size | Best for |
+|---|---|---|---|
+| `english` (default) | 3DSpeaker ERes2Net VoxCeleb | ~32.5 MB total | English audio |
+| `multilingual` | 3DSpeaker ERes2Net base zh-cn | ~45.6 MB total | Non-English audio |
+
+Both bundles use the same segmentation model (`csukuangfj/sherpa-onnx-pyannote-segmentation-3-0`). Embedding models come from `csukuangfj/speaker-embedding-models`.
+
+**Text Output Format:**
+```
+[00:00.0 - 00:12.3] Speaker 0
+[00:12.5 - 00:45.1] Speaker 1
+[00:45.4 - 01:10.0] Speaker 0
+
+Detected 2 speaker(s) in 70.0s audio (processed in 4.2s using English (...) on cpu)
+```
+
+**Examples:**
+```bash
+# Basic diarization (auto-detect speakers)
+cargo run --release --bin speaker -- \
+  -i sermon.mp3
+
+# Known speaker count (improves accuracy)
+cargo run --release --bin speaker -- \
+  -i interview.mp3 --num-speakers 2
+
+# JSON output for downstream processing
+cargo run --release --bin speaker -- \
+  -i audio.mp3 --num-speakers 2 --format json -o speakers.json
+
+# Multilingual audio
+cargo run --release --bin speaker -- \
+  -i audio.mp3 --model multilingual
+
+# Adjust clustering (lower threshold = more distinct speakers)
+cargo run --release --bin speaker -- \
+  -i audio.mp3 --threshold 0.4
+
+# GPU inference (requires cuda feature build)
+cargo run --release --features cuda --bin speaker -- \
+  -i audio.mp3 --device cuda
+
+# List models and cache status
+cargo run --bin speaker -- --list-models
+```
+
+---
+
 ## Running Binaries with CUDA Support
 
-Some binaries (like `transcribe`) support GPU acceleration via CUDA. You can run them with CUDA without bundling libraries by using `LD_LIBRARY_PATH`.
+Some binaries (like `transcribe` and `speaker`) support GPU acceleration via CUDA. You can run them with CUDA without bundling libraries by using `LD_LIBRARY_PATH`.
 
 ### Initial Setup (one-time)
 
