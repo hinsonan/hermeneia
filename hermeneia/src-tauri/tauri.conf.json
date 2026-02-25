@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "hermeneia",
-  "version": "2026.2.1",
+  "version": "2026.2.2",
   "identifier": "com.hinson.hermeneia",
   "build": {
     "beforeDevCommand": "npm run dev",
