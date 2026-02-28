@@ -418,9 +418,116 @@ cargo run --bin speaker -- --list-models
 
 ---
 
+### 8. `annotate`
+Transcribe audio **with speaker labels** — runs diarization and transcription in sequence, then merges them by time overlap into a single annotated output.
+
+**Note:** Models are downloaded automatically on first use. Speaker models (~32–46 MB) cache to `~/.cache/huggingface/hub/`. Whisper models cache to the same location.
+
+**Usage:**
+```bash
+cargo run --release --bin annotate -- \
+  --input audio.mp3 \
+  --output output.srt
+```
+
+**Arguments:**
+- `--input, -i` - Input audio file (MP3, WAV, FLAC, etc.) — required
+- `--output, -o` - Output file path (optional, prints to stdout if not specified)
+- `--transcribe-model` - Whisper model size: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large, large-v2, large-v3 (default: tiny)
+- `--speaker-model` - Speaker model bundle: `english`, `multilingual` (default: english)
+- `--task, -t` - Task type: `transcribe` or `translate` (default: transcribe)
+- `--language, -l` - Language code (e.g., en, es), auto-detect if not specified
+- `--num-speakers` - Expected speaker count (optional; auto-detect via threshold if omitted)
+- `--threshold` - Clustering threshold 0.0–1.0, lower = more speakers (default: 0.5)
+- `--device` - Inference device for diarization: `cpu`, `cuda`, `coreml` (default: cpu)
+- `--names` - Assign names to speakers by position or key=value pairs
+- `--format, -f` - Output format: `srt`, `json`, `text` (default: srt)
+- `--no-timestamps` - Omit timestamps (incompatible with `--format srt`)
+
+**Output Formats:**
+
+*SRT (default):*
+```
+1
+00:00:00,000 --> 00:00:12,340
+[Speaker 0] First segment text.
+
+2
+00:00:12,500 --> 00:00:45,100
+[Speaker 1] Second segment text.
+```
+
+*Text:*
+```
+[00:00] Speaker 0: First segment text.
+[00:12] Speaker 1: Second segment text.
+```
+
+*JSON:*
+```json
+{
+  "segments": [
+    {"index": 1, "start": 0.0, "end": 12.34, "speaker": 0, "speaker_name": "Speaker 0", "text": "First segment text."}
+  ],
+  "num_speakers": 2,
+  "language": "en",
+  "audio_duration": 70.0
+}
+```
+
+**Examples:**
+```bash
+# Basic SRT output (auto-detect speakers)
+cargo run --release --bin annotate -- \
+  -i sermon.mp3 -o sermon.srt
+
+# Known speaker count + custom names
+cargo run --release --bin annotate -- \
+  -i interview.mp3 \
+  --num-speakers 2 \
+  --names "Alice,Bob" \
+  -o interview.srt
+
+# Names with explicit key=value mapping
+cargo run --release --bin annotate -- \
+  -i audio.mp3 \
+  --names "0=Pastor John,1=Elder Mary" \
+  -o annotated.srt
+
+# JSON output for downstream processing
+cargo run --release --bin annotate -- \
+  -i audio.mp3 --format json -o result.json
+
+# Plain text output to stdout
+cargo run --release --bin annotate -- \
+  -i audio.mp3 --format text
+
+# Larger Whisper model for better accuracy
+cargo run --release --bin annotate -- \
+  -i lecture.mp3 --transcribe-model small -o lecture.srt
+
+# Multilingual audio
+cargo run --release --bin annotate -- \
+  -i audio.mp3 --speaker-model multilingual --language es -o output.srt
+
+# Translate non-English audio to English
+cargo run --release --bin annotate -- \
+  -i spanish.mp3 --task translate -o english.srt
+
+# Adjust clustering threshold (lower = more distinct speakers)
+cargo run --release --bin annotate -- \
+  -i audio.mp3 --threshold 0.4 -o output.srt
+
+# GPU acceleration (requires cuda feature build)
+cargo run --release --no-default-features --features cuda --bin annotate -- \
+  -i audio.mp3 --device cuda -o output.srt
+```
+
+---
+
 ## Running Binaries with CUDA Support
 
-Some binaries (like `transcribe` and `speaker`) support GPU acceleration via CUDA. You can run them with CUDA without bundling libraries by using `LD_LIBRARY_PATH`.
+Some binaries (`transcribe`, `speaker`, `annotate`) support GPU acceleration via CUDA. You can run them with CUDA without bundling libraries by using `LD_LIBRARY_PATH`.
 
 ### Initial Setup (one-time)
 
@@ -445,6 +552,9 @@ docker-compose -f docker-compose.cuda.yml run --rm build-dev
 
 # Release build (inside Docker)
 docker-compose -f docker-compose.cuda.yml run --rm build-dev sh -c "cargo build --release --features cuda --bin transcribe"
+
+# Build annotate with CUDA
+docker-compose -f docker-compose.cuda.yml run --rm build-dev sh -c "cargo build --no-default-features --features cuda --bin annotate"
 ```
 
 Binaries are output to `src-tauri/target-cuda/debug/` or `src-tauri/target-cuda/release/`.
@@ -504,6 +614,34 @@ LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/transcribe \
 LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/transcribe \
   --input audio.mp3 \
   --cpu
+```
+
+#### Running `annotate` with CUDA
+
+`annotate` links against both the CUDA runtime libraries **and** the sherpa-onnx shared libraries that live alongside the binary in `target-cuda/debug/`. Both directories must be on `LD_LIBRARY_PATH`:
+
+```bash
+# Basic annotate with GPU (from src-tauri directory)
+LD_LIBRARY_PATH=./cuda-libs:./target-cuda/debug ./target-cuda/debug/annotate \
+  --input sermon.mp3 \
+  --output sermon.srt \
+  --device cuda
+
+# With known speaker count and names
+LD_LIBRARY_PATH=./cuda-libs:./target-cuda/debug ./target-cuda/debug/annotate \
+  --input interview.mp3 \
+  --num-speakers 2 \
+  --names "Alice,Bob" \
+  --output interview.srt \
+  --device cuda
+
+# JSON output, larger Whisper model
+LD_LIBRARY_PATH=./cuda-libs:./target-cuda/debug ./target-cuda/debug/annotate \
+  --input audio.mp3 \
+  --transcribe-model small \
+  --format json \
+  --output result.json \
+  --device cuda
 ```
 
 ### Requirements

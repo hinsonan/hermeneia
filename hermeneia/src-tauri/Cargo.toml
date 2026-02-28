@@ -55,6 +55,11 @@ path = "src/bin/translate/main.rs"
 name = "speaker"
 path = "src/bin/speaker/main.rs"
 
+# Binary for speaker-annotated transcription (diarization + transcription merged)
+[[bin]]
+name = "annotate"
+path = "src/bin/annotate/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
