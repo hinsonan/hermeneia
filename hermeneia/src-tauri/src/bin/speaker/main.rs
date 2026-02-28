@@ -3,6 +3,7 @@ use hermeneia_lib::speaker::{
     diarize_audio_with_progress, DiarizeParams, DiarizationResult, SpeakerDevice, SpeakerModel,
     SpeakerModelManager,
 };
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -38,6 +39,13 @@ struct Args {
     /// Output format: text, json
     #[arg(short, long, default_value = "text")]
     format: String,
+
+    /// Assign names to speakers by position or key=value pairs.
+    /// Examples:
+    ///   --names "Alice,Bob"       (Speaker 0=Alice, Speaker 1=Bob)
+    ///   --names "0=Alice,1=Bob"   (explicit key=value)
+    #[arg(long)]
+    names: Option<String>,
 
     /// List available model bundles with cache status, then exit
     #[arg(long)]
@@ -100,13 +108,19 @@ fn main() -> anyhow::Result<()> {
 
     eprintln!(); // newline after progress
 
+    let names = args
+        .names
+        .as_deref()
+        .map(parse_speaker_names)
+        .unwrap_or_default();
+
     match args.format.to_lowercase().as_str() {
         "json" => {
-            let json = serde_json::to_string_pretty(&result)?;
+            let json = format_as_json(&result, &names)?;
             write_output(json, args.output.as_deref())?;
         }
         "text" | _ => {
-            let text = format_as_text(&result);
+            let text = format_as_text(&result, &names);
             write_output(text, args.output.as_deref())?;
         }
     }
@@ -158,7 +172,44 @@ fn print_model_list() {
     }
 }
 
-fn format_as_text(result: &DiarizationResult) -> String {
+/// Parse --names string into a HashMap<speaker_id, name>.
+/// Supports two formats:
+///   positional: "Alice,Bob"     → {0: "Alice", 1: "Bob"}
+///   key=value:  "0=Alice,1=Bob" → {0: "Alice", 1: "Bob"}
+fn parse_speaker_names(names_str: &str) -> HashMap<i32, String> {
+    let mut map = HashMap::new();
+    let parts: Vec<&str> = names_str.split(',').collect();
+    let is_kv = parts.iter().any(|p| p.contains('='));
+    if is_kv {
+        for part in parts {
+            if let Some((k, v)) = part.split_once('=') {
+                if let Ok(id) = k.trim().parse::<i32>() {
+                    let name = v.trim().to_string();
+                    if !name.is_empty() {
+                        map.insert(id, name);
+                    }
+                }
+            }
+        }
+    } else {
+        for (i, name) in parts.iter().enumerate() {
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                map.insert(i as i32, name);
+            }
+        }
+    }
+    map
+}
+
+fn speaker_label(id: i32, names: &HashMap<i32, String>) -> String {
+    names
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| format!("Speaker {}", id))
+}
+
+fn format_as_text(result: &DiarizationResult, names: &HashMap<i32, String>) -> String {
     let mut out = String::new();
     for seg in &result.segments {
         let start_min = (seg.start / 60.0) as u32;
@@ -166,8 +217,12 @@ fn format_as_text(result: &DiarizationResult) -> String {
         let end_min = (seg.end / 60.0) as u32;
         let end_sec = seg.end % 60.0;
         out.push_str(&format!(
-            "[{:02}:{:04.1} - {:02}:{:04.1}] Speaker {}\n",
-            start_min, start_sec, end_min, end_sec, seg.speaker
+            "[{:02}:{:04.1} - {:02}:{:04.1}] {}\n",
+            start_min,
+            start_sec,
+            end_min,
+            end_sec,
+            speaker_label(seg.speaker, names),
         ));
     }
     out.push_str(&format!(
@@ -179,6 +234,42 @@ fn format_as_text(result: &DiarizationResult) -> String {
         result.device,
     ));
     out
+}
+
+fn format_as_json(
+    result: &DiarizationResult,
+    names: &HashMap<i32, String>,
+) -> anyhow::Result<String> {
+    let segments: Vec<serde_json::Value> = result
+        .segments
+        .iter()
+        .map(|seg| {
+            serde_json::json!({
+                "speaker": seg.speaker,
+                "name": speaker_label(seg.speaker, names),
+                "start": seg.start,
+                "end": seg.end,
+            })
+        })
+        .collect();
+
+    // Build speaker_names map with string keys for JSON compatibility
+    let speaker_names: serde_json::Map<String, serde_json::Value> = names
+        .iter()
+        .map(|(id, name)| (id.to_string(), serde_json::Value::String(name.clone())))
+        .collect();
+
+    let output = serde_json::json!({
+        "segments": segments,
+        "speaker_names": speaker_names,
+        "num_speakers": result.num_speakers,
+        "audio_duration": result.audio_duration,
+        "inference_time": result.inference_time,
+        "model": result.model,
+        "device": result.device,
+    });
+
+    Ok(serde_json::to_string_pretty(&output)?)
 }
 
 fn write_output(content: String, path: Option<&str>) -> anyhow::Result<()> {

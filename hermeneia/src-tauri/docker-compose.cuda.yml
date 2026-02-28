@@ -1,7 +1,9 @@
 version: '3.8'
 
 services:
-  # Extract CUDA libraries for local development
+  # Extract CUDA 12.8 + cuDNN 9 runtime libraries for local development.
+  # ORT 1.23.2-patched (used by sherpa-onnx) requires CUDA 12.x and cuDNN 9.
+  # cuDNN 9 is installed from the NVIDIA apt repo inside the container.
   # Run once: docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs
   extract-cuda-libs:
     image: nvidia/cuda:12.8.0-devel-ubuntu22.04
@@ -9,6 +11,7 @@ services:
       - ./cuda-libs:/output
     command: |
       sh -c "
+        apt-get update -qq && apt-get install -y libcudnn9-cuda-12 2>/dev/null || true &&
         mkdir -p /output &&
         cp -P /usr/local/cuda/lib64/libcudart.so* /output/ &&
         cp -P /usr/local/cuda/lib64/libcublas.so* /output/ &&
@@ -16,8 +19,9 @@ services:
         cp -P /usr/local/cuda/lib64/libnvrtc.so* /output/ &&
         cp -P /usr/local/cuda/lib64/libcurand.so* /output/ &&
         cp -P /usr/local/cuda/lib64/libcufft.so* /output/ 2>/dev/null || true &&
+        cp -P /usr/lib/x86_64-linux-gnu/libcudnn*.so* /output/ 2>/dev/null || true &&
         echo '' &&
-        echo '✅ CUDA 12.8 libs extracted to cuda-libs/' &&
+        echo '✅ CUDA 12.8 + cuDNN 9 libs extracted to cuda-libs/' &&
         ls -lh /output/
       "
 
@@ -40,7 +44,7 @@ services:
       - ./icons:/build/icons
       - ./gen:/build/gen
       - ./assets:/build/assets
-      # Output compiled binary to host
+      # Output compiled binary to host (sherpa-onnx .so files also land here at debug/)
       - ./target-cuda:/build/target
       # Cargo cache for faster rebuilds
       - cargo-cache:/root/.cargo/registry
@@ -51,13 +55,17 @@ services:
     command: |
       sh -c "
         echo '🔨 Building Tauri app with CUDA...' &&
-        cargo build --features cuda &&
+        echo '' &&
+        echo '🧹 Removing stale ORT libs so CUDA 12 versions are copied fresh...' &&
+        rm -f /build/target/debug/libonnxruntime*.so* /build/target/debug/deps/libonnxruntime*.so* &&
+        rm -rf /build/target/debug/.fingerprint/sherpa-rs-sys-* &&
+        cargo build --no-default-features --features cuda &&
         echo '' &&
         echo '✅ Build complete!' &&
         echo '📦 Binary: ./target-cuda/debug/hermeneia' &&
         echo '' &&
-        echo '🚀 To run:' &&
-        echo '   LD_LIBRARY_PATH=./cuda-libs ./target-cuda/debug/hermeneia' &&
+        echo '🚀 To run (sherpa-onnx .so files live alongside the binary in target-cuda/debug/):' &&
+        echo '   LD_LIBRARY_PATH=./cuda-libs:./target-cuda/debug ./target-cuda/debug/hermeneia' &&
         echo '' &&
         echo '🔧 Fixing file ownership...' &&
         chown -R \$$HOST_UID:\$$HOST_GID /build/target 2>/dev/null || true
@@ -99,7 +107,7 @@ services:
         echo '🔗 Creating libcuda.so.1 stub for linuxdeploy...' &&
         ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
         npm ci &&
-        npx tauri build --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
+        npx tauri build --no-default-features --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
         echo '' &&
         sh /project/scripts/fix-appimage-cuda.sh &&
         echo '' &&
