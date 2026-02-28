@@ -118,7 +118,7 @@ pub fn diarize_audio_with_progress(
 
 /// Convert interleaved multi-channel PCM to mono by averaging channels.
 fn convert_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    if channels == 1 {
+    if channels <= 1 {
         return samples.to_vec();
     }
     samples
@@ -155,7 +155,10 @@ fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> {
         .process(&waves_in, None)
         .map_err(|e| AudioError::AudioPreprocessing(format!("Resampling: {}", e)))?;
 
-    Ok(waves_out.into_iter().next().unwrap_or_default())
+    waves_out
+        .into_iter()
+        .next()
+        .ok_or_else(|| AudioError::AudioPreprocessing("Resampler produced no output".into()))
 }
 
 #[cfg(test)]

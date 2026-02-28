@@ -356,6 +356,14 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
+    if args.no_timestamps {
+        tracing::warn!(
+            "--no-timestamps is set: transcript segments will have no timing information, \
+             so all segments will be assigned to whichever speaker owns t=0. \
+             Speaker assignment will be unreliable."
+        );
+    }
+
     let whisper_model = parse_whisper_model(&args.transcribe_model)?;
     let speaker_model = parse_speaker_model(&args.speaker_model)?;
     let device = parse_device(&args.device)?;
