@@ -1,31 +1,31 @@
 // src-tauri/src/audio/decoder.rs
 
+use std::fs::File;
+use std::path::Path;
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use std::fs::File;
-use std::path::Path;
 
 use crate::audio::types::{AudioData, AudioInfo};
 use crate::error::{AudioError, Result};
 
 /// Decodes an audio file to PCM samples in memory
-/// 
+///
 /// Supports: MP3, FLAC, WAV, OGG Vorbis, AAC, and more via symphonia
-/// 
+///
 /// # Arguments
 /// * `path` - Path to the audio file
-/// 
+///
 /// # Returns
 /// AudioData containing all decoded PCM samples
-/// 
+///
 /// # Example
 /// ```no_run
 /// use hermeneia_lib::audio::{decode_audio_file, AudioData};
-/// 
+///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let audio = decode_audio_file("sermon.mp3")?;
 /// println!("Loaded {} seconds of audio", audio.duration_seconds());
@@ -55,7 +55,12 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
 
     // Probe the media source to detect format
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe format: {}", e)))?;
 
     let mut format = probed.format;
@@ -91,16 +96,20 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
         loop {
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
-                Err(_) => return Err(AudioError::DecodeFailed("Could not read first packet to determine channels".to_string())),
+                Err(_) => {
+                    return Err(AudioError::DecodeFailed(
+                        "Could not read first packet to determine channels".to_string(),
+                    ))
+                }
             };
 
             if packet.track_id() != track_id {
                 continue;
             }
 
-            let decoded = decoder
-                .decode(&packet)
-                .map_err(|e| AudioError::DecodeFailed(format!("Decode error on first packet: {}", e)))?;
+            let decoded = decoder.decode(&packet).map_err(|e| {
+                AudioError::DecodeFailed(format!("Decode error on first packet: {}", e))
+            })?;
 
             // Get channel count from decoded audio
             let ch = match &decoded {
@@ -124,7 +133,8 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
         }
     }
 
-    let channels = channels_opt.ok_or_else(|| AudioError::DecodeFailed("Could not determine channel count".to_string()))?;
+    let channels = channels_opt
+        .ok_or_else(|| AudioError::DecodeFailed("Could not determine channel count".to_string()))?;
 
     loop {
         // Get next packet
@@ -155,13 +165,13 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
 }
 
 /// Get audio file metadata without decoding all samples
-/// 
+///
 /// Much faster than decode_audio_file() for just getting duration/info
-/// 
+///
 /// # Example
 /// ```no_run
 /// use hermeneia_lib::audio::get_audio_info;
-/// 
+///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let info = get_audio_info("sermon.mp3")?;
 /// println!("Duration: {:.2} minutes", info.duration_seconds / 60.0);
@@ -186,7 +196,12 @@ pub fn get_audio_info<P: AsRef<Path>>(path: P) -> Result<AudioInfo> {
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe: {}", e)))?;
 
     let mut format = probed.format;
@@ -280,7 +295,9 @@ fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
             interleave_planes(buf.planes().planes(), output, |&s| s as f32 / 32768.0);
         }
         AudioBufferRef::S24(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| s.inner() as f32 / 8388608.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                s.inner() as f32 / 8388608.0
+            });
         }
         AudioBufferRef::S32(buf) => {
             interleave_planes(buf.planes().planes(), output, |&s| s as f32 / 2147483648.0);
@@ -288,16 +305,24 @@ fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
 
         // Convert unsigned integers to f32
         AudioBufferRef::U8(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 128.0) / 128.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s as f32 - 128.0) / 128.0
+            });
         }
         AudioBufferRef::U16(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 32768.0) / 32768.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s as f32 - 32768.0) / 32768.0
+            });
         }
         AudioBufferRef::U24(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s.inner() as f32 - 8388608.0) / 8388608.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s.inner() as f32 - 8388608.0) / 8388608.0
+            });
         }
         AudioBufferRef::U32(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 2147483648.0) / 2147483648.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s as f32 - 2147483648.0) / 2147483648.0
+            });
         }
     }
 }
@@ -336,16 +361,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hound::{WavWriter, WavSpec, SampleFormat};
+    use hound::{SampleFormat, WavSpec, WavWriter};
     use std::io::Write;
 
     /// Helper function to create a simple WAV file for testing
-    fn create_test_wav_file(
-        path: &str,
-        duration_seconds: f64,
-        sample_rate: u32,
-        channels: u16,
-    ) {
+    fn create_test_wav_file(path: &str, duration_seconds: f64, sample_rate: u32, channels: u16) {
         let spec = WavSpec {
             channels,
             sample_rate,
@@ -358,7 +378,9 @@ mod tests {
 
         // Write a simple sine wave
         for i in 0..num_samples {
-            let sample = ((i as f32 * 440.0 * 2.0 * std::f32::consts::PI / sample_rate as f32).sin() * 16384.0) as i16;
+            let sample = ((i as f32 * 440.0 * 2.0 * std::f32::consts::PI / sample_rate as f32)
+                .sin()
+                * 16384.0) as i16;
             writer.write_sample(sample).expect("Failed to write sample");
         }
 
@@ -402,7 +424,7 @@ mod tests {
         assert!(result.is_err());
 
         match result.unwrap_err() {
-            AudioError::FileOpen { .. } => {}, // Expected error
+            AudioError::FileOpen { .. } => {} // Expected error
             _ => panic!("Expected FileOpen error"),
         }
     }
@@ -460,7 +482,11 @@ mod tests {
 
     #[test]
     fn test_decode_different_sample_rates() {
-        let rates = vec![(22050, "/tmp/test_22k.wav"), (44100, "/tmp/test_44k.wav"), (48000, "/tmp/test_48k.wav")];
+        let rates = vec![
+            (22050, "/tmp/test_22k.wav"),
+            (44100, "/tmp/test_44k.wav"),
+            (48000, "/tmp/test_48k.wav"),
+        ];
 
         for (rate, path) in rates {
             create_test_wav_file(path, 0.5, rate, 2);
@@ -481,7 +507,11 @@ mod tests {
 
         // All samples should be in valid f32 range [-1.0, 1.0]
         for &sample in &audio.samples {
-            assert!(sample >= -1.0 && sample <= 1.0, "Sample {} out of range", sample);
+            assert!(
+                sample >= -1.0 && sample <= 1.0,
+                "Sample {} out of range",
+                sample
+            );
         }
 
         // Cleanup

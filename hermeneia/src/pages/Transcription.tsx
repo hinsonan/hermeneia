@@ -19,46 +19,51 @@ import type {
   ModelOption,
   LanguageOption,
   SystemCapabilities,
-  ModelValidation
+  ModelValidation,
+  AnnotationProgress,
+  AnnotatedResult,
+  SpeakerDevice,
+  SpeakerModelKey,
+  SpeakerModelRequirement,
 } from "../types/transcription";
 import type { DownloadProgress } from "../types/models";
 import "./Transcription.css";
 
 const MODEL_OPTIONS: ModelOption[] = [
-  { value: 'tiny', label: 'Tiny', description: 'Fastest, least accurate (~1GB VRAM)' },
-  { value: 'tiny.en', label: 'Tiny (English)', description: 'English-only, faster' },
-  { value: 'base', label: 'Base', description: 'Good balance of speed and accuracy (~1GB VRAM)' },
-  { value: 'base.en', label: 'Base (English)', description: 'English-only, recommended' },
-  { value: 'small', label: 'Small', description: 'Better accuracy (~2GB VRAM)' },
-  { value: 'small.en', label: 'Small (English)', description: 'English-only, better accuracy' },
-  { value: 'medium', label: 'Medium', description: 'High accuracy (~5GB VRAM)' },
-  { value: 'medium.en', label: 'Medium (English)', description: 'English-only, high accuracy' },
-  { value: 'large', label: 'Large', description: 'Highest accuracy (~10GB VRAM)' },
-  { value: 'large-v2', label: 'Large v2', description: 'Improved large model' },
-  { value: 'large-v3', label: 'Large v3', description: 'Latest large model' },
+  { value: "tiny", label: "Tiny", description: "Fastest, least accurate (~1GB VRAM)" },
+  { value: "tiny.en", label: "Tiny (English)", description: "English-only, faster" },
+  { value: "base", label: "Base", description: "Good balance of speed and accuracy (~1GB VRAM)" },
+  { value: "base.en", label: "Base (English)", description: "English-only, recommended" },
+  { value: "small", label: "Small", description: "Better accuracy (~2GB VRAM)" },
+  { value: "small.en", label: "Small (English)", description: "English-only, better accuracy" },
+  { value: "medium", label: "Medium", description: "High accuracy (~5GB VRAM)" },
+  { value: "medium.en", label: "Medium (English)", description: "English-only, high accuracy" },
+  { value: "large", label: "Large", description: "Highest accuracy (~10GB VRAM)" },
+  { value: "large-v2", label: "Large v2", description: "Improved large model" },
+  { value: "large-v3", label: "Large v3", description: "Latest large model" },
 ];
 
 const LANGUAGE_OPTIONS: LanguageOption[] = [
-  { value: null, label: 'Auto-detect' },
-  { value: 'en', label: 'English' },
-  { value: 'es', label: 'Spanish' },
-  { value: 'fr', label: 'French' },
-  { value: 'de', label: 'German' },
-  { value: 'it', label: 'Italian' },
-  { value: 'pt', label: 'Portuguese' },
-  { value: 'ru', label: 'Russian' },
-  { value: 'zh', label: 'Chinese' },
-  { value: 'ja', label: 'Japanese' },
-  { value: 'ko', label: 'Korean' },
-  { value: 'ar', label: 'Arabic' },
-  { value: 'el', label: 'Greek' },
-  { value: 'he', label: 'Hebrew' },
-  { value: 'hi', label: 'Hindi' },
-  { value: 'nl', label: 'Dutch' },
-  { value: 'pl', label: 'Polish' },
-  { value: 'tr', label: 'Turkish' },
-  { value: 'vi', label: 'Vietnamese' },
-  { value: 'th', label: 'Thai' },
+  { value: null, label: "Auto-detect" },
+  { value: "en", label: "English" },
+  { value: "es", label: "Spanish" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+  { value: "it", label: "Italian" },
+  { value: "pt", label: "Portuguese" },
+  { value: "ru", label: "Russian" },
+  { value: "zh", label: "Chinese" },
+  { value: "ja", label: "Japanese" },
+  { value: "ko", label: "Korean" },
+  { value: "ar", label: "Arabic" },
+  { value: "el", label: "Greek" },
+  { value: "he", label: "Hebrew" },
+  { value: "hi", label: "Hindi" },
+  { value: "nl", label: "Dutch" },
+  { value: "pl", label: "Polish" },
+  { value: "tr", label: "Turkish" },
+  { value: "vi", label: "Vietnamese" },
+  { value: "th", label: "Thai" },
 ];
 
 const Transcription: Component = () => {
@@ -70,15 +75,22 @@ const Transcription: Component = () => {
   const [fileName, setFileName] = createSignal<string>("");
 
   // Settings
-  const [selectedModel, setSelectedModel] = createSignal<WhisperModel>('tiny');
-  const [selectedTask, setSelectedTask] = createSignal<TranscriptionTask>('transcribe');
+  const [mode, setMode] = createSignal<"transcribe" | "annotate">("transcribe");
+  const [selectedModel, setSelectedModel] = createSignal<WhisperModel>("tiny");
+  const [selectedTask, setSelectedTask] = createSignal<TranscriptionTask>("transcribe");
   const [selectedLanguage, setSelectedLanguage] = createSignal<string | null>(null);
   const [includeTimestamps, setIncludeTimestamps] = createSignal(true);
+  const [selectedSpeakerModel, setSelectedSpeakerModel] = createSignal<SpeakerModelKey>("english");
+  const [selectedSpeakerDevice, setSelectedSpeakerDevice] = createSignal<SpeakerDevice>("cpu");
+  const [numSpeakers, setNumSpeakers] = createSignal<number | null>(null);
+  const [diarizeThreshold, setDiarizeThreshold] = createSignal<number>(0.5);
 
   // Processing state
   const [isTranscribing, setIsTranscribing] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [result, setResult] = createSignal<TranscriptResult | null>(null);
+  const [annotatedResult, setAnnotatedResult] = createSignal<AnnotatedResult | null>(null);
+  const [speakerNames, setSpeakerNames] = createSignal<Record<string, string>>({});
   const [transcriptionProgress, setTranscriptionProgress] = createSignal<TranscriptionProgress | null>(null);
 
   // Cancel dialog
@@ -87,24 +99,53 @@ const Transcription: Component = () => {
   // Model download state
   const [isDownloading, setIsDownloading] = createSignal(false);
   const [modelDownloadProgress, setModelDownloadProgress] = createSignal<DownloadProgress | null>(null);
+  const [isPreparingSpeaker, setIsPreparingSpeaker] = createSignal(false);
 
   // System capability detection
   const [systemCapabilities, setSystemCapabilities] = createSignal<SystemCapabilities | null>(null);
   const [modelValidation, setModelValidation] = createSignal<ModelValidation | null>(null);
+  const [speakerModelRequirements, setSpeakerModelRequirements] = createSignal<SpeakerModelRequirement[]>([]);
 
   // Track unlisten functions for cleanup
   let progressUnlisten: UnlistenFn | null = null;
   let downloadUnlisten: UnlistenFn | null = null;
 
+  const isAnnotateMode = createMemo(() => mode() === "annotate");
+
   // Check if selected model is English-only
   const isEnglishOnlyModel = createMemo(() => {
-    return selectedModel().endsWith('.en');
+    return selectedModel().endsWith(".en");
+  });
+
+  const availableSpeakerDevices = createMemo(() => {
+    const deviceType = systemCapabilities()?.gpu_info?.device_type;
+    if (deviceType === "NvidiaCuda") return ["cuda", "cpu"] as SpeakerDevice[];
+    if (deviceType === "AppleMetal") return ["coreml", "cpu"] as SpeakerDevice[];
+    return ["cpu"] as SpeakerDevice[];
+  });
+
+  const activeSpeakerRequirement = createMemo(() =>
+    speakerModelRequirements().find((m) => m.key === selectedSpeakerModel())
+  );
+
+  const annotatedSegmentsWithNames = createMemo(() => {
+    const res = annotatedResult();
+    if (!res) return [];
+    return res.segments.map((seg) => ({
+      ...seg,
+      speaker_name: speakerNames()[String(seg.speaker)] || seg.speaker_name || `Speaker ${seg.speaker}`,
+    }));
+  });
+
+  const speakerIds = createMemo(() => {
+    const ids = Array.from(new Set(annotatedSegmentsWithNames().map((s) => s.speaker)));
+    return ids.sort((a, b) => a - b);
   });
 
   // Filter language options based on model selection
   const availableLanguages = createMemo(() => {
     if (isEnglishOnlyModel()) {
-      return LANGUAGE_OPTIONS.filter(lang => lang.value === 'en');
+      return LANGUAGE_OPTIONS.filter((lang) => lang.value === "en");
     }
     return LANGUAGE_OPTIONS;
   });
@@ -112,7 +153,14 @@ const Transcription: Component = () => {
   // Auto-select English when English-only model is selected
   createEffect(() => {
     if (isEnglishOnlyModel()) {
-      setSelectedLanguage('en');
+      setSelectedLanguage("en");
+    }
+  });
+
+  // Force timestamps for annotate mode
+  createEffect(() => {
+    if (isAnnotateMode()) {
+      setIncludeTimestamps(true);
     }
   });
 
@@ -128,13 +176,28 @@ const Transcription: Component = () => {
     }
   });
 
-  // Fetch system capabilities on mount
+  // Fetch system capabilities + speaker requirements on mount
   onMount(async () => {
     try {
       const caps = await invoke<SystemCapabilities>("get_system_capabilities");
       setSystemCapabilities(caps);
+      const deviceType = caps.gpu_info?.device_type;
+      if (deviceType === "NvidiaCuda") {
+        setSelectedSpeakerDevice("cuda");
+      } else if (deviceType === "AppleMetal") {
+        setSelectedSpeakerDevice("coreml");
+      } else {
+        setSelectedSpeakerDevice("cpu");
+      }
     } catch (err) {
       console.warn("Failed to get system capabilities:", err);
+    }
+
+    try {
+      const requirements = await invoke<SpeakerModelRequirement[]>("list_speaker_model_requirements");
+      setSpeakerModelRequirements(requirements);
+    } catch (err) {
+      console.warn("Failed to load speaker model requirements:", err);
     }
   });
 
@@ -150,10 +213,10 @@ const Transcription: Component = () => {
 
   const validateModel = async (model: WhisperModel) => {
     try {
-      const validation = await invoke<ModelValidation>(
-        "validate_model_selection",
-        { model, forceCpu: false }
-      );
+      const validation = await invoke<ModelValidation>("validate_model_selection", {
+        model,
+        forceCpu: false,
+      });
       setModelValidation(validation);
     } catch (err) {
       console.error("Validation failed:", err);
@@ -168,6 +231,7 @@ const Transcription: Component = () => {
     setFilePath(path);
     setFileName(path.split("/").pop() || path.split("\\").pop() || "Unknown");
     setResult(null);
+    setAnnotatedResult(null);
     setError(null);
   };
 
@@ -177,7 +241,9 @@ const Transcription: Component = () => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     const ms = Math.floor((seconds % 1) * 100);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${ms
+      .toString()
+      .padStart(2, "0")}`;
   };
 
   // Format timestamp for SRT format (HH:MM:SS,mmm)
@@ -187,7 +253,9 @@ const Transcription: Component = () => {
     const mins = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
     const ms = Math.floor((seconds % 1) * 1000);
-    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
+    return `${hours.toString().padStart(2, "0")}:${mins
+      .toString()
+      .padStart(2, "0")}:${secs.toString().padStart(2, "0")},${ms.toString().padStart(3, "0")}`;
   };
 
   // Generate plain text content
@@ -197,8 +265,21 @@ const Transcription: Component = () => {
     return transcript.text;
   };
 
-  // Generate SRT content
+  // Generate SRT content (transcription or annotate mode)
   const getSrtContent = (): string => {
+    if (isAnnotateMode()) {
+      const segments = annotatedSegmentsWithNames();
+      if (segments.length === 0) return "";
+
+      return segments
+        .map((seg, index) => {
+          const startTime = formatSrtTimestamp(seg.start);
+          const endTime = formatSrtTimestamp(seg.end);
+          return `${index + 1}\n${startTime} --> ${endTime}\n[${seg.speaker_name}] ${seg.text.trim()}\n`;
+        })
+        .join("\n");
+    }
+
     const transcript = result();
     if (!transcript || transcript.segments.length === 0) return "";
 
@@ -208,14 +289,16 @@ const Transcription: Component = () => {
         const endTime = formatSrtTimestamp(seg.end);
         return `${index + 1}\n${startTime} --> ${endTime}\n${seg.text.trim()}\n`;
       })
-      .join('\n');
+      .join("\n");
   };
 
   // Check if error is OOM-related
   const isOOMError = (err: string): boolean => {
-    return err.toLowerCase().includes('out of memory') ||
-           err.toLowerCase().includes('oom') ||
-           err.includes('OutOfMemory');
+    return (
+      err.toLowerCase().includes("out of memory") ||
+      err.toLowerCase().includes("oom") ||
+      err.includes("OutOfMemory")
+    );
   };
 
   // Map whisper model key to HuggingFace model ID for cache checks
@@ -227,11 +310,9 @@ const Transcription: Component = () => {
     const cached = await invoke<boolean>("is_model_cached", { modelId: hfId });
     if (cached) return true;
 
-    // Need to download first
     setIsDownloading(true);
     setModelDownloadProgress(null);
 
-    // Set up listener BEFORE invoking download to avoid race condition
     try {
       downloadUnlisten = await listen<DownloadProgress>("download-progress", (event) => {
         setModelDownloadProgress(event.payload);
@@ -244,7 +325,7 @@ const Transcription: Component = () => {
     }
 
     try {
-      const modelLabel = MODEL_OPTIONS.find(m => m.value === selectedModel())?.label || selectedModel();
+      const modelLabel = MODEL_OPTIONS.find((m) => m.value === selectedModel())?.label || selectedModel();
       await invoke("download_model", {
         modelId: hfId,
         modelName: `Whisper ${modelLabel}`,
@@ -267,38 +348,108 @@ const Transcription: Component = () => {
     }
   };
 
-  // Start transcription
+  const ensureSpeakerModelDownloaded = async (): Promise<boolean> => {
+    const requirement = activeSpeakerRequirement();
+    if (requirement?.is_cached) {
+      return true;
+    }
+
+    setIsPreparingSpeaker(true);
+    try {
+      await invoke("ensure_speaker_model_downloaded", {
+        model: selectedSpeakerModel(),
+      });
+      const requirements = await invoke<SpeakerModelRequirement[]>("list_speaker_model_requirements");
+      setSpeakerModelRequirements(requirements);
+      return true;
+    } catch (err) {
+      setError(`Speaker model download failed: ${String(err)}`);
+      return false;
+    } finally {
+      setIsPreparingSpeaker(false);
+    }
+  };
+
+  const mapAnnotationProgress = (p: AnnotationProgress): TranscriptionProgress => {
+    if (p.phase === "loading_model" || p.phase === "merging") {
+      return {
+        phase: "loading_model",
+        current: p.current,
+        total: p.total,
+        message: p.message,
+      };
+    }
+
+    return {
+      phase: "transcribing",
+      current: p.current,
+      total: p.total,
+      message: p.message,
+    };
+  };
+
+  // Start transcription/annotation
   const handleTranscribe = async () => {
     if (!filePath()) return;
 
     setError(null);
 
-    // Check if model needs downloading
     const modelReady = await ensureModelDownloaded();
     if (!modelReady) return;
+
+    if (isAnnotateMode()) {
+      const speakerReady = await ensureSpeakerModelDownloaded();
+      if (!speakerReady) return;
+    }
 
     setIsTranscribing(true);
     setTranscriptionProgress(null);
 
-    // Set up progress event listener
     try {
-      progressUnlisten = await listen<TranscriptionProgress>('transcription-progress', (event) => {
-        setTranscriptionProgress(event.payload);
+      const eventName = isAnnotateMode() ? "annotation-progress" : "transcription-progress";
+
+      progressUnlisten = await listen(eventName, (event) => {
+        const payload = event.payload as AnnotationProgress | TranscriptionProgress;
+        if (isAnnotateMode()) {
+          setTranscriptionProgress(mapAnnotationProgress(payload as AnnotationProgress));
+        } else {
+          setTranscriptionProgress(payload as TranscriptionProgress);
+        }
       });
     } catch (err) {
-      console.warn('Failed to set up progress listener:', err);
+      console.warn("Failed to set up progress listener:", err);
     }
 
     try {
-      const transcriptResult = await invoke<TranscriptResult>("transcribe_audio_file", {
-        filePath: filePath(),
-        model: selectedModel(),
-        task: selectedTask(),
-        language: selectedLanguage(),
-        timestamps: includeTimestamps(),
-      });
+      if (isAnnotateMode()) {
+        const annotated = await invoke<AnnotatedResult>("annotate_audio_file", {
+          filePath: filePath(),
+          transcribeModel: selectedModel(),
+          speakerModel: selectedSpeakerModel(),
+          task: selectedTask(),
+          language: selectedLanguage(),
+          timestamps: true,
+          numSpeakers: numSpeakers(),
+          threshold: diarizeThreshold(),
+          device: selectedSpeakerDevice(),
+          speakerNames: speakerNames(),
+        });
 
-      setResult(transcriptResult);
+        setResult(null);
+        setAnnotatedResult(annotated);
+        setSpeakerNames(annotated.speaker_names || {});
+      } else {
+        const transcriptResult = await invoke<TranscriptResult>("transcribe_audio_file", {
+          filePath: filePath(),
+          model: selectedModel(),
+          task: selectedTask(),
+          language: selectedLanguage(),
+          timestamps: includeTimestamps(),
+        });
+
+        setAnnotatedResult(null);
+        setResult(transcriptResult);
+      }
     } catch (err) {
       const errStr = String(err);
       if (errStr.includes("Operation cancelled")) {
@@ -307,13 +458,50 @@ const Transcription: Component = () => {
       }
       setError(errStr);
     } finally {
-      // Clean up progress listener
       if (progressUnlisten) {
         progressUnlisten();
         progressUnlisten = null;
       }
       setIsTranscribing(false);
       setTranscriptionProgress(null);
+    }
+  };
+
+  // Generate plain text for annotated result: "[MM:SS] Speaker: text"
+  const getAnnotatedPlainTextContent = (): string => {
+    return annotatedSegmentsWithNames()
+      .map((seg) => {
+        const startMin = Math.floor(seg.start / 60).toString().padStart(2, "0");
+        const startSec = Math.floor(seg.start % 60).toString().padStart(2, "0");
+        return `[${startMin}:${startSec}] ${seg.speaker_name}: ${seg.text}`;
+      })
+      .join("\n");
+  };
+
+  const handleCopyAnnotatedText = async () => {
+    const text = getAnnotatedPlainTextContent();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      console.error("Failed to copy annotated text:", err);
+    }
+  };
+
+  const handleExportAnnotatedText = async () => {
+    if (annotatedSegmentsWithNames().length === 0) return;
+    try {
+      const outputPath = await save({
+        filters: [{ name: "Text Files", extensions: ["txt"] }],
+        defaultPath: `${fileName().replace(/\.[^/.]+$/, "")}_annotated.txt`,
+      });
+      if (!outputPath) return;
+      await invoke("write_text_file", {
+        path: outputPath,
+        content: getAnnotatedPlainTextContent(),
+      });
+    } catch (err) {
+      console.error("Failed to export annotated text:", err);
     }
   };
 
@@ -348,20 +536,20 @@ const Transcription: Component = () => {
 
     try {
       const outputPath = await save({
-        filters: [{
-          name: "Text Files",
-          extensions: ["txt"],
-        }],
+        filters: [
+          {
+            name: "Text Files",
+            extensions: ["txt"],
+          },
+        ],
         defaultPath: `${fileName().replace(/\.[^/.]+$/, "")}_transcript.txt`,
       });
 
       if (!outputPath) return;
 
-      const content = transcript.text;
-
       await invoke("write_text_file", {
         path: outputPath,
-        content: content,
+        content: transcript.text,
       });
     } catch (err) {
       console.error("Failed to export transcript:", err);
@@ -370,16 +558,21 @@ const Transcription: Component = () => {
 
   // Export transcript as SRT file
   const handleExportSrt = async () => {
-    const transcript = result();
-    if (!transcript || transcript.segments.length === 0) return;
+    const hasSegments = isAnnotateMode()
+      ? annotatedSegmentsWithNames().length > 0
+      : !!result() && result()!.segments.length > 0;
+
+    if (!hasSegments) return;
 
     try {
       const outputPath = await save({
-        filters: [{
-          name: "SRT Subtitle Files",
-          extensions: ["srt"],
-        }],
-        defaultPath: `${fileName().replace(/\.[^/.]+$/, "")}.srt`,
+        filters: [
+          {
+            name: "SRT Subtitle Files",
+            extensions: ["srt"],
+          },
+        ],
+        defaultPath: `${fileName().replace(/\.[^/.]+$/, "")}${isAnnotateMode() ? "_annotated" : ""}.srt`,
       });
 
       if (!outputPath) return;
@@ -388,11 +581,15 @@ const Transcription: Component = () => {
 
       await invoke("write_text_file", {
         path: outputPath,
-        content: content,
+        content,
       });
     } catch (err) {
       console.error("Failed to export SRT:", err);
     }
+  };
+
+  const updateSpeakerName = (speakerId: number, value: string) => {
+    setSpeakerNames((prev) => ({ ...prev, [String(speakerId)]: value }));
   };
 
   // Handle back button - show confirm dialog if transcribing
@@ -407,9 +604,6 @@ const Transcription: Component = () => {
   // Confirm cancellation and navigate home immediately
   const handleConfirmCancel = () => {
     setShowCancelDialog(false);
-    // Fire-and-forget: set the cancel flag, then navigate immediately
-    // The backend spawn_blocking will detect the flag, return Err(Cancelled),
-    // and drop all model data (freeing CPU RAM / GPU VRAM automatically)
     invoke("cancel_inference").catch(() => {});
     navigate("/");
   };
@@ -419,30 +613,30 @@ const Transcription: Component = () => {
     setFilePath("");
     setFileName("");
     setResult(null);
+    setAnnotatedResult(null);
+    setSpeakerNames({});
     setError(null);
+    setNumSpeakers(null);
+    setDiarizeThreshold(0.5);
   };
 
   return (
     <>
       {/* Theme Toggle */}
-      <button
-        class="theme-toggle"
-        onClick={toggleTheme}
-        aria-label="Toggle dark mode"
-      >
+      <button class="theme-toggle" onClick={toggleTheme} aria-label="Toggle dark mode">
         <svg class="sun-icon" viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="5"/>
-          <line x1="12" y1="1" x2="12" y2="3"/>
-          <line x1="12" y1="21" x2="12" y2="23"/>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-          <line x1="1" y1="12" x2="3" y2="12"/>
-          <line x1="21" y1="12" x2="23" y2="12"/>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          <circle cx="12" cy="12" r="5" />
+          <line x1="12" y1="1" x2="12" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="23" />
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+          <line x1="1" y1="12" x2="3" y2="12" />
+          <line x1="21" y1="12" x2="23" y2="12" />
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
         </svg>
         <svg class="moon-icon" viewBox="0 0 24 24">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
         </svg>
       </button>
 
@@ -450,33 +644,29 @@ const Transcription: Component = () => {
         <div class="scroll-rod"></div>
 
         <main class="parchment">
-          {/* Header */}
           <header class="page-header">
             <button class="back-button" onClick={handleBack}>
               <svg viewBox="0 0 24 24" width="20" height="20">
-                <path d="M19 12H5M12 19l-7-7 7-7"/>
+                <path d="M19 12H5M12 19l-7-7 7-7" />
               </svg>
               <span>Home</span>
             </button>
-            <h1>Transcription</h1>
+            <h1>{isAnnotateMode() ? "Transcription + Annotation" : "Transcription"}</h1>
           </header>
 
-          {/* File Upload Section - shown when no file */}
           <Show when={!filePath()}>
             <section class="upload-section">
               <FileUploader onFileSelected={handleFileSelected} />
             </section>
           </Show>
 
-          {/* Main Content - shown after file selected */}
           <Show when={filePath()}>
-            {/* File info bar */}
             <div class="file-bar">
               <div class="file-info">
                 <svg viewBox="0 0 24 24" width="20" height="20">
-                  <path d="M9 18V5l12-2v13"/>
-                  <circle cx="6" cy="18" r="3"/>
-                  <circle cx="18" cy="16" r="3"/>
+                  <path d="M9 18V5l12-2v13" />
+                  <circle cx="6" cy="18" r="3" />
+                  <circle cx="18" cy="16" r="3" />
                 </svg>
                 <span class="file-name">{fileName()}</span>
               </div>
@@ -485,7 +675,6 @@ const Transcription: Component = () => {
               </button>
             </div>
 
-            {/* Error display */}
             <Show when={error()}>
               <div class="error-banner">
                 <div class="error-content">
@@ -493,9 +682,9 @@ const Transcription: Component = () => {
                   <Show when={isOOMError(error()!)}>
                     <div class="error-suggestion">
                       <svg viewBox="0 0 24 24" width="16" height="16">
-                        <circle cx="12" cy="12" r="10"/>
-                        <line x1="12" y1="8" x2="12" y2="12"/>
-                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
                       </svg>
                       <span>Try selecting 'tiny' or 'base' model for your system</span>
                     </div>
@@ -505,10 +694,32 @@ const Transcription: Component = () => {
               </div>
             </Show>
 
-            {/* Settings panel - hidden during transcription, download, and when showing results */}
-            <Show when={!isTranscribing() && !isDownloading() && !result()}>
+            <Show when={!isTranscribing() && !isDownloading() && !isPreparingSpeaker() && !result() && !annotatedResult()}>
               <section class="settings-panel">
-                {/* Model Selection */}
+                <div class="setting-group">
+                  <label class="label-with-info">
+                    Mode
+                    <InfoIcon
+                      content="Transcription returns plain transcript output. Annotate runs speaker diarization + transcription and forces speaker-labeled SRT output."
+                      position="right"
+                    />
+                  </label>
+                  <div class="task-toggle">
+                    <button
+                      class={`task-btn ${!isAnnotateMode() ? "active" : ""}`}
+                      onClick={() => setMode("transcribe")}
+                    >
+                      Transcribe
+                    </button>
+                    <button
+                      class={`task-btn ${isAnnotateMode() ? "active" : ""}`}
+                      onClick={() => setMode("annotate")}
+                    >
+                      Annotate
+                    </button>
+                  </div>
+                </div>
+
                 <div class="setting-group">
                   <label for="model-select" class="label-with-info">
                     Model
@@ -523,66 +734,55 @@ const Transcription: Component = () => {
                       value={selectedModel()}
                       onChange={(e) => setSelectedModel(e.currentTarget.value as WhisperModel)}
                     >
-                      <For each={MODEL_OPTIONS}>
-                        {(option) => (
-                          <option value={option.value}>
-                            {option.label}
-                          </option>
-                        )}
-                      </For>
+                      <For each={MODEL_OPTIONS}>{(option) => <option value={option.value}>{option.label}</option>}</For>
                     </select>
                     <svg class="select-arrow" viewBox="0 0 24 24">
-                      <path d="M6 9l6 6 6-6"/>
+                      <path d="M6 9l6 6 6-6" />
                     </svg>
                   </div>
-                  <span class="setting-hint">
-                    {MODEL_OPTIONS.find(m => m.value === selectedModel())?.description}
-                  </span>
-                  <Show when={modelValidation() && modelValidation()!.status === 'warning'}>
+                  <span class="setting-hint">{MODEL_OPTIONS.find((m) => m.value === selectedModel())?.description}</span>
+                  <Show when={modelValidation() && modelValidation()!.status === "warning"}>
                     <div class="model-warning">
                       <svg viewBox="0 0 24 24" width="14" height="14">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor"/>
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor" />
                       </svg>
-                      <For each={modelValidation()!.messages}>
-                        {(message) => <span class="warning-text">{message}</span>}
-                      </For>
+                      <For each={modelValidation()!.messages}>{(message) => <span class="warning-text">{message}</span>}</For>
                     </div>
                   </Show>
                 </div>
 
-                {/* Task Selection */}
                 <div class="setting-group">
                   <label class="label-with-info">
                     Task
                     <InfoIcon
-                      content="Transcribe converts speech to text in the original language. Translate converts speech to English text, regardless of the source language."
+                      content="Transcribe keeps original language text. Translate converts speech to English text."
                       position="right"
                     />
                   </label>
                   <div class="task-toggle">
                     <button
-                      class={`task-btn ${selectedTask() === 'transcribe' ? 'active' : ''}`}
-                      onClick={() => setSelectedTask('transcribe')}
+                      class={`task-btn ${selectedTask() === "transcribe" ? "active" : ""}`}
+                      onClick={() => setSelectedTask("transcribe")}
                     >
                       Transcribe
                     </button>
                     <button
-                      class={`task-btn ${selectedTask() === 'translate' ? 'active' : ''}`}
-                      onClick={() => setSelectedTask('translate')}
+                      class={`task-btn ${selectedTask() === "translate" ? "active" : ""}`}
+                      onClick={() => setSelectedTask("translate")}
                     >
                       Translate to English
                     </button>
                   </div>
                 </div>
 
-                {/* Language Selection */}
                 <div class="setting-group">
                   <label for="language-select" class="label-with-info">
                     Source Language
                     <InfoIcon
-                      content={isEnglishOnlyModel()
-                        ? "English-only models can only transcribe English audio."
-                        : "Auto-detect identifies the language automatically (recommended). Manually selecting a language can improve accuracy if you're certain of the source."
+                      content={
+                        isEnglishOnlyModel()
+                          ? "English-only models can only transcribe English audio."
+                          : "Auto-detect identifies the language automatically (recommended). Manually selecting a language can improve accuracy if you're certain of the source."
                       }
                       position="right"
                     />
@@ -590,25 +790,96 @@ const Transcription: Component = () => {
                   <div class="select-wrapper">
                     <select
                       id="language-select"
-                      value={selectedLanguage() || ''}
+                      value={selectedLanguage() || ""}
                       onChange={(e) => setSelectedLanguage(e.currentTarget.value || null)}
                       disabled={isEnglishOnlyModel()}
                     >
                       <For each={availableLanguages()}>
-                        {(option) => (
-                          <option value={option.value || ''}>
-                            {option.label}
-                          </option>
-                        )}
+                        {(option) => <option value={option.value || ""}>{option.label}</option>}
                       </For>
                     </select>
                     <svg class="select-arrow" viewBox="0 0 24 24">
-                      <path d="M6 9l6 6 6-6"/>
+                      <path d="M6 9l6 6 6-6" />
                     </svg>
                   </div>
                 </div>
 
-                {/* Timestamps Toggle */}
+                <Show when={isAnnotateMode()}>
+                  <>
+                    <div class="setting-group">
+                      <label for="speaker-model-select">Speaker Model</label>
+                      <div class="select-wrapper">
+                        <select
+                          id="speaker-model-select"
+                          value={selectedSpeakerModel()}
+                          onChange={(e) => setSelectedSpeakerModel(e.currentTarget.value as SpeakerModelKey)}
+                        >
+                          <For each={speakerModelRequirements()}>
+                            {(m) => <option value={m.key}>{m.key.charAt(0).toUpperCase() + m.key.slice(1)} ({m.approx_size_mb.toFixed(1)} MB)</option>}
+                          </For>
+                        </select>
+                        <svg class="select-arrow" viewBox="0 0 24 24">
+                          <path d="M6 9l6 6 6-6" />
+                        </svg>
+                      </div>
+                    </div>
+
+                    <div class="setting-group">
+                      <label for="speaker-device-select">Speaker Device</label>
+                      <div class="select-wrapper">
+                        <select
+                          id="speaker-device-select"
+                          value={selectedSpeakerDevice()}
+                          onChange={(e) => setSelectedSpeakerDevice(e.currentTarget.value as SpeakerDevice)}
+                        >
+                          <For each={availableSpeakerDevices()}>{(d) => <option value={d}>{d.toUpperCase()}</option>}</For>
+                        </select>
+                        <svg class="select-arrow" viewBox="0 0 24 24">
+                          <path d="M6 9l6 6 6-6" />
+                        </svg>
+                      </div>
+                      <span class="setting-hint">
+                        Annotate mode forces SRT output with speaker labels (ID or edited names).
+                      </span>
+                    </div>
+
+                    <div class="setting-group">
+                      <label for="num-speakers-input">Expected Speakers</label>
+                      <input
+                        id="num-speakers-input"
+                        type="number"
+                        min="1"
+                        max="20"
+                        placeholder="Auto-detect"
+                        value={numSpeakers() ?? ""}
+                        onInput={(e) => {
+                          const v = e.currentTarget.value;
+                          setNumSpeakers(v === "" ? null : parseInt(v, 10));
+                        }}
+                        class="number-input"
+                      />
+                    </div>
+
+                    <div class="setting-group">
+                      <label for="diarize-threshold-input">
+                        Clustering Threshold
+                        <span class="threshold-value"> ({diarizeThreshold().toFixed(2)})</span>
+                      </label>
+                      <input
+                        id="diarize-threshold-input"
+                        type="range"
+                        min="0.1"
+                        max="0.9"
+                        step="0.05"
+                        value={diarizeThreshold()}
+                        onInput={(e) => setDiarizeThreshold(parseFloat(e.currentTarget.value))}
+                        class="range-slider"
+                      />
+                      <span class="setting-hint">Lower = more speakers detected</span>
+                    </div>
+                  </>
+                </Show>
+
                 <div class="setting-group inline">
                   <label class="toggle-label">
                     <span class="toggle-switch">
@@ -616,39 +887,42 @@ const Transcription: Component = () => {
                         type="checkbox"
                         checked={includeTimestamps()}
                         onChange={(e) => setIncludeTimestamps(e.currentTarget.checked)}
+                        disabled={isAnnotateMode()}
                       />
                       <span class="toggle-slider"></span>
                     </span>
                     <span class="label-with-info">
                       Include timestamps
                       <InfoIcon
-                        content="Generates time-coded segments. Enables SRT subtitle export for video subtitles and precise navigation."
+                        content={
+                          isAnnotateMode()
+                            ? "Annotate mode always requires timestamps and SRT output."
+                            : "Generates time-coded segments. Enables SRT subtitle export for video subtitles and precise navigation."
+                        }
                         position="right"
                       />
                     </span>
                   </label>
                 </div>
 
-                {/* Start button */}
                 <button
                   class="start-btn"
                   onClick={handleTranscribe}
-                  disabled={modelValidation()?.status === 'error'}
-                  title={modelValidation()?.status === 'error' ? 'Cannot run: insufficient system resources' : ''}
+                  disabled={modelValidation()?.status === "error"}
+                  title={modelValidation()?.status === "error" ? "Cannot run: insufficient system resources" : ""}
                 >
                   <svg viewBox="0 0 24 24" width="20" height="20">
-                    <polygon points="5 3 19 12 5 21 5 3"/>
+                    <polygon points="5 3 19 12 5 21 5 3" />
                   </svg>
-                  Begin Transcription
+                  {isAnnotateMode() ? "Begin Annotation" : "Begin Transcription"}
                 </button>
               </section>
             </Show>
 
-            {/* Model download progress */}
             <Show when={isDownloading()}>
               <section class="processing-section">
                 <h2>Downloading Model...</h2>
-                <p>Downloading the {selectedModel()} model before transcription</p>
+                <p>Downloading the {selectedModel()} model before processing</p>
                 <DownloadProgressBar
                   progress={modelDownloadProgress()}
                   onCancel={() => invoke("cancel_download").catch(() => {})}
@@ -656,36 +930,49 @@ const Transcription: Component = () => {
               </section>
             </Show>
 
-            {/* Processing state - inline on page */}
+            <Show when={isPreparingSpeaker()}>
+              <section class="processing-section">
+                <GreekScrollLoader />
+                <h2>Preparing Speaker Model...</h2>
+                <p>Downloading and caching speaker diarization model bundle</p>
+              </section>
+            </Show>
+
             <Show when={isTranscribing()}>
               <section class="processing-section">
                 <GreekScrollLoader />
                 <h2>
-                  {transcriptionProgress()?.phase === 'loading_model'
-                    ? 'Loading Model...'
-                    : 'Transcribing...'}
+                  {transcriptionProgress()?.phase === "loading_model"
+                    ? "Loading / Preparing..."
+                    : isAnnotateMode()
+                    ? transcriptionProgress()?.message?.startsWith("Diarizing")
+                      ? "Diarizing..."
+                      : transcriptionProgress()?.message?.startsWith("Transcribing")
+                      ? "Transcribing..."
+                      : "Annotating..."
+                    : "Transcribing..."}
                 </h2>
-                <p>Processing your audio with the {selectedModel()} model</p>
+                <p>
+                  Processing your audio with the {selectedModel()} model
+                  {isAnnotateMode() ? " + speaker diarization" : ""}
+                </p>
 
-                {/* Progress Bar */}
                 <TranscriptionProgressBar progress={transcriptionProgress()} />
 
                 <div class="processing-details">
                   <span>File: {fileName()}</span>
-                  <span>Task: {selectedTask() === 'transcribe' ? 'Transcription' : 'Translation'}</span>
+                  <span>Task: {isAnnotateMode() ? "Annotation" : selectedTask() === "transcribe" ? "Transcription" : "Translation"}</span>
                 </div>
               </section>
             </Show>
 
-            {/* Results */}
             <Show when={result()} keyed>
               {(res) => (
                 <section class="results-section">
-                  {/* Metadata */}
                   <div class="result-meta">
                     <div class="meta-item">
                       <span class="meta-label">Language</span>
-                      <span class="meta-value">{res.language || 'Unknown'}</span>
+                      <span class="meta-value">{res.language || "Unknown"}</span>
                     </div>
                     <div class="meta-item">
                       <span class="meta-label">Duration</span>
@@ -701,29 +988,26 @@ const Transcription: Component = () => {
                     </div>
                   </div>
 
-                  {/* Transcript text */}
                   <div class="transcript-box">
                     <div class="transcript-header">
                       <h3>Transcript</h3>
                     </div>
-                    <div class="transcript-content">
-                      {res.text}
-                    </div>
+                    <div class="transcript-content">{res.text}</div>
                     <div class="transcript-actions">
                       <div class="action-group">
                         <span class="action-label">Copy:</span>
                         <button class="action-btn" onClick={handleCopyPlainText} title="Copy plain text">
                           <svg viewBox="0 0 24 24" width="16" height="16">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                           </svg>
                           <span>Text</span>
                         </button>
                         <Show when={includeTimestamps() && res.segments.length > 0}>
                           <button class="action-btn" onClick={handleCopySrt} title="Copy SRT format">
                             <svg viewBox="0 0 24 24" width="16" height="16">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                             </svg>
                             <span>SRT</span>
                           </button>
@@ -733,18 +1017,18 @@ const Transcription: Component = () => {
                         <span class="action-label">Download:</span>
                         <button class="action-btn" onClick={handleExportPlainText} title="Download as .txt file">
                           <svg viewBox="0 0 24 24" width="16" height="16">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
                           </svg>
                           <span>.txt</span>
                         </button>
                         <Show when={includeTimestamps() && res.segments.length > 0}>
                           <button class="action-btn" onClick={handleExportSrt} title="Download as .srt file">
                             <svg viewBox="0 0 24 24" width="16" height="16">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                              <polyline points="7 10 12 15 17 10"/>
-                              <line x1="12" y1="15" x2="12" y2="3"/>
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                              <polyline points="7 10 12 15 17 10" />
+                              <line x1="12" y1="15" x2="12" y2="3" />
                             </svg>
                             <span>.srt</span>
                           </button>
@@ -753,16 +1037,17 @@ const Transcription: Component = () => {
                     </div>
                   </div>
 
-                  {/* Segments with timestamps */}
                   <Show when={includeTimestamps() && res.segments.length > 0}>
                     <div class="segments-box">
-                      <button
-                        class="segments-header"
-                        onClick={() => setSegmentsExpanded(!segmentsExpanded())}
-                      >
+                      <button class="segments-header" onClick={() => setSegmentsExpanded(!segmentsExpanded())}>
                         <span>Timestamps ({res.segments.length} segments)</span>
-                        <svg class={`expand-icon ${segmentsExpanded() ? 'expanded' : ''}`} viewBox="0 0 24 24" width="18" height="18">
-                          <path d="M6 9l6 6 6-6"/>
+                        <svg
+                          class={`expand-icon ${segmentsExpanded() ? "expanded" : ""}`}
+                          viewBox="0 0 24 24"
+                          width="18"
+                          height="18"
+                        >
+                          <path d="M6 9l6 6 6-6" />
                         </svg>
                       </button>
 
@@ -771,9 +1056,7 @@ const Transcription: Component = () => {
                           <For each={res.segments}>
                             {(segment) => (
                               <div class="segment-row">
-                                <span class="segment-time">
-                                  {formatTimestamp(segment.start)}
-                                </span>
+                                <span class="segment-time">{formatTimestamp(segment.start)}</span>
                                 <span class="segment-text">{segment.text}</span>
                               </div>
                             )}
@@ -783,13 +1066,120 @@ const Transcription: Component = () => {
                     </div>
                   </Show>
 
-                  {/* New transcription button */}
                   <button class="new-file-btn" onClick={handleNewFile}>
                     <svg viewBox="0 0 24 24" width="18" height="18">
-                      <line x1="12" y1="5" x2="12" y2="19"/>
-                      <line x1="5" y1="12" x2="19" y2="12"/>
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
                     </svg>
                     New Transcription
+                  </button>
+                </section>
+              )}
+            </Show>
+
+            <Show when={annotatedResult()} keyed>
+              {(res) => (
+                <section class="results-section">
+                  <div class="result-meta">
+                    <div class="meta-item">
+                      <span class="meta-label">Language</span>
+                      <span class="meta-value">{res.language || "Unknown"}</span>
+                    </div>
+                    <div class="meta-item">
+                      <span class="meta-label">Speakers</span>
+                      <span class="meta-value">{res.num_speakers}</span>
+                    </div>
+                    <div class="meta-item">
+                      <span class="meta-label">Duration</span>
+                      <span class="meta-value">{formatTime(res.audio_duration, false)}</span>
+                    </div>
+                    <div class="meta-item">
+                      <span class="meta-label">Processing</span>
+                      <span class="meta-value">{res.total_inference_time.toFixed(1)}s</span>
+                    </div>
+                  </div>
+
+                  <div class="speaker-editor-box">
+                    <h3>Speaker Names</h3>
+                    <For each={speakerIds()}>
+                      {(id) => (
+                        <label class="speaker-name-row">
+                          <span>Speaker {id}</span>
+                          <input
+                            value={speakerNames()[String(id)] || `Speaker ${id}`}
+                            onInput={(e) => updateSpeakerName(id, e.currentTarget.value)}
+                          />
+                        </label>
+                      )}
+                    </For>
+                  </div>
+
+                  <Show
+                    when={annotatedSegmentsWithNames().length > 0}
+                    fallback={<p class="no-segments-msg">No annotated segments to display.</p>}
+                  >
+                    <div class="transcript-box">
+                      <div class="transcript-header">
+                        <h3>Annotated Preview</h3>
+                      </div>
+                      <div class="segments-content speaker-segments-content">
+                        <For each={annotatedSegmentsWithNames()}>
+                          {(segment) => (
+                            <div class="segment-row">
+                              <span class="segment-time">{formatTimestamp(segment.start)}</span>
+                              <span class="segment-speaker">[{segment.speaker_name}]</span>
+                              <span class="segment-text">{segment.text}</span>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                      <div class="transcript-actions">
+                        <div class="action-group">
+                          <span class="action-label">Copy:</span>
+                          <button class="action-btn" onClick={handleCopyAnnotatedText} title="Copy annotated text">
+                            <svg viewBox="0 0 24 24" width="16" height="16">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                            <span>Text</span>
+                          </button>
+                          <button class="action-btn" onClick={handleCopySrt} title="Copy speaker-labeled SRT">
+                            <svg viewBox="0 0 24 24" width="16" height="16">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                            <span>SRT</span>
+                          </button>
+                        </div>
+                        <div class="action-group">
+                          <span class="action-label">Download:</span>
+                          <button class="action-btn" onClick={handleExportAnnotatedText} title="Download annotated .txt file">
+                            <svg viewBox="0 0 24 24" width="16" height="16">
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                              <polyline points="7 10 12 15 17 10" />
+                              <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                            <span>.txt</span>
+                          </button>
+                          <button class="action-btn" onClick={handleExportSrt} title="Download speaker-labeled .srt file">
+                            <svg viewBox="0 0 24 24" width="16" height="16">
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                              <polyline points="7 10 12 15 17 10" />
+                              <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                            <span>.srt</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </Show>
+
+                  <button class="new-file-btn" onClick={handleNewFile}>
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                    New Annotation
                   </button>
                 </section>
               )}
@@ -802,8 +1192,8 @@ const Transcription: Component = () => {
 
       <ConfirmDialog
         open={showCancelDialog()}
-        title="Stop Transcription?"
-        message="A transcription is currently in progress. Stopping will discard any partial results."
+        title="Stop Processing?"
+        message="An operation is currently in progress. Stopping will discard any partial results."
         confirmLabel="Stop & Go Back"
         cancelLabel="Keep Working"
         onConfirm={handleConfirmCancel}

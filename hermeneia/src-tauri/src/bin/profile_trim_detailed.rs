@@ -2,11 +2,11 @@
 //
 // Profile audio trim with internal timing instrumentation
 
-use hound::{WavReader, WavWriter, SampleFormat};
-use std::path::PathBuf;
-use std::time::Instant;
 use clap::Parser;
 use hermeneia_lib::audio::TrimParams;
+use hound::{SampleFormat, WavReader, WavWriter};
+use std::path::PathBuf;
+use std::time::Instant;
 
 #[derive(Parser, Debug)]
 #[command(name = "profile-trim-detailed")]
@@ -43,11 +43,18 @@ fn trim_wav_detailed(
     let mut reader = WavReader::open(input_path)?;
     let spec = reader.spec();
     let duration = reader.duration() as f64 / spec.sample_rate as f64;
-    println!("1. Open reader:     {:>10.3} ms", t_open.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "1. Open reader:     {:>10.3} ms",
+        t_open.elapsed().as_secs_f64() * 1000.0
+    );
 
     // Validate
     if params.end_seconds > duration {
-        return Err(format!("End time {} exceeds duration {}", params.end_seconds, duration).into());
+        return Err(format!(
+            "End time {} exceeds duration {}",
+            params.end_seconds, duration
+        )
+        .into());
     }
 
     // 2. Calculate positions
@@ -58,18 +65,27 @@ fn trim_wav_detailed(
     let start_frame = start_frame.min(total_frames);
     let end_frame = end_frame.min(total_frames);
     let frames_to_read = end_frame - start_frame;
-    println!("2. Calculate pos:   {:>10.3} ms", t_calc.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "2. Calculate pos:   {:>10.3} ms",
+        t_calc.elapsed().as_secs_f64() * 1000.0
+    );
 
     // 3. Seek
     let t_seek = Instant::now();
     let start_sample_idx = start_frame * spec.channels as u32;
     reader.seek(start_sample_idx)?;
-    println!("3. Seek to start:   {:>10.3} ms", t_seek.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "3. Seek to start:   {:>10.3} ms",
+        t_seek.elapsed().as_secs_f64() * 1000.0
+    );
 
     // 4. Create writer
     let t_writer = Instant::now();
     let mut writer = WavWriter::create(output_path, spec)?;
-    println!("4. Create writer:   {:>10.3} ms", t_writer.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "4. Create writer:   {:>10.3} ms",
+        t_writer.elapsed().as_secs_f64() * 1000.0
+    );
 
     // 5. Read and write loop
     const BUFFER_SIZE: usize = 4096;
@@ -106,70 +122,75 @@ fn trim_wav_detailed(
                 iteration_count += 1;
             }
         }
-        SampleFormat::Int => {
-            match spec.bits_per_sample {
-                16 => {
-                    let mut iter = reader.samples::<i16>();
-                    while frames_remaining > 0 {
-                        let chunk_frames = frames_remaining.min(BUFFER_SIZE as u32);
-                        let samples_to_process = chunk_frames as usize * channels;
+        SampleFormat::Int => match spec.bits_per_sample {
+            16 => {
+                let mut iter = reader.samples::<i16>();
+                while frames_remaining > 0 {
+                    let chunk_frames = frames_remaining.min(BUFFER_SIZE as u32);
+                    let samples_to_process = chunk_frames as usize * channels;
 
-                        let t_read = Instant::now();
-                        let mut samples = Vec::with_capacity(samples_to_process);
-                        for _ in 0..samples_to_process {
-                            if let Some(sample) = iter.next() {
-                                samples.push(sample?);
-                            }
+                    let t_read = Instant::now();
+                    let mut samples = Vec::with_capacity(samples_to_process);
+                    for _ in 0..samples_to_process {
+                        if let Some(sample) = iter.next() {
+                            samples.push(sample?);
                         }
-                        total_read_time += t_read.elapsed().as_secs_f64();
-
-                        let t_write = Instant::now();
-                        for sample in samples {
-                            writer.write_sample(sample)?;
-                        }
-                        total_write_time += t_write.elapsed().as_secs_f64();
-
-                        frames_remaining -= chunk_frames;
-                        iteration_count += 1;
                     }
-                }
-                24 | 32 => {
-                    let mut iter = reader.samples::<i32>();
-                    while frames_remaining > 0 {
-                        let chunk_frames = frames_remaining.min(BUFFER_SIZE as u32);
-                        let samples_to_process = chunk_frames as usize * channels;
+                    total_read_time += t_read.elapsed().as_secs_f64();
 
-                        let t_read = Instant::now();
-                        let mut samples = Vec::with_capacity(samples_to_process);
-                        for _ in 0..samples_to_process {
-                            if let Some(sample) = iter.next() {
-                                samples.push(sample?);
-                            }
-                        }
-                        total_read_time += t_read.elapsed().as_secs_f64();
-
-                        let t_write = Instant::now();
-                        for sample in samples {
-                            writer.write_sample(sample)?;
-                        }
-                        total_write_time += t_write.elapsed().as_secs_f64();
-
-                        frames_remaining -= chunk_frames;
-                        iteration_count += 1;
+                    let t_write = Instant::now();
+                    for sample in samples {
+                        writer.write_sample(sample)?;
                     }
+                    total_write_time += t_write.elapsed().as_secs_f64();
+
+                    frames_remaining -= chunk_frames;
+                    iteration_count += 1;
                 }
-                _ => return Err(format!("Unsupported bit depth: {}", spec.bits_per_sample).into()),
             }
-        }
+            24 | 32 => {
+                let mut iter = reader.samples::<i32>();
+                while frames_remaining > 0 {
+                    let chunk_frames = frames_remaining.min(BUFFER_SIZE as u32);
+                    let samples_to_process = chunk_frames as usize * channels;
+
+                    let t_read = Instant::now();
+                    let mut samples = Vec::with_capacity(samples_to_process);
+                    for _ in 0..samples_to_process {
+                        if let Some(sample) = iter.next() {
+                            samples.push(sample?);
+                        }
+                    }
+                    total_read_time += t_read.elapsed().as_secs_f64();
+
+                    let t_write = Instant::now();
+                    for sample in samples {
+                        writer.write_sample(sample)?;
+                    }
+                    total_write_time += t_write.elapsed().as_secs_f64();
+
+                    frames_remaining -= chunk_frames;
+                    iteration_count += 1;
+                }
+            }
+            _ => return Err(format!("Unsupported bit depth: {}", spec.bits_per_sample).into()),
+        },
     }
 
-    println!("5. Read samples:    {:>10.3} ms ({} iterations)", total_read_time * 1000.0, iteration_count);
+    println!(
+        "5. Read samples:    {:>10.3} ms ({} iterations)",
+        total_read_time * 1000.0,
+        iteration_count
+    );
     println!("6. Write samples:   {:>10.3} ms", total_write_time * 1000.0);
 
     // 7. Finalize
     let t_finalize = Instant::now();
     writer.finalize()?;
-    println!("7. Finalize writer: {:>10.3} ms", t_finalize.elapsed().as_secs_f64() * 1000.0);
+    println!(
+        "7. Finalize writer: {:>10.3} ms",
+        t_finalize.elapsed().as_secs_f64() * 1000.0
+    );
 
     let total_time = t_total.elapsed().as_secs_f64();
     println!("\n--- Total Time:     {:>10.3} ms ---", total_time * 1000.0);
@@ -177,14 +198,26 @@ fn trim_wav_detailed(
     // Calculate percentages
     let overhead = total_time - (total_read_time + total_write_time);
     println!("\nTime Distribution:");
-    println!("  Read:      {:.1}%", (total_read_time / total_time) * 100.0);
-    println!("  Write:     {:.1}%", (total_write_time / total_time) * 100.0);
+    println!(
+        "  Read:      {:.1}%",
+        (total_read_time / total_time) * 100.0
+    );
+    println!(
+        "  Write:     {:.1}%",
+        (total_write_time / total_time) * 100.0
+    );
     println!("  Overhead:  {:.1}%", (overhead / total_time) * 100.0);
 
     let samples_processed = frames_to_read as usize * channels;
     println!("\nPerformance:");
-    println!("  Samples/sec:  {:.2} M", (samples_processed as f64 / total_time) / 1_000_000.0);
-    println!("  Frames/sec:   {:.2} M", (frames_to_read as f64 / total_time) / 1_000_000.0);
+    println!(
+        "  Samples/sec:  {:.2} M",
+        (samples_processed as f64 / total_time) / 1_000_000.0
+    );
+    println!(
+        "  Frames/sec:   {:.2} M",
+        (frames_to_read as f64 / total_time) / 1_000_000.0
+    );
 
     Ok(())
 }

@@ -1,7 +1,7 @@
 use clap::Parser;
 use hermeneia_lib::transcribe::{
-    transcribe_audio_with_reporter, ModelValidator, TranscribeParams,
-    TranscriptionTask, ValidationResult, WhisperModel
+    transcribe_audio_with_reporter, ModelValidator, TranscribeParams, TranscriptionTask,
+    ValidationResult, WhisperModel,
 };
 use tracing::info;
 
@@ -136,7 +136,10 @@ fn main() -> anyhow::Result<()> {
     if args.check_only {
         println!("\n=== System Capabilities ===");
         let caps = validator.capabilities();
-        println!("RAM: {:.1}GB total, {:.1}GB available", caps.total_ram_gb, caps.available_ram_gb);
+        println!(
+            "RAM: {:.1}GB total, {:.1}GB available",
+            caps.total_ram_gb, caps.available_ram_gb
+        );
         if let Some(gpu) = &caps.gpu_info {
             println!("GPU: {:?}", gpu.device_type);
             if let Some(vram_total) = gpu.vram_total_gb {
@@ -154,11 +157,14 @@ fn main() -> anyhow::Result<()> {
 
         println!("\n=== Model Validation ===");
         println!("Model: {:?}", model);
-        println!("Status: {:?}", match validation_result {
-            ValidationResult::Ok => "✅ OK",
-            ValidationResult::Warning(_) => "⚠️  WARNING",
-            ValidationResult::Error(_) => "❌ ERROR",
-        });
+        println!(
+            "Status: {:?}",
+            match validation_result {
+                ValidationResult::Ok => "✅ OK",
+                ValidationResult::Warning(_) => "⚠️  WARNING",
+                ValidationResult::Error(_) => "❌ ERROR",
+            }
+        );
 
         println!("\n=== Recommended Model ===");
         println!("{:?}", validator.recommend_model());

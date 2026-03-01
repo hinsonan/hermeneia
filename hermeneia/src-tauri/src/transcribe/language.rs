@@ -44,9 +44,10 @@ pub fn detect_language(
     // Get logits for first token
     let logits = model
         .decoder
-        .final_linear(&ys.i(..1).map_err(|e| {
-            AudioError::TranscriptionFailed(format!("Index error: {}", e))
-        })?)
+        .final_linear(
+            &ys.i(..1)
+                .map_err(|e| AudioError::TranscriptionFailed(format!("Index error: {}", e)))?,
+        )
         .map_err(|e| AudioError::TranscriptionFailed(format!("Final linear: {}", e)))?
         .i(0)
         .map_err(|e| AudioError::TranscriptionFailed(format!("Index error: {}", e)))?

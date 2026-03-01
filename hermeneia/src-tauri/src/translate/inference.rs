@@ -116,7 +116,8 @@ pub fn translate_text_with_progress(
         // 6. Decode output
         // Skip the decoder start token (first token) which is used to prime the decoder
         // but is not part of the actual translation output
-        let tokens_to_decode = if !output_ids.is_empty() && output_ids[0] == decoder_start_token_id {
+        let tokens_to_decode = if !output_ids.is_empty() && output_ids[0] == decoder_start_token_id
+        {
             tracing::debug!(
                 "Skipping decoder start token {} from output",
                 decoder_start_token_id
@@ -511,7 +512,11 @@ impl Translator {
     }
 
     /// Translate a single text using the loaded model
-    pub fn translate(&mut self, text: &str, cancel_flag: Option<&Arc<AtomicBool>>) -> Result<String> {
+    pub fn translate(
+        &mut self,
+        text: &str,
+        cancel_flag: Option<&Arc<AtomicBool>>,
+    ) -> Result<String> {
         let start_time = Instant::now();
 
         // Check for cancellation before starting
@@ -623,7 +628,8 @@ pub fn translate_texts_batch(
     let mut translator = Translator::new(params, cancel_flag.as_ref())?;
 
     // Translate all texts
-    let results = translator.translate_batch(texts, progress_callback.as_ref(), cancel_flag.as_ref())?;
+    let results =
+        translator.translate_batch(texts, progress_callback.as_ref(), cancel_flag.as_ref())?;
 
     let total_time = start_time.elapsed().as_secs_f64();
     let model_used = translator.model_used();

@@ -2,7 +2,7 @@ use crate::audio::decode_audio_file;
 use crate::error::{AudioError, Result};
 use crate::speaker::{
     model::SpeakerModelManager,
-    types::{DiarizeParams, DiarizationResult, SpeakerSegment},
+    types::{validate_diarize_params, DiarizationResult, DiarizeParams, SpeakerSegment},
 };
 use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType};
 use sherpa_rs::diarize::{Diarize, DiarizeConfig};
@@ -26,13 +26,18 @@ pub fn diarize_audio_with_progress(
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<DiarizationResult> {
     let start = Instant::now();
+    validate_diarize_params(&params)?;
 
     // 1. Download / locate ONNX models
     tracing::info!("Ensuring speaker diarization models...");
     let (seg_path, emb_path) = SpeakerModelManager::ensure_models(&params.model)?;
 
     // 2. Check cancellation
-    if cancel.as_ref().map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+    if cancel
+        .as_ref()
+        .map(|c| c.load(Ordering::SeqCst))
+        .unwrap_or(false)
+    {
         return Err(AudioError::Cancelled);
     }
 
@@ -48,7 +53,11 @@ pub fn diarize_audio_with_progress(
     let samples_16k = resample_to_16khz(&mono_samples, audio.sample_rate)?;
 
     // 6. Check cancellation again
-    if cancel.as_ref().map(|c| c.load(Ordering::SeqCst)).unwrap_or(false) {
+    if cancel
+        .as_ref()
+        .map(|c| c.load(Ordering::SeqCst))
+        .unwrap_or(false)
+    {
         return Err(AudioError::Cancelled);
     }
 
@@ -75,17 +84,33 @@ pub fn diarize_audio_with_progress(
 
     // Wrap the optional progress callback into sherpa-rs's expected signature:
     // Box<dyn Fn(i32, i32) -> i32 + Send + 'static>
+    let cancel_for_callback = cancel.clone();
     let sherpa_callback = progress.map(|cb| {
         let cb = Arc::new(cb);
         Box::new(move |processed: i32, total: i32| -> i32 {
+            if cancel_for_callback
+                .as_ref()
+                .map(|c| c.load(Ordering::SeqCst))
+                .unwrap_or(false)
+            {
+                return 1;
+            }
             cb(processed, total);
             0 // returning 0 tells sherpa-rs to continue
         }) as Box<dyn Fn(i32, i32) -> i32 + Send + 'static>
     });
 
-    let segments = sd
-        .compute(samples_16k, sherpa_callback)
-        .map_err(|e| AudioError::DiarizationFailed(e.to_string()))?;
+    let segments = sd.compute(samples_16k, sherpa_callback).map_err(|e| {
+        if cancel
+            .as_ref()
+            .map(|c| c.load(Ordering::SeqCst))
+            .unwrap_or(false)
+        {
+            AudioError::Cancelled
+        } else {
+            AudioError::DiarizationFailed(e.to_string())
+        }
+    })?;
 
     // 9. Map sherpa_rs::Segment → SpeakerSegment, count unique speakers
     let result_segments: Vec<SpeakerSegment> = segments
@@ -141,14 +166,9 @@ fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> {
         window: rubato::WindowFunction::BlackmanHarris2,
     };
 
-    let mut resampler = SincFixedIn::<f32>::new(
-        16000.0 / source_rate as f64,
-        2.0,
-        params,
-        samples.len(),
-        1,
-    )
-    .map_err(|e| AudioError::AudioPreprocessing(format!("Resampler init: {}", e)))?;
+    let mut resampler =
+        SincFixedIn::<f32>::new(16000.0 / source_rate as f64, 2.0, params, samples.len(), 1)
+            .map_err(|e| AudioError::AudioPreprocessing(format!("Resampler init: {}", e)))?;
 
     let waves_in = vec![samples.to_vec()];
     let waves_out = resampler

@@ -2,25 +2,25 @@
 
 use crate::audio::types::{AudioData, TrimParams};
 use crate::error::{AudioError, Result};
-use hound::{WavReader, WavWriter, WavSpec, SampleFormat};
+use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use std::fs::File;
 use std::path::Path;
+use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use symphonia::core::audio::AudioBufferRef;
 
 /// Trim audio data to a specific time range
-/// 
+///
 /// # Arguments
 /// * `audio` - The audio data to trim
 /// * `params` - Start and end times in seconds
 pub fn trim_audio(audio: &AudioData, params: &TrimParams) -> Result<AudioData> {
     // Validate trim range against audio duration
     let duration = audio.duration_seconds();
-    
+
     if params.end_seconds > duration {
         return Err(AudioError::TrimRangeOutOfBounds {
             start: params.start_seconds,
@@ -64,7 +64,7 @@ fn is_wav_file<P: AsRef<Path>>(path: P) -> bool {
 }
 
 /// Trim a WAV file directly using seeking (O(1) complexity)
-/// 
+///
 /// Note: This operation strips metadata (tags) from the original file.
 fn trim_wav_direct<P: AsRef<Path>>(
     input_path: P,
@@ -101,7 +101,8 @@ fn trim_wav_direct<P: AsRef<Path>>(
     // Seek to the start position.
     // Hound 3.5.1 seek() takes a frame index (samples per channel, independent of channel count).
     // Per hound docs: "multiply number of seconds with sample_rate" — channels are NOT included.
-    reader.seek(start_frame)
+    reader
+        .seek(start_frame)
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to seek WAV: {}", e)))?;
 
     let mut writer = WavWriter::create(output_path, spec)
@@ -126,7 +127,11 @@ fn trim_wav_direct<P: AsRef<Path>>(
                 let mut buffer = Vec::with_capacity(samples_to_process);
                 for _ in 0..samples_to_process {
                     if let Some(sample) = iter.next() {
-                        buffer.push(sample.map_err(|e| AudioError::DecodeFailed(format!("Read error: {}", e)))?);
+                        buffer.push(
+                            sample.map_err(|e| {
+                                AudioError::DecodeFailed(format!("Read error: {}", e))
+                            })?,
+                        );
                     } else {
                         break;
                     }
@@ -134,7 +139,8 @@ fn trim_wav_direct<P: AsRef<Path>>(
 
                 // Bulk write from buffer
                 for sample in buffer {
-                    writer.write_sample(sample)
+                    writer
+                        .write_sample(sample)
                         .map_err(|e| AudioError::EncodeFailed(format!("Write error: {}", e)))?;
                 }
 
@@ -153,7 +159,9 @@ fn trim_wav_direct<P: AsRef<Path>>(
                         let mut buffer = Vec::with_capacity(samples_to_process);
                         for _ in 0..samples_to_process {
                             if let Some(sample) = iter.next() {
-                                buffer.push(sample.map_err(|e| AudioError::DecodeFailed(format!("Read error: {}", e)))?);
+                                buffer.push(sample.map_err(|e| {
+                                    AudioError::DecodeFailed(format!("Read error: {}", e))
+                                })?);
                             } else {
                                 break;
                             }
@@ -161,8 +169,9 @@ fn trim_wav_direct<P: AsRef<Path>>(
 
                         // Bulk write from buffer
                         for sample in buffer {
-                            writer.write_sample(sample)
-                                .map_err(|e| AudioError::EncodeFailed(format!("Write error: {}", e)))?;
+                            writer.write_sample(sample).map_err(|e| {
+                                AudioError::EncodeFailed(format!("Write error: {}", e))
+                            })?;
                         }
 
                         frames_remaining -= chunk_frames;
@@ -179,7 +188,9 @@ fn trim_wav_direct<P: AsRef<Path>>(
                         let mut buffer = Vec::with_capacity(samples_to_process);
                         for _ in 0..samples_to_process {
                             if let Some(sample) = iter.next() {
-                                buffer.push(sample.map_err(|e| AudioError::DecodeFailed(format!("Read error: {}", e)))?);
+                                buffer.push(sample.map_err(|e| {
+                                    AudioError::DecodeFailed(format!("Read error: {}", e))
+                                })?);
                             } else {
                                 break;
                             }
@@ -187,26 +198,33 @@ fn trim_wav_direct<P: AsRef<Path>>(
 
                         // Bulk write from buffer
                         for sample in buffer {
-                            writer.write_sample(sample)
-                                .map_err(|e| AudioError::EncodeFailed(format!("Write error: {}", e)))?;
+                            writer.write_sample(sample).map_err(|e| {
+                                AudioError::EncodeFailed(format!("Write error: {}", e))
+                            })?;
                         }
 
                         frames_remaining -= chunk_frames;
                     }
                 }
-                _ => return Err(AudioError::DecodeFailed(format!("Unsupported bit depth: {}", spec.bits_per_sample))),
+                _ => {
+                    return Err(AudioError::DecodeFailed(format!(
+                        "Unsupported bit depth: {}",
+                        spec.bits_per_sample
+                    )))
+                }
             }
         }
     }
 
-    writer.finalize()
+    writer
+        .finalize()
         .map_err(|e| AudioError::EncodeFailed(format!("Failed to finalize WAV: {}", e)))?;
 
     Ok(())
 }
 
 /// Trim any audio file using streaming with seeking (optimized for compressed formats)
-/// 
+///
 /// Note: This operation strips metadata (tags) from the original file.
 fn trim_compressed_streaming<P: AsRef<Path>>(
     input_path: P,
@@ -230,7 +248,12 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe format: {}", e)))?;
 
     let mut format = probed.format;
@@ -242,7 +265,9 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
         .ok_or_else(|| AudioError::DecodeFailed("No audio track found".to_string()))?;
 
     let track_id = track.id;
-    let sample_rate = track.codec_params.sample_rate
+    let sample_rate = track
+        .codec_params
+        .sample_rate
         .ok_or_else(|| AudioError::DecodeFailed("Sample rate not found".to_string()))?;
 
     let mut channels_opt = track.codec_params.channels.map(|c| c.count() as u16);
@@ -253,13 +278,18 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
 
     // --- Seeking Logic ---
     let target_ts = (params.start_seconds * sample_rate as f64) as u64;
-    
+
     // Seek and capture the ACTUAL timestamp we landed on.
     // Compressed formats might not land exactly on the requested sample.
-    let seek_result = format.seek(
-        SeekMode::Accurate, 
-        SeekTo::TimeStamp { ts: target_ts, track_id }
-    ).map_err(|e| AudioError::DecodeFailed(format!("Seek failed: {}", e)))?;
+    let seek_result = format
+        .seek(
+            SeekMode::Accurate,
+            SeekTo::TimeStamp {
+                ts: target_ts,
+                track_id,
+            },
+        )
+        .map_err(|e| AudioError::DecodeFailed(format!("Seek failed: {}", e)))?;
 
     // Update current sample tracker to the actual position
     let mut current_sample = seek_result.actual_ts;
@@ -267,20 +297,27 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
     // --- Channel Determination (if unknown) ---
     if channels_opt.is_none() {
         // Decode one packet to find channel count
-        let first_packet = format.next_packet()
-            .map_err(|e| AudioError::DecodeFailed(format!("Failed to read packet for metadata: {}", e)))?;
-        
-        let decoded = decoder.decode(&first_packet)
+        let first_packet = format.next_packet().map_err(|e| {
+            AudioError::DecodeFailed(format!("Failed to read packet for metadata: {}", e))
+        })?;
+
+        let decoded = decoder
+            .decode(&first_packet)
             .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
-        
+
         channels_opt = Some(decoded.spec().channels.count() as u16);
 
         // We consumed a packet, so we must re-seek to ensuring we don't miss start data
-        let re_seek = format.seek(
-            SeekMode::Accurate, 
-            SeekTo::TimeStamp { ts: target_ts, track_id }
-        ).map_err(|e| AudioError::DecodeFailed(format!("Re-seek failed: {}", e)))?;
-        
+        let re_seek = format
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::TimeStamp {
+                    ts: target_ts,
+                    track_id,
+                },
+            )
+            .map_err(|e| AudioError::DecodeFailed(format!("Re-seek failed: {}", e)))?;
+
         current_sample = re_seek.actual_ts;
     }
 
@@ -313,13 +350,14 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
             continue;
         }
 
-        let decoded = decoder.decode(&packet)
+        let decoded = decoder
+            .decode(&packet)
             .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
 
         // Convert Planar -> Interleaved
         let samples = convert_to_f32(&decoded);
         let frames_in_packet = samples.len() / channels as usize;
-        
+
         // Handle case where we seeked to a keyframe *before* our start time
         // We might need to skip some initial samples in this specific packet
         let mut start_offset_frames = 0;
@@ -336,12 +374,13 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
 
         // Calculate how many frames to write
         let valid_frames_in_packet = frames_in_packet - start_offset_frames;
-        
+
         // How many frames left until the end marker?
-        let frames_until_end = end_sample.saturating_sub(current_sample + start_offset_frames as u64);
-        
+        let frames_until_end =
+            end_sample.saturating_sub(current_sample + start_offset_frames as u64);
+
         let frames_to_write = (valid_frames_in_packet as u64).min(frames_until_end) as usize;
-        
+
         if frames_to_write > 0 {
             let start_index = start_offset_frames * channels as usize;
             let end_index = start_index + (frames_to_write * channels as usize);
@@ -349,7 +388,8 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
             // Write samples - Hound buffers internally, so this is reasonably efficient
             // Further optimization would require changes to Hound API
             for &sample in &samples[start_index..end_index] {
-                writer.write_sample(sample)
+                writer
+                    .write_sample(sample)
                     .map_err(|e| AudioError::EncodeFailed(format!("Write failed: {}", e)))?;
             }
         }
@@ -357,7 +397,8 @@ fn trim_compressed_streaming<P: AsRef<Path>>(
         current_sample += frames_in_packet as u64;
     }
 
-    writer.finalize()
+    writer
+        .finalize()
         .map_err(|e| AudioError::EncodeFailed(format!("Failed to finalize: {}", e)))?;
 
     Ok(())

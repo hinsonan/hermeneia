@@ -102,16 +102,29 @@ impl AudioPlayer {
         let device_sample_rate = detect_device_sample_rate(sample_rate)?;
 
         // Store metadata in state BEFORE starting threads
-        state.sample_rate.store(sample_rate as u64, Ordering::SeqCst);
-        state.device_sample_rate.store(device_sample_rate as u64, Ordering::SeqCst);
+        state
+            .sample_rate
+            .store(sample_rate as u64, Ordering::SeqCst);
+        state
+            .device_sample_rate
+            .store(device_sample_rate as u64, Ordering::SeqCst);
         state.channels.store(channels, Ordering::SeqCst);
         state.total_frames.store(total_frames, Ordering::SeqCst);
 
-        tracing::debug!("AudioPlayer::play_file - File: {}Hz, {} ch, {} frames | Device: {}Hz",
-            sample_rate, channels, total_frames, device_sample_rate);
+        tracing::debug!(
+            "AudioPlayer::play_file - File: {}Hz, {} ch, {} frames | Device: {}Hz",
+            sample_rate,
+            channels,
+            total_frames,
+            device_sample_rate
+        );
 
         if sample_rate != device_sample_rate {
-            tracing::info!("Resampling enabled: {}Hz -> {}Hz", sample_rate, device_sample_rate);
+            tracing::info!(
+                "Resampling enabled: {}Hz -> {}Hz",
+                sample_rate,
+                device_sample_rate
+            );
         }
 
         // Reset state
@@ -255,7 +268,12 @@ fn probe_audio_file(path: &std::path::Path) -> Result<(u32, u64, u64)> {
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe: {}", e)))?;
 
     let mut format = probed.format;
@@ -307,7 +325,10 @@ fn probe_audio_file(path: &std::path::Path) -> Result<(u32, u64, u64)> {
                     break;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to decode packet for channel detection: {}, defaulting to 2", e);
+                    tracing::warn!(
+                        "Failed to decode packet for channel detection: {}, defaulting to 2",
+                        e
+                    );
                     channels = Some(2);
                     break;
                 }
@@ -387,7 +408,12 @@ fn run_decoder(
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe: {}", e)))?;
 
     let mut format = probed.format;
@@ -413,11 +439,20 @@ fn run_decoder(
     let mut resample_buffer: Vec<f32> = Vec::new();
 
     if needs_resampling {
-        tracing::info!("Initializing resampler: {}Hz -> {}Hz", file_sample_rate, device_sample_rate);
+        tracing::info!(
+            "Initializing resampler: {}Hz -> {}Hz",
+            file_sample_rate,
+            device_sample_rate
+        );
     }
 
-    tracing::debug!("Decoder thread started - file: {}Hz {}ch, device: {}Hz, frames: {}",
-        file_sample_rate, file_channels, device_sample_rate, total_frames);
+    tracing::debug!(
+        "Decoder thread started - file: {}Hz {}ch, device: {}Hz, frames: {}",
+        file_sample_rate,
+        file_channels,
+        device_sample_rate,
+        total_frames
+    );
 
     // Main decoding loop - streams samples to ring buffer
     let mut packets_decoded = 0;
@@ -427,8 +462,11 @@ fn run_decoder(
     loop {
         // Check for stop signal
         if state.should_stop.load(Ordering::SeqCst) {
-            tracing::debug!("Decoder stopping - decoded {} packets, wrote {} samples",
-                packets_decoded, samples_written);
+            tracing::debug!(
+                "Decoder stopping - decoded {} packets, wrote {} samples",
+                packets_decoded,
+                samples_written
+            );
             break;
         }
 
@@ -437,7 +475,11 @@ fn run_decoder(
             let seek_frame = state.seek_to_frame.load(Ordering::SeqCst);
             let seek_seconds = seek_frame as f64 / file_sample_rate as f64;
 
-            tracing::debug!("Seek request: frame={}, time={:.3}s", seek_frame, seek_seconds);
+            tracing::debug!(
+                "Seek request: frame={}, time={:.3}s",
+                seek_frame,
+                seek_seconds
+            );
 
             // Try multiple seek strategies for maximum compatibility
             // Strategy 1: SeekTo::TimeStamp (sample-based) - best for PCM/WAV
@@ -461,17 +503,24 @@ fn run_decoder(
             };
 
             // Try all strategies in order of preference
-            let seek_result = format.seek(SeekMode::Accurate, make_seek_ts())
+            let seek_result = format
+                .seek(SeekMode::Accurate, make_seek_ts())
                 .or_else(|_| format.seek(SeekMode::Coarse, make_seek_ts()))
                 .or_else(|_| format.seek(SeekMode::Accurate, make_seek_time()))
                 .or_else(|_| format.seek(SeekMode::Coarse, make_seek_time()));
 
             match seek_result {
                 Ok(seeked) => {
-                    tracing::info!("Seek successful: target={}, actual={}", seek_frame, seeked.actual_ts);
+                    tracing::info!(
+                        "Seek successful: target={}, actual={}",
+                        seek_frame,
+                        seeked.actual_ts
+                    );
 
                     // Update current position to seek target
-                    state.current_frame.store(seeked.actual_ts, Ordering::SeqCst);
+                    state
+                        .current_frame
+                        .store(seeked.actual_ts, Ordering::SeqCst);
 
                     // Signal consumer to flush and wait for it to complete
                     state.buffer_flush_pending.store(true, Ordering::SeqCst);
@@ -493,7 +542,11 @@ fn run_decoder(
                     just_seeked = true;
                 }
                 Err(e) => {
-                    tracing::error!("Seek failed, all strategies failed for frame {}: {}", seek_frame, e);
+                    tracing::error!(
+                        "Seek failed, all strategies failed for frame {}: {}",
+                        seek_frame,
+                        e
+                    );
                 }
             }
 
@@ -537,7 +590,11 @@ fn run_decoder(
         }
 
         if just_seeked {
-            tracing::info!("First packet after seek: ts={}, dur={}", packet.ts(), packet.dur());
+            tracing::info!(
+                "First packet after seek: ts={}, dur={}",
+                packet.ts(),
+                packet.dur()
+            );
             just_seeked = false;
         }
 
@@ -556,8 +613,12 @@ fn run_decoder(
         let actual_channels = decoded.spec().channels.count();
 
         if packets_decoded == 1 {
-            tracing::debug!("First packet decoded: {} frames, {} samples, {} channels",
-                decoded.frames(), samples.len(), actual_channels);
+            tracing::debug!(
+                "First packet decoded: {} frames, {} samples, {} channels",
+                decoded.frames(),
+                samples.len(),
+                actual_channels
+            );
         }
 
         // Convert mono to stereo for playback (most devices expect stereo)
@@ -587,7 +648,7 @@ fn run_decoder(
                         samples.len() / output_channels,
                         output_channels,
                     )
-                    .map_err(|e| AudioError::DecodeFailed(format!("Resampler init: {}", e)))?
+                    .map_err(|e| AudioError::DecodeFailed(format!("Resampler init: {}", e)))?,
                 );
             }
 
@@ -635,7 +696,8 @@ fn run_decoder(
         let mut written = 0;
         while written < output_samples.len() {
             // Check for stop/seek while waiting
-            if state.should_stop.load(Ordering::SeqCst) || state.seek_pending.load(Ordering::SeqCst) {
+            if state.should_stop.load(Ordering::SeqCst) || state.seek_pending.load(Ordering::SeqCst)
+            {
                 break;
             }
 
@@ -652,8 +714,11 @@ fn run_decoder(
         }
 
         if packets_decoded % 100 == 0 {
-            tracing::debug!("Decoded {} packets, {} samples written to buffer",
-                packets_decoded, samples_written);
+            tracing::debug!(
+                "Decoded {} packets, {} samples written to buffer",
+                packets_decoded,
+                samples_written
+            );
         }
     }
 
@@ -791,7 +856,10 @@ fn run_playback_stream(
         buffer_size: cpal::BufferSize::Default,
     };
 
-    tracing::debug!("Playback stream config: {}Hz, 2 channels", device_sample_rate);
+    tracing::debug!(
+        "Playback stream config: {}Hz, 2 channels",
+        device_sample_rate
+    );
 
     // Clone Arc references for sharing with callback
     let consumer_clone = Arc::clone(&consumer);
@@ -816,7 +884,10 @@ fn run_playback_stream(
                 let channels: u64 = 2;
 
                 if count == 0 {
-                    tracing::debug!("Audio callback invoked for first time - buffer size: {}", data.len());
+                    tracing::debug!(
+                        "Audio callback invoked for first time - buffer size: {}",
+                        data.len()
+                    );
                 }
 
                 // Check if we need to flush buffer and reset position after seek
@@ -833,7 +904,9 @@ fn run_playback_stream(
                     samples_consumed_clone.store(current_frame * channels, Ordering::SeqCst);
 
                     // Clear the flush flag to signal decoder it can proceed
-                    state_clone.buffer_flush_pending.store(false, Ordering::SeqCst);
+                    state_clone
+                        .buffer_flush_pending
+                        .store(false, Ordering::SeqCst);
 
                     // Output silence while decoder refills with new position
                     for sample in data.iter_mut() {
@@ -865,8 +938,13 @@ fn run_playback_stream(
                 let to_read = data.len().min(available);
 
                 if count < 5 || count % 100 == 0 {
-                    tracing::debug!("Callback #{}: playing={}, available={}, to_read={}",
-                        count, is_playing, available, to_read);
+                    tracing::debug!(
+                        "Callback #{}: playing={}, available={}, to_read={}",
+                        count,
+                        is_playing,
+                        available,
+                        to_read
+                    );
                 }
 
                 if to_read > 0 {
@@ -874,7 +952,8 @@ fn run_playback_stream(
                     let read = consumer_guard.pop_slice(&mut data[..to_read]);
 
                     // Update consumed count and position
-                    let consumed = samples_consumed_clone.fetch_add(read as u64, Ordering::SeqCst) + read as u64;
+                    let consumed = samples_consumed_clone.fetch_add(read as u64, Ordering::SeqCst)
+                        + read as u64;
                     let frame = consumed / channels;
                     state_clone.current_frame.store(frame, Ordering::SeqCst);
 

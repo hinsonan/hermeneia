@@ -22,53 +22,48 @@ impl ModelManager {
     }
 
     /// Download model if not cached, return paths to required files
-    pub fn ensure_model(
-        &self,
-        model: WhisperModel,
-        quantized: bool,
-    ) -> Result<ModelFiles> {
+    pub fn ensure_model(&self, model: WhisperModel, quantized: bool) -> Result<ModelFiles> {
         let repo_id = model.model_id();
-        let repo = self.api.repo(Repo::new(
-            repo_id.to_string(),
-            RepoType::Model,
-        ));
+        let repo = self
+            .api
+            .repo(Repo::new(repo_id.to_string(), RepoType::Model));
 
         // Download required files
-        let config = repo.get("config.json").map_err(|e| {
-            AudioError::ModelDownload {
+        let config = repo
+            .get("config.json")
+            .map_err(|e| AudioError::ModelDownload {
                 model: repo_id.to_string(),
                 details: e.to_string(),
-            }
-        })?;
+            })?;
 
-        let tokenizer = repo.get("tokenizer.json").map_err(|e| {
-            AudioError::ModelDownload {
+        let tokenizer = repo
+            .get("tokenizer.json")
+            .map_err(|e| AudioError::ModelDownload {
                 model: repo_id.to_string(),
                 details: e.to_string(),
-            }
-        })?;
+            })?;
 
         let (weights, is_quantized) = if quantized {
             // Try quantized first, fall back to normal
             match repo.get("model-q8_0.gguf") {
                 Ok(w) => (w, true),
                 Err(_) => {
-                    let w = repo.get("model.safetensors").map_err(|e| {
-                        AudioError::ModelDownload {
-                            model: repo_id.to_string(),
-                            details: e.to_string(),
-                        }
-                    })?;
+                    let w =
+                        repo.get("model.safetensors")
+                            .map_err(|e| AudioError::ModelDownload {
+                                model: repo_id.to_string(),
+                                details: e.to_string(),
+                            })?;
                     (w, false)
                 }
             }
         } else {
-            let w = repo.get("model.safetensors").map_err(|e| {
-                AudioError::ModelDownload {
+            let w = repo
+                .get("model.safetensors")
+                .map_err(|e| AudioError::ModelDownload {
                     model: repo_id.to_string(),
                     details: e.to_string(),
-                }
-            })?;
+                })?;
             (w, false)
         };
 
@@ -102,14 +97,12 @@ pub fn get_device(force_cpu: bool) -> Result<Device> {
 
     #[cfg(feature = "cuda")]
     {
-        return Device::cuda_if_available(0)
-            .map_err(|e| AudioError::GpuError(e.to_string()));
+        return Device::cuda_if_available(0).map_err(|e| AudioError::GpuError(e.to_string()));
     }
 
     #[cfg(feature = "metal")]
     {
-        return Device::new_metal(0)
-            .map_err(|e| AudioError::GpuError(e.to_string()));
+        return Device::new_metal(0).map_err(|e| AudioError::GpuError(e.to_string()));
     }
 
     #[allow(unreachable_code)]

@@ -1,4 +1,4 @@
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 /// Automatically detect and apply GPU optimizations
 pub fn apply_optimizations() {
@@ -48,8 +48,8 @@ fn detect_nvidia_gpu() -> bool {
         Ok(output) => {
             if let Ok(stdout) = String::from_utf8(output.stdout) {
                 let lower = stdout.to_lowercase();
-                let has_nvidia = lower.contains("nvidia")
-                    && (lower.contains("vga") || lower.contains("3d"));
+                let has_nvidia =
+                    lower.contains("nvidia") && (lower.contains("vga") || lower.contains("3d"));
                 debug!(nvidia_detected = has_nvidia, "GPU detection complete");
                 return has_nvidia;
             }
@@ -68,14 +68,12 @@ fn detect_hybrid_gpu() -> bool {
         Ok(output) => {
             if let Ok(stdout) = String::from_utf8(output.stdout) {
                 let lower = stdout.to_lowercase();
-                
+
                 // Check for integrated GPU alongside discrete
-                let has_intel = lower.contains("intel") 
-                    && lower.contains("vga");
-                let has_amd_integrated = lower.contains("amd") 
-                    && lower.contains("vga") 
-                    && !lower.contains("radeon rx");
-                
+                let has_intel = lower.contains("intel") && lower.contains("vga");
+                let has_amd_integrated =
+                    lower.contains("amd") && lower.contains("vga") && !lower.contains("radeon rx");
+
                 return has_intel || has_amd_integrated;
             }
             false

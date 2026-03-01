@@ -15,30 +15,33 @@ impl SpeakerModelManager {
     /// Downloads from HuggingFace on first use via hf-hub.
     /// Returns (segmentation_path, embedding_path).
     pub fn ensure_models(model: &SpeakerModel) -> Result<(PathBuf, PathBuf)> {
-        let api = ApiBuilder::new()
-            .with_progress(true)
-            .build()
-            .map_err(|e| AudioError::ModelDownload {
+        let api = ApiBuilder::new().with_progress(true).build().map_err(|e| {
+            AudioError::ModelDownload {
                 model: "speaker-diarization".to_string(),
                 details: format!("HF API init failed: {}", e),
-            })?;
+            }
+        })?;
 
         let (seg_repo_id, seg_file) = model.segmentation_source();
         let (emb_repo_id, emb_file) = model.embedding_source();
 
         tracing::info!("Ensuring segmentation model: {}/{}", seg_repo_id, seg_file);
         let seg_repo = api.repo(Repo::new(seg_repo_id.to_string(), RepoType::Model));
-        let seg_path = seg_repo.get(seg_file).map_err(|e| AudioError::ModelDownload {
-            model: format!("{}/{}", seg_repo_id, seg_file),
-            details: e.to_string(),
-        })?;
+        let seg_path = seg_repo
+            .get(seg_file)
+            .map_err(|e| AudioError::ModelDownload {
+                model: format!("{}/{}", seg_repo_id, seg_file),
+                details: e.to_string(),
+            })?;
 
         tracing::info!("Ensuring embedding model: {}/{}", emb_repo_id, emb_file);
         let emb_repo = api.repo(Repo::new(emb_repo_id.to_string(), RepoType::Model));
-        let emb_path = emb_repo.get(emb_file).map_err(|e| AudioError::ModelDownload {
-            model: format!("{}/{}", emb_repo_id, emb_file),
-            details: e.to_string(),
-        })?;
+        let emb_path = emb_repo
+            .get(emb_file)
+            .map_err(|e| AudioError::ModelDownload {
+                model: format!("{}/{}", emb_repo_id, emb_file),
+                details: e.to_string(),
+            })?;
 
         Ok((seg_path, emb_path))
     }

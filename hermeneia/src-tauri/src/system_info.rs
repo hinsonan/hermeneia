@@ -146,27 +146,26 @@ fn detect_gpu() -> Result<Option<GpuInfo>, String> {
 fn detect_cuda_gpu() -> Result<GpuInfo, String> {
     use nvml_wrapper::Nvml;
 
-    let nvml = Nvml::init().map_err(|e| {
-        format!("Failed to initialize NVML: {}", e)
-    })?;
+    let nvml = Nvml::init().map_err(|e| format!("Failed to initialize NVML: {}", e))?;
 
     // Get first GPU (device 0)
-    let device = nvml.device_by_index(0).map_err(|e| {
-        format!("Failed to get GPU device: {}", e)
-    })?;
+    let device = nvml
+        .device_by_index(0)
+        .map_err(|e| format!("Failed to get GPU device: {}", e))?;
 
     // Get VRAM info
-    let memory_info = device.memory_info().map_err(|e| {
-        format!("Failed to get memory info: {}", e)
-    })?;
+    let memory_info = device
+        .memory_info()
+        .map_err(|e| format!("Failed to get memory info: {}", e))?;
 
     let vram_total_gb = memory_info.total as f32 / 1_073_741_824.0;
     let vram_available_gb = memory_info.free as f32 / 1_073_741_824.0;
 
     // Get compute capability
-    let compute_capability = device.cuda_compute_capability().ok().map(|cc| {
-        (cc.major as u32, cc.minor as u32)
-    });
+    let compute_capability = device
+        .cuda_compute_capability()
+        .ok()
+        .map(|cc| (cc.major as u32, cc.minor as u32));
 
     Ok(GpuInfo {
         device_type: GpuDeviceType::NvidiaCuda,

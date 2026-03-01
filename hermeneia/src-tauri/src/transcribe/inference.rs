@@ -42,8 +42,7 @@ pub fn transcribe_audio_with_progress(
 
     // Download/load model
     let model_manager = ModelManager::new()?;
-    let model_files = model_manager
-        .ensure_model(params.model, params.use_quantized)?;
+    let model_files = model_manager.ensure_model(params.model, params.use_quantized)?;
 
     let device = get_device(params.force_cpu)?;
     tracing::info!("Using device: {}", device_name(&device));
@@ -51,8 +50,8 @@ pub fn transcribe_audio_with_progress(
     // Scope model lifetime so GPU memory is freed before building result
     let (segments, text) = {
         // Load model and tokenizer
-        let (config, tokenizer, mut model) = load_model(&model_files, &device)
-            .map_err(|e| enrich_oom_error(e, params.model))?;
+        let (config, tokenizer, mut model) =
+            load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
 
         // Preprocess to mel-spectrogram (needs config for mel bins)
         let mel = preprocess_audio(&audio_data, &config, &device)?;
@@ -67,7 +66,12 @@ pub fn transcribe_audio_with_progress(
             (true, Some(lang)) => {
                 let token = tokenizer
                     .token_to_id(&format!("<|{lang}|>"))
-                    .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
+                    .ok_or_else(|| {
+                        AudioError::TranscriptionFailed(format!(
+                            "Language '{}' not supported",
+                            lang
+                        ))
+                    })?;
                 Some(token)
             }
             (false, Some(lang)) => {
@@ -98,7 +102,10 @@ pub fn transcribe_audio_with_progress(
         for (i, seg) in raw_segments.iter().enumerate() {
             tracing::info!(
                 "Raw segment {}: start={:.2}s, text='{}', tokens={:?}",
-                i, seg.start, seg.dr.text, seg.dr.tokens
+                i,
+                seg.start,
+                seg.dr.text,
+                seg.dr.tokens
             );
         }
 
@@ -154,8 +161,7 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
 
     // Download/load model
     let model_manager = ModelManager::new()?;
-    let model_files = model_manager
-        .ensure_model(params.model, params.use_quantized)?;
+    let model_files = model_manager.ensure_model(params.model, params.use_quantized)?;
 
     // Check for cancellation after model download
     if let Some(ref flag) = cancel_flag {
@@ -170,8 +176,8 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     // Scope model lifetime so GPU memory is freed before building result
     let (segments, text) = {
         // Load model and tokenizer
-        let (config, tokenizer, mut model) = load_model(&model_files, &device)
-            .map_err(|e| enrich_oom_error(e, params.model))?;
+        let (config, tokenizer, mut model) =
+            load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
 
         // Check for cancellation after model load
         if let Some(ref flag) = cancel_flag {
@@ -200,7 +206,12 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
             (true, Some(lang)) => {
                 let token = tokenizer
                     .token_to_id(&format!("<|{lang}|>"))
-                    .ok_or_else(|| AudioError::TranscriptionFailed(format!("Language '{}' not supported", lang)))?;
+                    .ok_or_else(|| {
+                        AudioError::TranscriptionFailed(format!(
+                            "Language '{}' not supported",
+                            lang
+                        ))
+                    })?;
                 Some(token)
             }
             (false, Some(lang)) => {
@@ -216,11 +227,9 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
         // Use raw pointer to avoid lifetime issues with the closure
         let reporter_ptr = reporter as *const P as usize;
 
-        let callback: ProgressCallback = Box::new(move |current, total| {
-            unsafe {
-                let reporter_ref = &*(reporter_ptr as *const P);
-                reporter_ref.report(current, total);
-            }
+        let callback: ProgressCallback = Box::new(move |current, total| unsafe {
+            let reporter_ref = &*(reporter_ptr as *const P);
+            reporter_ref.report(current, total);
         });
 
         // Run inference with full decoder
@@ -276,25 +285,19 @@ fn load_model(
     }
 
     // Load config
-    let config_str = std::fs::read_to_string(&files.config).map_err(|e| {
-        AudioError::ModelLoad {
-            model: "config".to_string(),
-            details: e.to_string(),
-        }
+    let config_str = std::fs::read_to_string(&files.config).map_err(|e| AudioError::ModelLoad {
+        model: "config".to_string(),
+        details: e.to_string(),
     })?;
-    let config: Config = serde_json::from_str(&config_str).map_err(|e| {
-        AudioError::ModelLoad {
-            model: "config".to_string(),
-            details: e.to_string(),
-        }
+    let config: Config = serde_json::from_str(&config_str).map_err(|e| AudioError::ModelLoad {
+        model: "config".to_string(),
+        details: e.to_string(),
     })?;
 
     // Load tokenizer
-    let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| {
-        AudioError::ModelLoad {
-            model: "tokenizer".to_string(),
-            details: e.to_string(),
-        }
+    let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| AudioError::ModelLoad {
+        model: "tokenizer".to_string(),
+        details: e.to_string(),
     })?;
 
     // Load model weights (platform-safe: buffered on Windows, mmap on Linux/macOS)
@@ -310,7 +313,9 @@ fn load_model(
 /// Enrich OOM errors with model-specific information
 fn enrich_oom_error(error: AudioError, model: crate::transcribe::WhisperModel) -> AudioError {
     match error {
-        AudioError::OutOfMemory { message, device, .. } => {
+        AudioError::OutOfMemory {
+            message, device, ..
+        } => {
             let reqs = model.requirements();
             let required_gb = if device == "VRAM" {
                 reqs.min_vram_gb
@@ -331,4 +336,3 @@ fn enrich_oom_error(error: AudioError, model: crate::transcribe::WhisperModel) -
         other => other,
     }
 }
-

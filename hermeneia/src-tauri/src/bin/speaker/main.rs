@@ -1,6 +1,7 @@
 use clap::Parser;
+use hermeneia_lib::annotate::{parse_speaker_names, speaker_label};
 use hermeneia_lib::speaker::{
-    diarize_audio_with_progress, DiarizeParams, DiarizationResult, SpeakerDevice, SpeakerModel,
+    diarize_audio_with_progress, DiarizationResult, DiarizeParams, SpeakerDevice, SpeakerModel,
     SpeakerModelManager,
 };
 use std::collections::HashMap;
@@ -119,7 +120,12 @@ fn main() -> anyhow::Result<()> {
             let json = format_as_json(&result, &names)?;
             write_output(json, args.output.as_deref())?;
         }
-        "text" | _ => {
+        "text" => {
+            let text = format_as_text(&result, &names);
+            write_output(text, args.output.as_deref())?;
+        }
+        other => {
+            tracing::warn!("Unrecognized format '{}', defaulting to text", other);
             let text = format_as_text(&result, &names);
             write_output(text, args.output.as_deref())?;
         }
@@ -132,10 +138,7 @@ fn parse_model(s: &str) -> anyhow::Result<SpeakerModel> {
     match s.to_lowercase().as_str() {
         "english" => Ok(SpeakerModel::English),
         "multilingual" => Ok(SpeakerModel::Multilingual),
-        _ => anyhow::bail!(
-            "Invalid model '{}'. Use: english, multilingual",
-            s
-        ),
+        _ => anyhow::bail!("Invalid model '{}'. Use: english, multilingual", s),
     }
 }
 
@@ -144,10 +147,7 @@ fn parse_device(s: &str) -> anyhow::Result<SpeakerDevice> {
         "cpu" => Ok(SpeakerDevice::Cpu),
         "cuda" => Ok(SpeakerDevice::Cuda),
         "coreml" => Ok(SpeakerDevice::CoreMl),
-        _ => anyhow::bail!(
-            "Invalid device '{}'. Use: cpu, cuda, coreml",
-            s
-        ),
+        _ => anyhow::bail!("Invalid device '{}'. Use: cpu, cuda, coreml", s),
     }
 }
 
@@ -156,7 +156,11 @@ fn print_model_list() {
     println!("Available speaker diarization model bundles:\n");
     for model in &models {
         let cached = SpeakerModelManager::is_cached(model);
-        let status = if cached { "✓ cached" } else { "not downloaded" };
+        let status = if cached {
+            "✓ cached"
+        } else {
+            "not downloaded"
+        };
         println!(
             "  {:15} {:.1} MB   [{}]",
             model.cli_key(),
@@ -170,43 +174,6 @@ fn print_model_list() {
         println!("             Embedding:    {}/{}", emb_repo, emb_file);
         println!();
     }
-}
-
-/// Parse --names string into a HashMap<speaker_id, name>.
-/// Supports two formats:
-///   positional: "Alice,Bob"     → {0: "Alice", 1: "Bob"}
-///   key=value:  "0=Alice,1=Bob" → {0: "Alice", 1: "Bob"}
-fn parse_speaker_names(names_str: &str) -> HashMap<i32, String> {
-    let mut map = HashMap::new();
-    let parts: Vec<&str> = names_str.split(',').collect();
-    let is_kv = parts.iter().any(|p| p.contains('='));
-    if is_kv {
-        for part in parts {
-            if let Some((k, v)) = part.split_once('=') {
-                if let Ok(id) = k.trim().parse::<i32>() {
-                    let name = v.trim().to_string();
-                    if !name.is_empty() {
-                        map.insert(id, name);
-                    }
-                }
-            }
-        }
-    } else {
-        for (i, name) in parts.iter().enumerate() {
-            let name = name.trim().to_string();
-            if !name.is_empty() {
-                map.insert(i as i32, name);
-            }
-        }
-    }
-    map
-}
-
-fn speaker_label(id: i32, names: &HashMap<i32, String>) -> String {
-    names
-        .get(&id)
-        .cloned()
-        .unwrap_or_else(|| format!("Speaker {}", id))
 }
 
 fn format_as_text(result: &DiarizationResult, names: &HashMap<i32, String>) -> String {

@@ -2,11 +2,11 @@
 //
 // Profile audio trim operations with detailed timing breakdowns
 
+use clap::Parser;
 use hermeneia_lib::audio::trim::trim_audio_file;
 use hermeneia_lib::audio::TrimParams;
 use std::path::PathBuf;
 use std::time::Instant;
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(name = "profile-trim")]
@@ -61,7 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let input_size = get_file_size_mb(&args.input);
-    let input_ext = args.input.extension()
+    let input_ext = args
+        .input
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("unknown");
 
@@ -70,8 +72,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Input size: {:.2} MB", input_size);
     println!("  Format: {}", input_ext.to_uppercase());
     println!("  Output file: {}", args.output.display());
-    println!("  Trim range: {:.2}s to {:.2}s ({:.2}s duration)",
-             args.start, args.end, args.end - args.start);
+    println!(
+        "  Trim range: {:.2}s to {:.2}s ({:.2}s duration)",
+        args.start,
+        args.end,
+        args.end - args.start
+    );
     println!("  Iterations: {}\n", args.iterations);
 
     let params = TrimParams::new(args.start, args.end)?;
@@ -109,12 +115,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let avg = timings.iter().sum::<f64>() / timings.len() as f64;
 
     // Calculate standard deviation
-    let variance = timings.iter()
+    let variance = timings
+        .iter()
         .map(|&t| {
             let diff = t - avg;
             diff * diff
         })
-        .sum::<f64>() / timings.len() as f64;
+        .sum::<f64>()
+        / timings.len() as f64;
     let std_dev = variance.sqrt();
 
     println!("  Min time: {}", format_duration(min));
@@ -126,10 +134,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Estimate processing rate
     let trim_duration = args.end - args.start;
     let realtime_factor = trim_duration / avg;
-    println!("  Realtime factor: {:.2}x (trimming {:.2}s audio in {:.2}s)",
-             realtime_factor, trim_duration, avg);
+    println!(
+        "  Realtime factor: {:.2}x (trimming {:.2}s audio in {:.2}s)",
+        realtime_factor, trim_duration, avg
+    );
 
-    println!("\nAll timings: {:?}", timings.iter().map(|&t| format_duration(t)).collect::<Vec<_>>());
+    println!(
+        "\nAll timings: {:?}",
+        timings
+            .iter()
+            .map(|&t| format_duration(t))
+            .collect::<Vec<_>>()
+    );
 
     Ok(())
 }

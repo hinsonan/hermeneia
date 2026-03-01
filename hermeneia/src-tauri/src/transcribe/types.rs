@@ -117,8 +117,13 @@ impl WhisperModel {
     /// Check if this model is multilingual
     pub fn is_multilingual(&self) -> bool {
         match self {
-            Self::Tiny | Self::Base | Self::Small | Self::Medium
-            | Self::Large | Self::LargeV2 | Self::LargeV3 => true,
+            Self::Tiny
+            | Self::Base
+            | Self::Small
+            | Self::Medium
+            | Self::Large
+            | Self::LargeV2
+            | Self::LargeV3 => true,
             Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn => false,
         }
     }

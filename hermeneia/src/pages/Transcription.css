@@ -227,6 +227,41 @@
   font-style: italic;
 }
 
+/* Number input */
+.number-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-ornament);
+  border-radius: 4px;
+  background: var(--parchment);
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+  font-size: 1rem;
+}
+
+/* Range slider */
+.range-slider {
+  width: 100%;
+  accent-color: var(--burgundy);
+  cursor: pointer;
+}
+
+.threshold-value {
+  font-family: 'Crimson Text', serif;
+  font-weight: normal;
+  font-size: 0.9rem;
+  color: var(--ink-medium);
+}
+
+/* Empty segments fallback */
+.no-segments-msg {
+  color: var(--ink-medium);
+  font-family: 'Crimson Text', serif;
+  font-style: italic;
+  text-align: center;
+  padding: 1rem 0;
+}
+
 /* Custom Select Wrapper */
 .select-wrapper {
   position: relative;
@@ -684,6 +719,67 @@
   line-height: 1.5;
 }
 
+.segment-speaker {
+  color: var(--burgundy);
+  font-family: 'Cinzel', serif;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.speaker-segments-content .segment-row {
+  align-items: center;
+}
+
+.speaker-editor-box {
+  background: var(--card-bg);
+  border: 2px solid var(--border-ornament);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.speaker-editor-box h3 {
+  color: var(--burgundy);
+  font-family: 'Cinzel', serif;
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+}
+
+.speaker-name-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+
+.speaker-name-row:last-child {
+  margin-bottom: 0;
+}
+
+.speaker-name-row span {
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+  font-weight: 600;
+}
+
+.speaker-name-row input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  background: var(--parchment);
+  border: 2px solid var(--border-ornament);
+  border-radius: 6px;
+  color: var(--ink-dark);
+  font-family: 'Crimson Text', serif;
+  font-size: 0.95rem;
+}
+
+.speaker-name-row input:focus {
+  outline: none;
+  border-color: var(--gold-accent);
+  box-shadow: 0 0 0 3px rgba(184, 134, 11, 0.15);
+}
+
 /* New File Button */
 .new-file-btn {
   display: flex;
@@ -786,6 +882,11 @@
   .segment-row {
     flex-direction: column;
     gap: 0.25rem;
+  }
+
+  .speaker-name-row {
+    grid-template-columns: 1fr;
+    gap: 0.4rem;
   }
 
   .transcript-actions {

@@ -26,21 +26,16 @@ pub fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> 
     // Optimized parameters for faster CPU resampling with minimal quality loss
     // Reduced sinc_len and oversampling_factor for ~30% speed improvement
     let params = SincInterpolationParameters {
-        sinc_len: 128,              // Reduced from 256 for faster processing
-        f_cutoff: 0.98,             // Increased from 0.95 to maintain quality
+        sinc_len: 128,  // Reduced from 256 for faster processing
+        f_cutoff: 0.98, // Increased from 0.95 to maintain quality
         interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 128,   // Reduced from 256 for faster processing
+        oversampling_factor: 128, // Reduced from 256 for faster processing
         window: rubato::WindowFunction::BlackmanHarris2,
     };
 
-    let mut resampler = SincFixedIn::<f32>::new(
-        16000.0 / source_rate as f64,
-        2.0,
-        params,
-        samples.len(),
-        1,
-    )
-    .map_err(|e| AudioError::AudioPreprocessing(format!("Resampler init: {}", e)))?;
+    let mut resampler =
+        SincFixedIn::<f32>::new(16000.0 / source_rate as f64, 2.0, params, samples.len(), 1)
+            .map_err(|e| AudioError::AudioPreprocessing(format!("Resampler init: {}", e)))?;
 
     let waves_in = vec![samples.to_vec()];
     let waves_out = resampler
@@ -51,7 +46,11 @@ pub fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> 
 }
 
 /// Compute mel-spectrogram using Candle
-pub fn compute_mel_spectrogram(samples: &[f32], config: &Config, device: &Device) -> Result<Tensor> {
+pub fn compute_mel_spectrogram(
+    samples: &[f32],
+    config: &Config,
+    device: &Device,
+) -> Result<Tensor> {
     // Load mel filters based on model configuration
     let mel_bytes = match config.num_mel_bins {
         80 => include_bytes!("../../assets/melfilters.bytes").as_slice(),

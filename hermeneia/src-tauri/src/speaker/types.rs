@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::{AudioError, Result};
+
 /// Available speaker diarization model bundles.
 /// Each bundle pairs the pyannote-segmentation-3.0 segmentation model
 /// with a language-appropriate 3DSpeaker embedding model.
@@ -23,7 +25,10 @@ impl SpeakerModel {
     /// HuggingFace repo and filename for the segmentation model (shared).
     /// Uses the sherpa-onnx re-exported version which includes required ONNX metadata.
     pub fn segmentation_source(&self) -> (&str, &str) {
-        ("csukuangfj/sherpa-onnx-pyannote-segmentation-3-0", "model.onnx")
+        (
+            "csukuangfj/sherpa-onnx-pyannote-segmentation-3-0",
+            "model.onnx",
+        )
     }
 
     /// HuggingFace repo and filename for the embedding model.
@@ -101,6 +106,27 @@ impl Default for DiarizeParams {
             device: SpeakerDevice::Cpu,
         }
     }
+}
+
+/// Validate speaker diarization parameters.
+pub fn validate_diarize_params(params: &DiarizeParams) -> Result<()> {
+    if !(0.0..=1.0).contains(&params.threshold) {
+        return Err(AudioError::InvalidDiarizeParams(format!(
+            "Threshold must be between 0.0 and 1.0, got {}",
+            params.threshold
+        )));
+    }
+
+    if let Some(num) = params.num_speakers {
+        if num < 1 {
+            return Err(AudioError::InvalidDiarizeParams(format!(
+                "Expected number of speakers must be >= 1, got {}",
+                num
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// A single speaker-labeled time range in the output

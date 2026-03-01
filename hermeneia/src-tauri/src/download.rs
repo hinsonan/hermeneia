@@ -81,9 +81,21 @@ fn is_model_cached_on_disk(model_id: &str) -> bool {
             if entry.path().is_dir() {
                 let dir = entry.path();
                 // Check for weight files - the large files that actually matter
-                let has_weights = dir.join("model.safetensors").metadata().map(|m| m.is_file()).unwrap_or(false)
-                    || dir.join("pytorch_model.bin").metadata().map(|m| m.is_file()).unwrap_or(false)
-                    || dir.join("model-q8_0.gguf").metadata().map(|m| m.is_file()).unwrap_or(false);
+                let has_weights = dir
+                    .join("model.safetensors")
+                    .metadata()
+                    .map(|m| m.is_file())
+                    .unwrap_or(false)
+                    || dir
+                        .join("pytorch_model.bin")
+                        .metadata()
+                        .map(|m| m.is_file())
+                        .unwrap_or(false)
+                    || dir
+                        .join("model-q8_0.gguf")
+                        .metadata()
+                        .map(|m| m.is_file())
+                        .unwrap_or(false);
                 if has_weights {
                     return true;
                 }
@@ -129,17 +141,45 @@ pub fn list_all_models() -> Result<Vec<ModelInfo>> {
 
     // Whisper models
     let whisper_variants = [
-        (WhisperModel::Tiny, "Tiny", "Fastest, least accurate (~150MB)"),
-        (WhisperModel::TinyEn, "Tiny (English)", "English-only, faster (~150MB)"),
+        (
+            WhisperModel::Tiny,
+            "Tiny",
+            "Fastest, least accurate (~150MB)",
+        ),
+        (
+            WhisperModel::TinyEn,
+            "Tiny (English)",
+            "English-only, faster (~150MB)",
+        ),
         (WhisperModel::Base, "Base", "Good balance (~290MB)"),
-        (WhisperModel::BaseEn, "Base (English)", "English-only (~290MB)"),
+        (
+            WhisperModel::BaseEn,
+            "Base (English)",
+            "English-only (~290MB)",
+        ),
         (WhisperModel::Small, "Small", "Better accuracy (~970MB)"),
-        (WhisperModel::SmallEn, "Small (English)", "English-only (~970MB)"),
+        (
+            WhisperModel::SmallEn,
+            "Small (English)",
+            "English-only (~970MB)",
+        ),
         (WhisperModel::Medium, "Medium", "High accuracy (~3.1GB)"),
-        (WhisperModel::MediumEn, "Medium (English)", "English-only (~3.1GB)"),
+        (
+            WhisperModel::MediumEn,
+            "Medium (English)",
+            "English-only (~3.1GB)",
+        ),
         (WhisperModel::Large, "Large", "Highest accuracy (~6.2GB)"),
-        (WhisperModel::LargeV2, "Large v2", "Improved large model (~6.2GB)"),
-        (WhisperModel::LargeV3, "Large v3", "Latest large model (~6.2GB)"),
+        (
+            WhisperModel::LargeV2,
+            "Large v2",
+            "Improved large model (~6.2GB)",
+        ),
+        (
+            WhisperModel::LargeV3,
+            "Large v3",
+            "Latest large model (~6.2GB)",
+        ),
     ];
 
     for (model, name, desc) in whisper_variants.iter() {
@@ -166,7 +206,10 @@ pub fn list_all_models() -> Result<Vec<ModelInfo>> {
         };
         models.push(ModelInfo {
             model_id: entry.model_id.clone(),
-            display_name: entry.description.clone().unwrap_or_else(|| entry.name.clone()),
+            display_name: entry
+                .description
+                .clone()
+                .unwrap_or_else(|| entry.name.clone()),
             category: category.to_string(),
             size_mb: entry.size_mb,
             is_cached: is_model_cached_on_disk(&entry.model_id),
@@ -191,9 +234,17 @@ fn expected_model_bytes(model_id: &str, catalog_entry: Option<&CatalogModel>) ->
     }
     // Check Whisper models
     let whisper_variants = [
-        WhisperModel::Tiny, WhisperModel::TinyEn, WhisperModel::Base, WhisperModel::BaseEn,
-        WhisperModel::Small, WhisperModel::SmallEn, WhisperModel::Medium, WhisperModel::MediumEn,
-        WhisperModel::Large, WhisperModel::LargeV2, WhisperModel::LargeV3,
+        WhisperModel::Tiny,
+        WhisperModel::TinyEn,
+        WhisperModel::Base,
+        WhisperModel::BaseEn,
+        WhisperModel::Small,
+        WhisperModel::SmallEn,
+        WhisperModel::Medium,
+        WhisperModel::MediumEn,
+        WhisperModel::Large,
+        WhisperModel::LargeV2,
+        WhisperModel::LargeV3,
     ];
     for model in &whisper_variants {
         if model.model_id() == model_id {
@@ -344,7 +395,9 @@ fn download_with_progress(
     let revision_owned = revision.map(|s| s.to_string());
 
     // Spawn the actual download in a thread (build a fresh Api+Repo inside to avoid lifetime issues)
-    let download_result = Arc::new(std::sync::Mutex::new(None::<std::result::Result<PathBuf, String>>));
+    let download_result = Arc::new(std::sync::Mutex::new(
+        None::<std::result::Result<PathBuf, String>>,
+    ));
     let result_clone = download_result.clone();
 
     let handle = std::thread::spawn(move || {
@@ -434,7 +487,10 @@ fn download_with_progress(
 }
 
 /// Determine which files need downloading for a given model.
-fn determine_files(model_id: &str, catalog_entry: Option<&CatalogModel>) -> (Vec<&'static str>, Option<String>) {
+fn determine_files(
+    model_id: &str,
+    catalog_entry: Option<&CatalogModel>,
+) -> (Vec<&'static str>, Option<String>) {
     // Whisper models
     if model_id.starts_with("openai/whisper") {
         return (
@@ -456,12 +512,22 @@ fn determine_files(model_id: &str, catalog_entry: Option<&CatalogModel>) -> (Vec
         let revision = entry.revision.clone();
         if entry.has_safetensors {
             return (
-                vec!["config.json", "vocab.json", "source.spm", "model.safetensors"],
+                vec![
+                    "config.json",
+                    "vocab.json",
+                    "source.spm",
+                    "model.safetensors",
+                ],
                 revision,
             );
         } else {
             return (
-                vec!["config.json", "vocab.json", "source.spm", "pytorch_model.bin"],
+                vec![
+                    "config.json",
+                    "vocab.json",
+                    "source.spm",
+                    "pytorch_model.bin",
+                ],
                 revision,
             );
         }
@@ -476,7 +542,12 @@ fn determine_files(model_id: &str, catalog_entry: Option<&CatalogModel>) -> (Vec
             Some("refs/pr/4".to_string())
         };
         return (
-            vec!["config.json", "vocab.json", "source.spm", "model.safetensors"],
+            vec![
+                "config.json",
+                "vocab.json",
+                "source.spm",
+                "model.safetensors",
+            ],
             revision,
         );
     }
