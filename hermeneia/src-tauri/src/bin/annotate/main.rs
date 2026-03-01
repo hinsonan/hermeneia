@@ -295,29 +295,17 @@ fn parse_device(s: &str) -> anyhow::Result<SpeakerDevice> {
 }
 
 fn parse_speaker_names(names_str: &str) -> HashMap<i32, String> {
-    let mut map = HashMap::new();
-    let parts: Vec<&str> = names_str.split(',').collect();
-    let is_kv = parts.iter().any(|p| p.contains('='));
-    if is_kv {
-        for part in parts {
-            if let Some((k, v)) = part.split_once('=') {
-                if let Ok(id) = k.trim().parse::<i32>() {
-                    let name = v.trim().to_string();
-                    if !name.is_empty() {
-                        map.insert(id, name);
-                    }
-                }
-            }
-        }
-    } else {
-        for (i, name) in parts.iter().enumerate() {
-            let name = name.trim().to_string();
-            if !name.is_empty() {
-                map.insert(i as i32, name);
-            }
-        }
-    }
-    map
+    names_str
+        .split(',')
+        .enumerate()
+        .filter_map(|(i, part)| {
+            let (id, name) = match part.split_once('=') {
+                Some((k, v)) => (k.trim().parse::<i32>().ok()?, v.trim()),
+                None => (i as i32, part.trim()),
+            };
+            if name.is_empty() { None } else { Some((id, name.to_string())) }
+        })
+        .collect()
 }
 
 fn speaker_label(id: i32, names: &HashMap<i32, String>) -> String {
