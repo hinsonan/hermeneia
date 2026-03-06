@@ -25,7 +25,7 @@ sleep 2
 # cuda-libs: CUDA runtime libs (libcudart, libcublas, etc.)
 # target-cuda/debug: sherpa-onnx shared libs (libsherpa-onnx-c-api.so, etc.)
 echo "Starting Tauri app with CUDA..."
-LD_LIBRARY_PATH=./src-tauri/cuda-libs:./src-tauri/target-cuda/debug \
+LD_LIBRARY_PATH="$(pwd)/src-tauri/cuda-libs:$(pwd)/src-tauri/target-cuda/debug" \
 __NV_PRIME_RENDER_OFFLOAD=1 \
 __GLX_VENDOR_LIBRARY_NAME=nvidia \
 WEBKIT_DISABLE_DMABUF_RENDERER=1 \

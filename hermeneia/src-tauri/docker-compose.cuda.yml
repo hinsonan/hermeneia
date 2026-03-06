@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Extract CUDA 12.8 + cuDNN 9 runtime libraries for local development.
   # ORT 1.23.2-patched (used by sherpa-onnx) requires CUDA 12.x and cuDNN 9.
@@ -60,12 +58,13 @@ services:
         rm -f /build/target/debug/libonnxruntime*.so* /build/target/debug/deps/libonnxruntime*.so* &&
         rm -rf /build/target/debug/.fingerprint/sherpa-rs-sys-* &&
         cargo build --no-default-features --features cuda &&
+        echo '📚 Copying ORT provider shared libs (dlopen deps not handled by build script)...' &&
+        cp -L $${SHERPA_LIB_PATH}/lib/libonnxruntime*.so* /build/target/debug/ &&
         echo '' &&
         echo '✅ Build complete!' &&
         echo '📦 Binary: ./target-cuda/debug/hermeneia' &&
         echo '' &&
-        echo '🚀 To run (sherpa-onnx .so files live alongside the binary in target-cuda/debug/):' &&
-        echo '   LD_LIBRARY_PATH=./cuda-libs:./target-cuda/debug ./target-cuda/debug/hermeneia' &&
+        echo '🚀 To run: npm run dev:cuda' &&
         echo '' &&
         echo '🔧 Fixing file ownership...' &&
         chown -R \$$HOST_UID:\$$HOST_GID /build/target 2>/dev/null || true
@@ -107,7 +106,11 @@ services:
         echo '🔗 Creating libcuda.so.1 stub for linuxdeploy...' &&
         ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
         npm ci &&
-        npx tauri build --no-default-features --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
+        echo '📚 Copying ORT dlopen provider libs to cuda-libs for bundling...' &&
+        cp -L $${SHERPA_LIB_PATH}/lib/libonnxruntime_providers_shared.so /project/src-tauri/cuda-libs/ &&
+        cp -L $${SHERPA_LIB_PATH}/lib/libonnxruntime_providers_cuda.so /project/src-tauri/cuda-libs/ &&
+        export LD_LIBRARY_PATH=/project/src-tauri/cuda-libs:/project/src-tauri/target/release:$$LD_LIBRARY_PATH &&
+        npx tauri build --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage -- --no-default-features --features cuda &&
         echo '' &&
         sh /project/scripts/fix-appimage-cuda.sh &&
         echo '' &&

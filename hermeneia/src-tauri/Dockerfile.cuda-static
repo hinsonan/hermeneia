@@ -94,6 +94,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     libfuse2 \
     file \
     xdg-utils \
+    squashfs-tools \
+    desktop-file-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # appimagetool for post-processing AppImages (remove bundled libcuda stub)
