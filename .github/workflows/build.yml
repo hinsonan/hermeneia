@@ -216,29 +216,40 @@ jobs:
       - name: Prepare CUDA distribution assets
         run: |
           mkdir -p release-cuda-assets
-          cp src-tauri/target/release/bundle/deb/*-cuda.deb release-cuda-assets/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/rpm/*-cuda.rpm release-cuda-assets/ 2>/dev/null || true
 
-          for f in src-tauri/target/release/bundle/appimage/*-cuda.AppImage; do
-            [ -f "$f" ] || continue
+          prepare_asset() {
+            f="$1"
+            [ -f "$f" ] || return 0
 
             size=$(stat -c%s "$f")
             base=$(basename "$f")
 
             if [ "$size" -lt 2147483648 ]; then
               cp "$f" "release-cuda-assets/$base"
-              continue
+              return 0
             fi
 
-            echo "AppImage exceeds GitHub Release asset limit; compressing: $base"
+            echo "Asset exceeds GitHub Release size limit; compressing: $base"
             xz -T0 -9 -c "$f" > "release-cuda-assets/${base}.xz"
 
             compressed_size=$(stat -c%s "release-cuda-assets/${base}.xz")
             if [ "$compressed_size" -ge 2147483648 ]; then
-              echo "Compressed AppImage still exceeds limit; splitting: ${base}.xz"
+              echo "Compressed asset still exceeds limit; splitting: ${base}.xz"
               split -b 1900m -d -a 3 "release-cuda-assets/${base}.xz" "release-cuda-assets/${base}.xz.part-"
               rm -f "release-cuda-assets/${base}.xz"
             fi
+          }
+
+          for f in src-tauri/target/release/bundle/deb/*-cuda.deb; do
+            prepare_asset "$f"
+          done
+
+          for f in src-tauri/target/release/bundle/rpm/*-cuda.rpm; do
+            prepare_asset "$f"
+          done
+
+          for f in src-tauri/target/release/bundle/appimage/*-cuda.AppImage; do
+            prepare_asset "$f"
           done
 
           ls -lh release-cuda-assets
@@ -470,15 +481,56 @@ jobs:
       - name: Build Tauri (CUDA)
         env:
           CUDA_COMPUTE_CAP: '75'
-        run: npx tauri build --config src-tauri/tauri.cuda.windows.conf.json --bundles nsis -- --no-default-features --features cuda
+        run: npx tauri build --no-bundle --config src-tauri/tauri.cuda.windows.conf.json -- --no-default-features --features cuda
 
-      - name: Rename CUDA artifact
+      - name: Package CUDA portable archive
         shell: pwsh
         run: |
-          Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | ForEach-Object {
-            $newName = $_.BaseName + '-cuda' + $_.Extension
-            Rename-Item $_.FullName -NewName $newName
+          $version = (Get-Content "src-tauri/tauri.conf.json" | ConvertFrom-Json).version
+          $bundleDir = "src-tauri\target\release\bundle\portable"
+          $stagingDir = Join-Path $bundleDir "hermeneia-cuda"
+
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
+            throw "7z is required to package the Windows CUDA portable build"
           }
+
+          Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
+
+          Copy-Item "src-tauri\target\release\hermeneia.exe" $stagingDir
+          Copy-Item "src-tauri\cuda-libs\*.dll" $stagingDir
+
+          @"
+          Hermeneia CUDA portable build
+
+          Contents:
+          - hermeneia.exe
+          - Required CUDA, ONNX Runtime, and cuDNN DLLs
+
+          Notes:
+          - Requires Microsoft Edge WebView2 Runtime on the target machine.
+          - Extract all archive parts into the same folder before opening with 7-Zip if the release is split.
+          "@ | Set-Content -Path (Join-Path $stagingDir "README.txt")
+
+          $archiveBase = "hermeneia_${version}_x64-cuda-portable.7z"
+          Get-ChildItem (Join-Path $bundleDir "hermeneia_*_x64-cuda-portable.7z*") -ErrorAction SilentlyContinue | Remove-Item -Force
+
+          $rawSize = (Get-ChildItem $stagingDir -Recurse -File | Measure-Object Length -Sum).Sum
+
+          Push-Location $bundleDir
+          if ($rawSize -ge 1900MB) {
+            & 7z a -t7z -mx=1 -v1900m $archiveBase "hermeneia-cuda\*"
+          }
+          else {
+            & 7z a -t7z -mx=1 $archiveBase "hermeneia-cuda\*"
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "7z packaging failed with exit code $LASTEXITCODE"
+          }
+          Pop-Location
+
+          Write-Host "Packaged CUDA archive parts:"
+          Get-ChildItem (Join-Path $bundleDir "hermeneia_*_x64-cuda-portable.7z*") | Select-Object Name, Length
 
       - name: Attach CUDA artifacts to Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
@@ -486,14 +538,14 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
-          files: hermeneia/src-tauri/target/release/bundle/nsis/*-cuda.exe
+          files: hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_x64-cuda-portable.7z*
 
       - name: Upload CUDA artifacts
         if: "!startsWith(github.ref, 'refs/tags/v') && inputs.create_release != true"
         uses: actions/upload-artifact@v4
         with:
           name: windows-cuda
-          path: hermeneia/src-tauri/target/release/bundle/nsis/*-cuda.exe
+          path: hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_x64-cuda-portable.7z*
           compression-level: 1
 
   # ===========================================================================
