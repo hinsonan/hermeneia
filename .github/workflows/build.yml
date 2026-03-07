@@ -63,6 +63,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: hermeneia/src-tauri
@@ -209,6 +213,36 @@ jobs:
             mv "$f" "appimage/${base}-cuda.AppImage"
           done
 
+      - name: Prepare CUDA distribution assets
+        run: |
+          mkdir -p release-cuda-assets
+          cp src-tauri/target/release/bundle/deb/*-cuda.deb release-cuda-assets/ 2>/dev/null || true
+          cp src-tauri/target/release/bundle/rpm/*-cuda.rpm release-cuda-assets/ 2>/dev/null || true
+
+          for f in src-tauri/target/release/bundle/appimage/*-cuda.AppImage; do
+            [ -f "$f" ] || continue
+
+            size=$(stat -c%s "$f")
+            base=$(basename "$f")
+
+            if [ "$size" -lt 2147483648 ]; then
+              cp "$f" "release-cuda-assets/$base"
+              continue
+            fi
+
+            echo "AppImage exceeds GitHub Release asset limit; compressing: $base"
+            xz -T0 -9 -c "$f" > "release-cuda-assets/${base}.xz"
+
+            compressed_size=$(stat -c%s "release-cuda-assets/${base}.xz")
+            if [ "$compressed_size" -ge 2147483648 ]; then
+              echo "Compressed AppImage still exceeds limit; splitting: ${base}.xz"
+              split -b 1900m -d -a 3 "release-cuda-assets/${base}.xz" "release-cuda-assets/${base}.xz.part-"
+              rm -f "release-cuda-assets/${base}.xz"
+            fi
+          done
+
+          ls -lh release-cuda-assets
+
       # Attach directly to Release (bypasses 500MB artifact limit)
       - name: Attach CUDA artifacts to Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
@@ -216,10 +250,7 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
-          files: |
-            hermeneia/src-tauri/target/release/bundle/deb/*-cuda.deb
-            hermeneia/src-tauri/target/release/bundle/rpm/*-cuda.rpm
-            hermeneia/src-tauri/target/release/bundle/appimage/*-cuda.AppImage
+          files: hermeneia/release-cuda-assets/*
 
       # No release: upload as artifact for inspection
       - name: Upload CUDA artifacts
@@ -227,10 +258,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-cuda
-          path: |
-            hermeneia/src-tauri/target/release/bundle/deb/*-cuda.deb
-            hermeneia/src-tauri/target/release/bundle/rpm/*-cuda.rpm
-            hermeneia/src-tauri/target/release/bundle/appimage/*-cuda.AppImage
+          path: hermeneia/release-cuda-assets/*
           compression-level: 1
 
   # ===========================================================================
@@ -327,6 +355,42 @@ jobs:
           # Set SHERPA_LIB_PATH so sherpa-rs-sys uses pre-built libs (skips cmake)
           echo "SHERPA_LIB_PATH=${{ github.workspace }}/hermeneia/$extractedDir" >> $env:GITHUB_ENV
 
+      - name: Download cuDNN runtime from NVIDIA PyPI
+        shell: pwsh
+        env:
+          CUDNN_PYPI_VERSION: '9.19.0.56'
+          CUDNN_PYPI_SHA256: 'cec70596b9ce878fab83810c3f5a2e606d35f510e5fee579759e4cbc68a23750'
+        run: |
+          $wheelDir = Join-Path $PWD ".python-wheels"
+          $extractDir = Join-Path $PWD ".python-runtime"
+          New-Item -ItemType Directory -Force -Path $wheelDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+
+          python -m pip download --only-binary=:all: --no-deps --dest $wheelDir "nvidia-cudnn-cu12==$env:CUDNN_PYPI_VERSION"
+
+          $wheel = Get-ChildItem $wheelDir "nvidia_cudnn_cu12-$env:CUDNN_PYPI_VERSION-*-win_amd64.whl" | Select-Object -First 1
+          if (-not $wheel) {
+            throw "Failed to download cuDNN wheel for version $env:CUDNN_PYPI_VERSION"
+          }
+
+          $actualSha256 = (Get-FileHash -Path $wheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedSha256 = $env:CUDNN_PYPI_SHA256.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "SHA256 mismatch for $($wheel.Name). Expected $expectedSha256 but got $actualSha256"
+          }
+
+          python -m pip install --no-deps --target $extractDir $wheel.FullName
+
+          $cudnnDllDir = Join-Path $extractDir "nvidia\cudnn\bin"
+          if (-not (Test-Path $cudnnDllDir)) {
+            throw "cuDNN DLL directory not found after wheel install: $cudnnDllDir"
+          }
+
+          Write-Host "cuDNN DLL directory contents:"
+          Get-ChildItem $cudnnDllDir | Select-Object Name, Length
+
+          echo "CUDNN_DLL_DIR=$cudnnDllDir" >> $env:GITHUB_ENV
+
       - name: Copy CUDA + ORT + cuDNN DLLs for bundling
         shell: pwsh
         run: |
@@ -334,10 +398,17 @@ jobs:
           if (-not $env:SHERPA_LIB_PATH) {
             throw "SHERPA_LIB_PATH is not set"
           }
+          if (-not $env:CUDNN_DLL_DIR) {
+            throw "CUDNN_DLL_DIR is not set"
+          }
           $sherpaLibDir = Join-Path $env:SHERPA_LIB_PATH "lib"
           $sherpaBinDir = Join-Path $env:SHERPA_LIB_PATH "bin"
+          $cudnnDllDir = $env:CUDNN_DLL_DIR
           if (-not (Test-Path $sherpaLibDir) -and -not (Test-Path $sherpaBinDir)) {
             throw "Sherpa runtime directories do not exist: $sherpaBinDir or $sherpaLibDir"
+          }
+          if (-not (Test-Path $cudnnDllDir)) {
+            throw "cuDNN DLL directory does not exist: $cudnnDllDir"
           }
           if (Test-Path $sherpaBinDir) {
             Write-Host "Sherpa bin directory contents:"
@@ -347,6 +418,8 @@ jobs:
             Write-Host "Sherpa lib directory contents:"
             Get-ChildItem $sherpaLibDir | Select-Object Name, Length
           }
+          Write-Host "cuDNN DLL directory contents:"
+          Get-ChildItem $cudnnDllDir | Select-Object Name, Length
           function Find-SherpaRuntimeDll($pattern) {
             $binMatches = @()
             if (Test-Path $sherpaBinDir) {
@@ -379,9 +452,12 @@ jobs:
             Copy-Item $matches[0].FullName "src-tauri\cuda-libs\"
           }
           # cuDNN DLLs (dlopen'd by ORT CUDA provider)
-          $cudnnDlls = @(Find-SherpaRuntimeDll "cudnn*.dll")
+          $cudnnDlls = @(Get-ChildItem (Join-Path $cudnnDllDir "cudnn*.dll") -File -ErrorAction SilentlyContinue)
           if ($cudnnDlls.Count -eq 0) {
-            throw "No cuDNN DLLs found in $sherpaBinDir or $sherpaLibDir"
+            $cudnnDlls = @(Find-SherpaRuntimeDll "cudnn*.dll")
+          }
+          if ($cudnnDlls.Count -eq 0) {
+            throw "No cuDNN DLLs found in $cudnnDllDir, $sherpaBinDir, or $sherpaLibDir"
           }
           $cudnnDlls | Copy-Item -Destination "src-tauri\cuda-libs\"
           Write-Host "Bundled DLLs:"
