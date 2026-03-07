@@ -170,15 +170,15 @@ fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> {
         SincFixedIn::<f32>::new(16000.0 / source_rate as f64, 2.0, params, samples.len(), 1)
             .map_err(|e| AudioError::AudioPreprocessing(format!("Resampler init: {}", e)))?;
 
-    let waves_in = vec![samples.to_vec()];
-    let waves_out = resampler
-        .process(&waves_in, None)
+    let mut wave_out = resampler.output_buffer_allocate(true);
+    let wave_in = [samples];
+    let (_, output_frames) = resampler
+        .process_into_buffer(&wave_in, &mut wave_out, None)
         .map_err(|e| AudioError::AudioPreprocessing(format!("Resampling: {}", e)))?;
 
-    waves_out
-        .into_iter()
-        .next()
-        .ok_or_else(|| AudioError::AudioPreprocessing("Resampler produced no output".into()))
+    let mut output = wave_out.into_iter().next().unwrap();
+    output.truncate(output_frames);
+    Ok(output)
 }
 
 #[cfg(test)]
