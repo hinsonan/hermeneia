@@ -81,7 +81,7 @@ jobs:
       - run: npm ci
 
       - name: Build Tauri (CPU)
-        run: npx tauri build --bundles deb,rpm,appimage
+        run: npm run build:cpu -- --bundles deb,rpm,appimage
 
       - uses: actions/upload-artifact@v4
         with:
@@ -335,8 +335,30 @@ jobs:
             throw "SHERPA_LIB_PATH is not set"
           }
           $sherpaLibDir = Join-Path $env:SHERPA_LIB_PATH "lib"
-          if (-not (Test-Path $sherpaLibDir)) {
-            throw "Sherpa lib directory does not exist: $sherpaLibDir"
+          $sherpaBinDir = Join-Path $env:SHERPA_LIB_PATH "bin"
+          if (-not (Test-Path $sherpaLibDir) -and -not (Test-Path $sherpaBinDir)) {
+            throw "Sherpa runtime directories do not exist: $sherpaBinDir or $sherpaLibDir"
+          }
+          if (Test-Path $sherpaBinDir) {
+            Write-Host "Sherpa bin directory contents:"
+            Get-ChildItem $sherpaBinDir | Select-Object Name, Length
+          }
+          if (Test-Path $sherpaLibDir) {
+            Write-Host "Sherpa lib directory contents:"
+            Get-ChildItem $sherpaLibDir | Select-Object Name, Length
+          }
+          function Find-SherpaRuntimeDll($pattern) {
+            $binMatches = @()
+            if (Test-Path $sherpaBinDir) {
+              $binMatches = @(Get-ChildItem (Join-Path $sherpaBinDir $pattern) -File -ErrorAction SilentlyContinue)
+            }
+            if ($binMatches.Count -gt 0) {
+              return $binMatches
+            }
+            if (Test-Path $sherpaLibDir) {
+              return @(Get-ChildItem (Join-Path $sherpaLibDir $pattern) -File -ErrorAction SilentlyContinue)
+            }
+            return @()
           }
           # CUDA runtime DLLs from toolkit
           Copy-Item "$env:CUDA_PATH\bin\cudart64_*.dll" "src-tauri\cuda-libs\"
@@ -350,16 +372,16 @@ jobs:
             "onnxruntime_providers_cuda.dll"
           )
           foreach ($dll in $requiredOrtDlls) {
-            $source = Join-Path $sherpaLibDir $dll
-            if (-not (Test-Path $source)) {
-              throw "Missing required ORT provider DLL: $source"
+            $matches = @(Find-SherpaRuntimeDll $dll)
+            if ($matches.Count -eq 0) {
+              throw "Missing required ORT provider DLL: $dll (searched $sherpaBinDir and $sherpaLibDir)"
             }
-            Copy-Item $source "src-tauri\cuda-libs\"
+            Copy-Item $matches[0].FullName "src-tauri\cuda-libs\"
           }
           # cuDNN DLLs (dlopen'd by ORT CUDA provider)
-          $cudnnDlls = @(Get-ChildItem (Join-Path $sherpaLibDir "cudnn*.dll") -File)
+          $cudnnDlls = @(Find-SherpaRuntimeDll "cudnn*.dll")
           if ($cudnnDlls.Count -eq 0) {
-            throw "No cuDNN DLLs found in $sherpaLibDir"
+            throw "No cuDNN DLLs found in $sherpaBinDir or $sherpaLibDir"
           }
           $cudnnDlls | Copy-Item -Destination "src-tauri\cuda-libs\"
           Write-Host "Bundled DLLs:"
