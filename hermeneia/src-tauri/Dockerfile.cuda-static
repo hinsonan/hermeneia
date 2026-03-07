@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y \
     libclang-dev \
     cmake \
     ninja-build \
+    # cuDNN 9 for ORT CUDA provider (RNN/LSTM ops)
+    libcudnn9-cuda-12 \
     && rm -rf /var/lib/apt/lists/*
 
 # Explicitly tell bindgen where libclang lives.
@@ -72,6 +74,8 @@ RUN mkdir -p /build/lib && \
     cp -P ${CUDA_HOME}/lib64/libnvrtc.so* /build/lib/ && \
     cp -P ${CUDA_HOME}/lib64/libcufft.so* /build/lib/ 2>/dev/null || true && \
     cp -P ${CUDA_HOME}/lib64/libcurand.so* /build/lib/ 2>/dev/null || true && \
+    echo "=== Copying cuDNN 9 libraries ===" && \
+    cp -P /usr/lib/x86_64-linux-gnu/libcudnn*.so* /build/lib/ 2>/dev/null || true && \
     echo "" && \
     echo "=== Bundled libraries ===" && \
     ls -lh /build/lib/

@@ -6,7 +6,10 @@
       "cuda-libs/cublas64_*.dll": "./",
       "cuda-libs/cublasLt64_*.dll": "./",
       "cuda-libs/nvrtc64_*.dll": "./",
-      "cuda-libs/curand64_*.dll": "./"
+      "cuda-libs/curand64_*.dll": "./",
+      "cuda-libs/onnxruntime_providers_shared.dll": "./",
+      "cuda-libs/onnxruntime_providers_cuda.dll": "./",
+      "cuda-libs/cudnn*.dll": "./"
     }
   }
 }

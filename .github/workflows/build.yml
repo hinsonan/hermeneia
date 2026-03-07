@@ -177,8 +177,12 @@ jobs:
               cp /build/lib/libcublasLt.so.12 src-tauri/cuda-libs/ &&
               cp /build/lib/libnvrtc.so.12 src-tauri/cuda-libs/ &&
               cp /build/lib/libcurand.so.10 src-tauri/cuda-libs/ &&
+              cp -L /build/lib/libcudnn*.so.9* src-tauri/cuda-libs/ &&
+              cp -L ${SHERPA_LIB_PATH}/lib/libonnxruntime_providers_shared.so src-tauri/cuda-libs/ &&
+              cp -L ${SHERPA_LIB_PATH}/lib/libonnxruntime_providers_cuda.so src-tauri/cuda-libs/ &&
               npm ci &&
-              npx tauri build --features cuda --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage &&
+              export LD_LIBRARY_PATH=$(pwd)/src-tauri/cuda-libs:$(pwd)/src-tauri/target/release:$LD_LIBRARY_PATH &&
+              npx tauri build --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage -- --no-default-features --features cuda &&
               sh /project/hermeneia/scripts/fix-appimage-cuda.sh /project/hermeneia/src-tauri/target/release/bundle/appimage
             '
 
@@ -298,16 +302,67 @@ jobs:
           method: 'network'
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "nvrtc", "nvrtc_dev", "curand", "curand_dev", "visual_studio_integration"]'
 
-      - name: Copy CUDA DLLs for bundling
+      - name: Download pre-built sherpa-onnx with CUDA 12.x + cuDNN 9.x
+        shell: pwsh
+        env:
+          SHERPA_ONNX_VERSION: '1.12.28'
+          SHERPA_ONNX_SHA256: 'db77faa78e6e326239354563c21eb84a57f22f0f72ebb3be5d61086232afcb8b'
+        run: |
+          $archiveName = "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2"
+          $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$env:SHERPA_ONNX_VERSION/$archiveName"
+          Write-Host "Downloading $url ..."
+          Invoke-WebRequest -Uri $url -OutFile $archiveName
+          $actualSha256 = (Get-FileHash -Path $archiveName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedSha256 = $env:SHERPA_ONNX_SHA256.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "SHA256 mismatch for $archiveName. Expected $expectedSha256 but got $actualSha256"
+          }
+          Write-Host "SHA256 verified: $actualSha256"
+          Write-Host "Extracting..."
+          tar -xjf $archiveName
+          Remove-Item $archiveName
+          $extractedDir = "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-cuda-12.x-cudnn-9.x-win-x64-cuda"
+          Write-Host "Sherpa libs at: $extractedDir"
+          Get-ChildItem "$extractedDir/lib/" | Select-Object Name, Length
+          # Set SHERPA_LIB_PATH so sherpa-rs-sys uses pre-built libs (skips cmake)
+          echo "SHERPA_LIB_PATH=${{ github.workspace }}/hermeneia/$extractedDir" >> $env:GITHUB_ENV
+
+      - name: Copy CUDA + ORT + cuDNN DLLs for bundling
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path src-tauri/cuda-libs
+          if (-not $env:SHERPA_LIB_PATH) {
+            throw "SHERPA_LIB_PATH is not set"
+          }
+          $sherpaLibDir = Join-Path $env:SHERPA_LIB_PATH "lib"
+          if (-not (Test-Path $sherpaLibDir)) {
+            throw "Sherpa lib directory does not exist: $sherpaLibDir"
+          }
+          # CUDA runtime DLLs from toolkit
           Copy-Item "$env:CUDA_PATH\bin\cudart64_*.dll" "src-tauri\cuda-libs\"
           Copy-Item "$env:CUDA_PATH\bin\cublas64_*.dll" "src-tauri\cuda-libs\"
           Copy-Item "$env:CUDA_PATH\bin\cublasLt64_*.dll" "src-tauri\cuda-libs\"
           Copy-Item "$env:CUDA_PATH\bin\nvrtc64_*.dll" "src-tauri\cuda-libs\"
           Copy-Item "$env:CUDA_PATH\bin\curand64_*.dll" "src-tauri\cuda-libs\"
-          Write-Host "CUDA DLLs copied:"
+          # ORT provider DLLs (dlopen'd at runtime, not link-time deps)
+          $requiredOrtDlls = @(
+            "onnxruntime_providers_shared.dll",
+            "onnxruntime_providers_cuda.dll"
+          )
+          foreach ($dll in $requiredOrtDlls) {
+            $source = Join-Path $sherpaLibDir $dll
+            if (-not (Test-Path $source)) {
+              throw "Missing required ORT provider DLL: $source"
+            }
+            Copy-Item $source "src-tauri\cuda-libs\"
+          }
+          # cuDNN DLLs (dlopen'd by ORT CUDA provider)
+          $cudnnDlls = @(Get-ChildItem (Join-Path $sherpaLibDir "cudnn*.dll") -File)
+          if ($cudnnDlls.Count -eq 0) {
+            throw "No cuDNN DLLs found in $sherpaLibDir"
+          }
+          $cudnnDlls | Copy-Item -Destination "src-tauri\cuda-libs\"
+          Write-Host "Bundled DLLs:"
           Get-ChildItem src-tauri/cuda-libs/
 
       - uses: ilammy/msvc-dev-cmd@v1
@@ -317,7 +372,7 @@ jobs:
       - name: Build Tauri (CUDA)
         env:
           CUDA_COMPUTE_CAP: '75'
-        run: npx tauri build --features cuda --config src-tauri/tauri.cuda.windows.conf.json --bundles nsis
+        run: npx tauri build --config src-tauri/tauri.cuda.windows.conf.json --bundles nsis -- --no-default-features --features cuda
 
       - name: Rename CUDA artifact
         shell: pwsh
