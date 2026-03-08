@@ -816,7 +816,7 @@ jobs:
             Write-Host "Expected NSIS script was not found at: $nsiPath"
             $packagingDir = Join-Path $env:GITHUB_WORKSPACE "packaging\windows"
             if (Test-Path $packagingDir) {
-              Write-Host "Contents of $packagingDir:"
+              Write-Host "Contents of ${packagingDir}:"
               Get-ChildItem $packagingDir -Recurse | Select-Object FullName
             }
             throw "Cannot continue without bootstrap-installer.nsi"
