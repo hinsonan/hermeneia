@@ -761,7 +761,7 @@ jobs:
       - name: Prepare bootstrap installer dependencies
         shell: pwsh
         run: |
-          $packagingRoot = Join-Path $env:GITHUB_WORKSPACE "packaging\windows"
+          $packagingRoot = Join-Path $env:GITHUB_WORKSPACE "hermeneia\packaging\windows"
           $thirdPartyDir = Join-Path $packagingRoot "third_party\7z"
           New-Item -ItemType Directory -Force -Path $thirdPartyDir | Out-Null
 
@@ -811,10 +811,10 @@ jobs:
           $repoName = $repoParts[1]
           $assetPrefix = "hermeneia_${version}_windows_x64_cuda_portable"
           $outputDir = (Resolve-Path "src-tauri\target\release\bundle\portable").Path
-          $nsiPath = Join-Path $env:GITHUB_WORKSPACE "packaging\windows\bootstrap-installer.nsi"
+          $nsiPath = Join-Path $env:GITHUB_WORKSPACE "hermeneia\packaging\windows\bootstrap-installer.nsi"
           if (-not (Test-Path $nsiPath)) {
             Write-Host "Expected NSIS script was not found at: $nsiPath"
-            $packagingDir = Join-Path $env:GITHUB_WORKSPACE "packaging\windows"
+            $packagingDir = Join-Path $env:GITHUB_WORKSPACE "hermeneia\packaging\windows"
             if (Test-Path $packagingDir) {
               Write-Host "Contents of ${packagingDir}:"
               Get-ChildItem $packagingDir -Recurse | Select-Object FullName
