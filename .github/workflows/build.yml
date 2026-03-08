@@ -356,8 +356,10 @@ jobs:
 
           $extractedDir = Join-Path $runtimeRoot "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-win-x64-shared"
           $requiredLibs = @(
-            (Join-Path $extractedDir "lib\onnxruntime.lib"),
-            (Join-Path $extractedDir "lib\sherpa-onnx-c-api.lib")
+            (Join-Path $extractedDir "lib\sherpa-onnx-c-api.lib"),
+            (Join-Path $extractedDir "lib\cargs.lib"),
+            (Join-Path $extractedDir "lib\onnxruntime.dll"),
+            (Join-Path $extractedDir "lib\sherpa-onnx-c-api.dll")
           )
           foreach ($required in $requiredLibs) {
             if (-not (Test-Path $required)) {
@@ -365,7 +367,8 @@ jobs:
             }
           }
 
-          echo "SHERPA_LIB_PATH=${{ github.workspace }}/hermeneia/$extractedDir" >> $env:GITHUB_ENV
+          $resolvedSherpaPath = (Resolve-Path $extractedDir).Path
+          echo "SHERPA_LIB_PATH=$resolvedSherpaPath" >> $env:GITHUB_ENV
 
       - run: npm ci
 
