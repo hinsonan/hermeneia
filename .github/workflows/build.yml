@@ -761,7 +761,8 @@ jobs:
       - name: Prepare bootstrap installer dependencies
         shell: pwsh
         run: |
-          $thirdPartyDir = "..\packaging\windows\third_party\7z"
+          $packagingRoot = Join-Path $env:GITHUB_WORKSPACE "packaging\windows"
+          $thirdPartyDir = Join-Path $packagingRoot "third_party\7z"
           New-Item -ItemType Directory -Force -Path $thirdPartyDir | Out-Null
 
           if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
@@ -810,7 +811,16 @@ jobs:
           $repoName = $repoParts[1]
           $assetPrefix = "hermeneia_${version}_windows_x64_cuda_portable"
           $outputDir = (Resolve-Path "src-tauri\target\release\bundle\portable").Path
-          $nsiPath = "..\packaging\windows\bootstrap-installer.nsi"
+          $nsiPath = Join-Path $env:GITHUB_WORKSPACE "packaging\windows\bootstrap-installer.nsi"
+          if (-not (Test-Path $nsiPath)) {
+            Write-Host "Expected NSIS script was not found at: $nsiPath"
+            $packagingDir = Join-Path $env:GITHUB_WORKSPACE "packaging\windows"
+            if (Test-Path $packagingDir) {
+              Write-Host "Contents of $packagingDir:"
+              Get-ChildItem $packagingDir -Recurse | Select-Object FullName
+            }
+            throw "Cannot continue without bootstrap-installer.nsi"
+          }
           $makensisCandidates = @(
             "$env:ProgramFiles\NSIS\makensis.exe",
             "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
