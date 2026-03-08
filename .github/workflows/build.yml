@@ -402,10 +402,11 @@ jobs:
 
           echo "CUDNN_DLL_DIR=$cudnnDllDir" >> $env:GITHUB_ENV
 
-      - name: Copy CUDA + ORT + cuDNN DLLs for bundling
+      - name: Collect CUDA runtime DLLs for portable package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path src-tauri/cuda-libs
+          $bundleDllDir = "src-tauri\cuda-libs"
+          New-Item -ItemType Directory -Force -Path $bundleDllDir | Out-Null
           if (-not $env:SHERPA_LIB_PATH) {
             throw "SHERPA_LIB_PATH is not set"
           }
@@ -421,6 +422,7 @@ jobs:
           if (-not (Test-Path $cudnnDllDir)) {
             throw "cuDNN DLL directory does not exist: $cudnnDllDir"
           }
+
           if (Test-Path $sherpaBinDir) {
             Write-Host "Sherpa bin directory contents:"
             Get-ChildItem $sherpaBinDir | Select-Object Name, Length
@@ -431,48 +433,78 @@ jobs:
           }
           Write-Host "cuDNN DLL directory contents:"
           Get-ChildItem $cudnnDllDir | Select-Object Name, Length
-          function Find-SherpaRuntimeDll($pattern) {
-            $binMatches = @()
-            if (Test-Path $sherpaBinDir) {
-              $binMatches = @(Get-ChildItem (Join-Path $sherpaBinDir $pattern) -File -ErrorAction SilentlyContinue)
-            }
-            if ($binMatches.Count -gt 0) {
-              return $binMatches
-            }
-            if (Test-Path $sherpaLibDir) {
-              return @(Get-ChildItem (Join-Path $sherpaLibDir $pattern) -File -ErrorAction SilentlyContinue)
-            }
-            return @()
+
+          # Copy all sherpa runtime DLLs (both bin and lib)
+          if (Test-Path $sherpaBinDir) {
+            Copy-Item (Join-Path $sherpaBinDir "*.dll") $bundleDllDir -Force -ErrorAction SilentlyContinue
           }
+          if (Test-Path $sherpaLibDir) {
+            Copy-Item (Join-Path $sherpaLibDir "*.dll") $bundleDllDir -Force -ErrorAction SilentlyContinue
+          }
+
           # CUDA runtime DLLs from toolkit
-          Copy-Item "$env:CUDA_PATH\bin\cudart64_*.dll" "src-tauri\cuda-libs\"
-          Copy-Item "$env:CUDA_PATH\bin\cublas64_*.dll" "src-tauri\cuda-libs\"
-          Copy-Item "$env:CUDA_PATH\bin\cublasLt64_*.dll" "src-tauri\cuda-libs\"
-          Copy-Item "$env:CUDA_PATH\bin\nvrtc64_*.dll" "src-tauri\cuda-libs\"
-          Copy-Item "$env:CUDA_PATH\bin\curand64_*.dll" "src-tauri\cuda-libs\"
-          # ORT provider DLLs (dlopen'd at runtime, not link-time deps)
-          $requiredOrtDlls = @(
-            "onnxruntime_providers_shared.dll",
-            "onnxruntime_providers_cuda.dll"
+          $cudaPatterns = @(
+            "cudart64_*.dll",
+            "cublas64_*.dll",
+            "cublasLt64_*.dll",
+            "nvrtc64_*.dll",
+            "curand64_*.dll",
+            "cufft64_*.dll"
           )
-          foreach ($dll in $requiredOrtDlls) {
-            $matches = @(Find-SherpaRuntimeDll $dll)
+          foreach ($pattern in $cudaPatterns) {
+            $matches = @(Get-ChildItem (Join-Path "$env:CUDA_PATH\bin" $pattern) -File -ErrorAction SilentlyContinue)
             if ($matches.Count -eq 0) {
-              throw "Missing required ORT provider DLL: $dll (searched $sherpaBinDir and $sherpaLibDir)"
+              throw "Missing required CUDA toolkit DLL(s): $pattern under $env:CUDA_PATH\bin"
             }
-            Copy-Item $matches[0].FullName "src-tauri\cuda-libs\"
+            $matches | Copy-Item -Destination $bundleDllDir -Force
           }
+
           # cuDNN DLLs (dlopen'd by ORT CUDA provider)
           $cudnnDlls = @(Get-ChildItem (Join-Path $cudnnDllDir "cudnn*.dll") -File -ErrorAction SilentlyContinue)
           if ($cudnnDlls.Count -eq 0) {
-            $cudnnDlls = @(Find-SherpaRuntimeDll "cudnn*.dll")
+            $cudnnDlls = @()
+            if (Test-Path $sherpaBinDir) {
+              $cudnnDlls += @(Get-ChildItem (Join-Path $sherpaBinDir "cudnn*.dll") -File -ErrorAction SilentlyContinue)
+            }
+            if (Test-Path $sherpaLibDir) {
+              $cudnnDlls += @(Get-ChildItem (Join-Path $sherpaLibDir "cudnn*.dll") -File -ErrorAction SilentlyContinue)
+            }
           }
           if ($cudnnDlls.Count -eq 0) {
             throw "No cuDNN DLLs found in $cudnnDllDir, $sherpaBinDir, or $sherpaLibDir"
           }
-          $cudnnDlls | Copy-Item -Destination "src-tauri\cuda-libs\"
-          Write-Host "Bundled DLLs:"
-          Get-ChildItem src-tauri/cuda-libs/
+          $cudnnDlls | Copy-Item -Destination $bundleDllDir -Force
+
+          # Required runtime DLL gate
+          $requiredExactDlls = @(
+            "sherpa-onnx-c-api.dll",
+            "onnxruntime.dll",
+            "onnxruntime_providers_shared.dll",
+            "onnxruntime_providers_cuda.dll"
+          )
+          foreach ($dll in $requiredExactDlls) {
+            if (-not (Test-Path (Join-Path $bundleDllDir $dll))) {
+              throw "Missing required runtime DLL in $bundleDllDir: $dll"
+            }
+          }
+
+          $requiredPatternDlls = @(
+            "cudart64_*.dll",
+            "cublas64_*.dll",
+            "cublasLt64_*.dll",
+            "curand64_*.dll",
+            "cufft64_*.dll",
+            "cudnn*.dll"
+          )
+          foreach ($pattern in $requiredPatternDlls) {
+            $matches = @(Get-ChildItem (Join-Path $bundleDllDir $pattern) -File -ErrorAction SilentlyContinue)
+            if ($matches.Count -eq 0) {
+              throw "Missing required runtime DLL pattern in $bundleDllDir: $pattern"
+            }
+          }
+
+          Write-Host "Bundled DLLs in $bundleDllDir:"
+          Get-ChildItem $bundleDllDir | Sort-Object Name | Select-Object Name, Length
 
       - uses: ilammy/msvc-dev-cmd@v1
 
@@ -483,22 +515,97 @@ jobs:
           CUDA_COMPUTE_CAP: '75'
         run: npx tauri build --no-bundle --config src-tauri/tauri.cuda.windows.conf.json -- --no-default-features --features cuda
 
+      - name: Validate runtime imports with dumpbin
+        shell: pwsh
+        run: |
+          if (-not (Get-Command dumpbin -ErrorAction SilentlyContinue)) {
+            throw "dumpbin was not found in PATH"
+          }
+
+          $exePath = "src-tauri\target\release\hermeneia.exe"
+          $providerPath = "src-tauri\cuda-libs\onnxruntime_providers_cuda.dll"
+          $bundleDllDir = "src-tauri\cuda-libs"
+
+          if (-not (Test-Path $exePath)) {
+            throw "Missing executable: $exePath"
+          }
+          if (-not (Test-Path $providerPath)) {
+            throw "Missing provider DLL: $providerPath"
+          }
+
+          $exeDependents = & dumpbin /dependents $exePath
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin failed for $exePath"
+          }
+
+          $providerDependents = & dumpbin /dependents $providerPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin failed for $providerPath"
+          }
+
+          if (-not ($exeDependents -match '(?i)sherpa-onnx-c-api\.dll')) {
+            throw "Expected sherpa-onnx-c-api.dll import not found in hermeneia.exe"
+          }
+
+          $requiredProviderImports = @(
+            '(?i)onnxruntime_providers_shared\.dll',
+            '(?i)cudart64_.*\.dll',
+            '(?i)cublas64_.*\.dll',
+            '(?i)cublaslt64_.*\.dll',
+            '(?i)cufft64_.*\.dll',
+            '(?i)cudnn64_.*\.dll'
+          )
+          foreach ($importPattern in $requiredProviderImports) {
+            if (-not ($providerDependents -match $importPattern)) {
+              throw "Expected import missing from onnxruntime_providers_cuda.dll: $importPattern"
+            }
+          }
+
+          $requiredStagedPatterns = @(
+            "sherpa-onnx-c-api.dll",
+            "onnxruntime.dll",
+            "onnxruntime_providers_shared.dll",
+            "onnxruntime_providers_cuda.dll",
+            "cudart64_*.dll",
+            "cublas64_*.dll",
+            "cublasLt64_*.dll",
+            "curand64_*.dll",
+            "cufft64_*.dll",
+            "cudnn*.dll"
+          )
+          foreach ($pattern in $requiredStagedPatterns) {
+            $matches = @(Get-ChildItem (Join-Path $bundleDllDir $pattern) -File -ErrorAction SilentlyContinue)
+            if ($matches.Count -eq 0) {
+              throw "Missing staged runtime dependency in $bundleDllDir: $pattern"
+            }
+          }
+
+          Write-Host "Dependency smoke check passed for $exePath and $providerPath"
+
       - name: Package CUDA portable archive
         shell: pwsh
         run: |
           $version = (Get-Content "src-tauri/tauri.conf.json" | ConvertFrom-Json).version
           $bundleDir = "src-tauri\target\release\bundle\portable"
           $stagingDir = Join-Path $bundleDir "hermeneia-cuda"
+          $assetPrefix = "hermeneia_${version}_windows_x64_cuda_portable"
+          $archiveBase = "$assetPrefix.7z"
+          $checksumPath = Join-Path $bundleDir "$assetPrefix.sha256"
+          $releaseReadmePath = Join-Path $bundleDir "00_WINDOWS_CUDA_README.txt"
 
           if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
             throw "7z is required to package the Windows CUDA portable build"
           }
 
+          New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
           Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem (Join-Path $bundleDir "$assetPrefix.7z*") -ErrorAction SilentlyContinue | Remove-Item -Force
+          Remove-Item $checksumPath -ErrorAction SilentlyContinue
+          Remove-Item $releaseReadmePath -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
           Copy-Item "src-tauri\target\release\hermeneia.exe" $stagingDir
-          Copy-Item "src-tauri\cuda-libs\*.dll" $stagingDir
+          Copy-Item "src-tauri\cuda-libs\*.dll" $stagingDir -Force
 
           @"
           Hermeneia CUDA portable build
@@ -509,11 +616,8 @@ jobs:
 
           Notes:
           - Requires Microsoft Edge WebView2 Runtime on the target machine.
-          - Extract all archive parts into the same folder before opening with 7-Zip if the release is split.
+          - If split into parts, keep all .7z.00N files in the same folder and extract from .7z.001.
           "@ | Set-Content -Path (Join-Path $stagingDir "README.txt")
-
-          $archiveBase = "hermeneia_${version}_x64-cuda-portable.7z"
-          Get-ChildItem (Join-Path $bundleDir "hermeneia_*_x64-cuda-portable.7z*") -ErrorAction SilentlyContinue | Remove-Item -Force
 
           $rawSize = (Get-ChildItem $stagingDir -Recurse -File | Measure-Object Length -Sum).Sum
 
@@ -529,8 +633,47 @@ jobs:
           }
           Pop-Location
 
+          $archiveOutputs = @(Get-ChildItem (Join-Path $bundleDir "$archiveBase*") -File | Sort-Object Name)
+          if ($archiveOutputs.Count -eq 0) {
+            throw "No archive outputs found for $archiveBase"
+          }
+
+          $archiveForTest = $archiveOutputs | Where-Object { $_.Name -eq $archiveBase } | Select-Object -First 1
+          if (-not $archiveForTest) {
+            $archiveForTest = $archiveOutputs | Where-Object { $_.Name -eq "$archiveBase.001" } | Select-Object -First 1
+          }
+          if (-not $archiveForTest) {
+            throw "Unable to determine archive file for integrity test"
+          }
+
+          & 7z t $archiveForTest.FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "7z integrity test failed for $($archiveForTest.Name)"
+          }
+
+          $checksumLines = @()
+          foreach ($file in $archiveOutputs) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $checksumLines += "$hash *$($file.Name)"
+          }
+          Set-Content -Path $checksumPath -Value $checksumLines
+
+          @"
+          Windows CUDA portable download instructions
+
+          1) Download all files named ${archiveBase}.001, .002, .003, ... (if present).
+          2) Keep all parts in the same folder.
+          3) Open ${archiveBase}.001 with 7-Zip and extract.
+          4) Run hermeneia.exe from the extracted folder.
+          5) Optional: verify integrity using ${assetPrefix}.sha256.
+          "@ | Set-Content -Path $releaseReadmePath
+
           Write-Host "Packaged CUDA archive parts:"
-          Get-ChildItem (Join-Path $bundleDir "hermeneia_*_x64-cuda-portable.7z*") | Select-Object Name, Length
+          Get-ChildItem (Join-Path $bundleDir "$assetPrefix.7z*") | Select-Object Name, Length
+          Write-Host "Checksum file:"
+          Get-Item $checksumPath | Select-Object Name, Length
+          Write-Host "Release instructions file:"
+          Get-Item $releaseReadmePath | Select-Object Name, Length
 
       - name: Attach CUDA artifacts to Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
@@ -538,14 +681,20 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
-          files: hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_x64-cuda-portable.7z*
+          files: |
+            hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.7z*
+            hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.sha256
+            hermeneia/src-tauri/target/release/bundle/portable/00_WINDOWS_CUDA_README.txt
 
       - name: Upload CUDA artifacts
         if: "!startsWith(github.ref, 'refs/tags/v') && inputs.create_release != true"
         uses: actions/upload-artifact@v4
         with:
           name: windows-cuda
-          path: hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_x64-cuda-portable.7z*
+          path: |
+            hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.7z*
+            hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.sha256
+            hermeneia/src-tauri/target/release/bundle/portable/00_WINDOWS_CUDA_README.txt
           compression-level: 1
 
   # ===========================================================================
