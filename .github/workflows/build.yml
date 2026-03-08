@@ -87,6 +87,30 @@ jobs:
           cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
           rm -rf ~/.cache/sherpa-rs
 
+      - name: Download pre-built sherpa-onnx runtime (Linux CPU)
+        env:
+          SHERPA_ONNX_VERSION: '1.12.9'
+          SHERPA_ONNX_SHA256: 'cd22ee337e205674536643d2bc86e984fbbbf9c5c52743c4df6fc8d8dd17371b'
+        run: |
+          set -euo pipefail
+          archive_name="sherpa-onnx-v${SHERPA_ONNX_VERSION}-linux-x64-shared.tar.bz2"
+          url="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_ONNX_VERSION}/${archive_name}"
+          runtime_root=".sherpa-runtime/linux-x64"
+
+          curl -L --retry 5 --retry-delay 2 --retry-all-errors -o "$archive_name" "$url"
+          echo "${SHERPA_ONNX_SHA256}  ${archive_name}" | sha256sum -c -
+
+          rm -rf "$runtime_root"
+          mkdir -p "$runtime_root"
+          tar -xjf "$archive_name" -C "$runtime_root"
+          rm -f "$archive_name"
+
+          extracted_dir="$runtime_root/sherpa-onnx-v${SHERPA_ONNX_VERSION}-linux-x64-shared"
+          test -f "$extracted_dir/lib/libonnxruntime.so"
+          test -f "$extracted_dir/lib/libsherpa-onnx-c-api.so"
+
+          echo "SHERPA_LIB_PATH=${GITHUB_WORKSPACE}/hermeneia/${extracted_dir}" >> "$GITHUB_ENV"
+
       - run: npm ci
 
       - name: Build Tauri (CPU)
@@ -307,6 +331,41 @@ jobs:
         run: |
           cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
           Remove-Item "$env:LOCALAPPDATA\sherpa-rs" -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Download pre-built sherpa-onnx runtime (Windows CPU)
+        shell: pwsh
+        env:
+          SHERPA_ONNX_VERSION: '1.12.9'
+          SHERPA_ONNX_SHA256: '57a0dff63c468ed067c6ffd1a9c9b6f66f4cf73304d44b5f17518010ce2e0977'
+        run: |
+          $archiveName = "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-win-x64-shared.tar.bz2"
+          $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$env:SHERPA_ONNX_VERSION/$archiveName"
+          $runtimeRoot = ".sherpa-runtime\win-x64"
+
+          Invoke-WebRequest -Uri $url -OutFile $archiveName
+          $actualSha256 = (Get-FileHash -Path $archiveName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedSha256 = $env:SHERPA_ONNX_SHA256.ToLowerInvariant()
+          if ($actualSha256 -ne $expectedSha256) {
+            throw "SHA256 mismatch for $archiveName. Expected $expectedSha256 but got $actualSha256"
+          }
+
+          Remove-Item $runtimeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+          tar -xjf $archiveName -C $runtimeRoot
+          Remove-Item $archiveName -Force
+
+          $extractedDir = Join-Path $runtimeRoot "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-win-x64-shared"
+          $requiredLibs = @(
+            (Join-Path $extractedDir "lib\onnxruntime.lib"),
+            (Join-Path $extractedDir "lib\sherpa-onnx-c-api.lib")
+          )
+          foreach ($required in $requiredLibs) {
+            if (-not (Test-Path $required)) {
+              throw "Missing required sherpa import library: $required"
+            }
+          }
+
+          echo "SHERPA_LIB_PATH=${{ github.workspace }}/hermeneia/$extractedDir" >> $env:GITHUB_ENV
 
       - run: npm ci
 
@@ -779,6 +838,30 @@ jobs:
           cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
           rm -rf ~/Library/Caches/sherpa-rs
 
+      - name: Download pre-built sherpa-onnx runtime (macOS Intel)
+        env:
+          SHERPA_ONNX_VERSION: '1.12.9'
+          SHERPA_ONNX_SHA256: 'e3f3596b84c65eef8939a8a45ced3d7c4ed857455ba5ae1148ce7a1c93ff9a3c'
+        run: |
+          set -euo pipefail
+          archive_name="sherpa-onnx-v${SHERPA_ONNX_VERSION}-osx-universal2-shared.tar.bz2"
+          url="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_ONNX_VERSION}/${archive_name}"
+          runtime_root=".sherpa-runtime/osx-universal2"
+
+          curl -L --retry 5 --retry-delay 2 --retry-all-errors -o "$archive_name" "$url"
+          echo "${SHERPA_ONNX_SHA256}  ${archive_name}" | shasum -a 256 -c -
+
+          rm -rf "$runtime_root"
+          mkdir -p "$runtime_root"
+          tar -xjf "$archive_name" -C "$runtime_root"
+          rm -f "$archive_name"
+
+          extracted_dir="$runtime_root/sherpa-onnx-v${SHERPA_ONNX_VERSION}-osx-universal2-shared"
+          test -f "$extracted_dir/lib/libonnxruntime.1.17.1.dylib"
+          test -f "$extracted_dir/lib/libsherpa-onnx-c-api.dylib"
+
+          echo "SHERPA_LIB_PATH=${GITHUB_WORKSPACE}/hermeneia/${extracted_dir}" >> "$GITHUB_ENV"
+
       - run: npm ci
 
       - name: Build Tauri (Intel)
@@ -819,6 +902,30 @@ jobs:
         run: |
           cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
           rm -rf ~/Library/Caches/sherpa-rs
+
+      - name: Download pre-built sherpa-onnx runtime (macOS ARM)
+        env:
+          SHERPA_ONNX_VERSION: '1.12.9'
+          SHERPA_ONNX_SHA256: 'e3f3596b84c65eef8939a8a45ced3d7c4ed857455ba5ae1148ce7a1c93ff9a3c'
+        run: |
+          set -euo pipefail
+          archive_name="sherpa-onnx-v${SHERPA_ONNX_VERSION}-osx-universal2-shared.tar.bz2"
+          url="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_ONNX_VERSION}/${archive_name}"
+          runtime_root=".sherpa-runtime/osx-universal2"
+
+          curl -L --retry 5 --retry-delay 2 --retry-all-errors -o "$archive_name" "$url"
+          echo "${SHERPA_ONNX_SHA256}  ${archive_name}" | shasum -a 256 -c -
+
+          rm -rf "$runtime_root"
+          mkdir -p "$runtime_root"
+          tar -xjf "$archive_name" -C "$runtime_root"
+          rm -f "$archive_name"
+
+          extracted_dir="$runtime_root/sherpa-onnx-v${SHERPA_ONNX_VERSION}-osx-universal2-shared"
+          test -f "$extracted_dir/lib/libonnxruntime.1.17.1.dylib"
+          test -f "$extracted_dir/lib/libsherpa-onnx-c-api.dylib"
+
+          echo "SHERPA_LIB_PATH=${GITHUB_WORKSPACE}/hermeneia/${extracted_dir}" >> "$GITHUB_ENV"
 
       - run: npm ci
 
