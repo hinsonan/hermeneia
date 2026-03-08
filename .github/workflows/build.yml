@@ -82,6 +82,11 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libasound2-dev patchelf
 
+      - name: Reset sherpa-rs build metadata
+        run: |
+          cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
+          rm -rf ~/.cache/sherpa-rs
+
       - run: npm ci
 
       - name: Build Tauri (CPU)
@@ -297,6 +302,12 @@ jobs:
         if: inputs.use_sccache != false
         uses: mozilla-actions/sccache-action@v0.0.7
 
+      - name: Reset sherpa-rs build metadata
+        shell: pwsh
+        run: |
+          cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
+          Remove-Item "$env:LOCALAPPDATA\sherpa-rs" -Recurse -Force -ErrorAction SilentlyContinue
+
       - run: npm ci
 
       - name: Build Tauri (CPU)
@@ -333,6 +344,12 @@ jobs:
       - name: Set up sccache
         if: inputs.use_sccache != false
         uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Reset sherpa-rs build metadata
+        shell: pwsh
+        run: |
+          cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
+          Remove-Item "$env:LOCALAPPDATA\sherpa-rs" -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
@@ -675,6 +692,41 @@ jobs:
           Write-Host "Release instructions file:"
           Get-Item $releaseReadmePath | Select-Object Name, Length
 
+      - name: Remove stale Windows CUDA release assets
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ inputs.release_tag || github.ref_name }}"
+          $assetNames = gh release view $tag --json assets --jq '.assets[].name' 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Release $tag not found yet; skipping stale asset cleanup."
+            exit 0
+          }
+
+          $patterns = @(
+            '^hermeneia_.*_windows_x64_cuda_portable\.7z(\.\d+)?$',
+            '^hermeneia_.*_windows_x64_cuda_portable\.sha256$',
+            '^00_WINDOWS_CUDA_README\.txt$',
+            '^hermeneia_.*_x64-cuda-portable\.7z(\.\d+)?$'
+          )
+
+          foreach ($name in $assetNames) {
+            $shouldDelete = $false
+            foreach ($pattern in $patterns) {
+              if ($name -match $pattern) {
+                $shouldDelete = $true
+                break
+              }
+            }
+
+            if ($shouldDelete) {
+              Write-Host "Removing stale asset from release: $name"
+              gh release delete-asset $tag $name --yes
+            }
+          }
+
       - name: Attach CUDA artifacts to Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
         uses: softprops/action-gh-release@v2
@@ -722,6 +774,11 @@ jobs:
         if: inputs.use_sccache != false
         uses: mozilla-actions/sccache-action@v0.0.7
 
+      - name: Reset sherpa-rs build metadata
+        run: |
+          cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
+          rm -rf ~/Library/Caches/sherpa-rs
+
       - run: npm ci
 
       - name: Build Tauri (Intel)
@@ -757,6 +814,11 @@ jobs:
       - name: Set up sccache
         if: inputs.use_sccache != false
         uses: mozilla-actions/sccache-action@v0.0.7
+
+      - name: Reset sherpa-rs build metadata
+        run: |
+          cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
+          rm -rf ~/Library/Caches/sherpa-rs
 
       - run: npm ci
 
