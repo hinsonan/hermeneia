@@ -6,7 +6,7 @@ Pick the right file for your system:
 |----------|----------|
 | **Linux** + NVIDIA GPU | `hermeneia_*-cuda.deb`, `*-cuda.AppImage`, and `*-cuda.rpm` or `*-cuda.rpm.xz` |
 | **Linux**, no NVIDIA | `hermeneia_*-cpu.deb`, `*-cpu.rpm`, or `*-cpu.AppImage` |
-| **Windows** + NVIDIA GPU | `hermeneia_*_x64-cuda-portable.7z` or split `...7z.001`, `...7z.002`, ... |
+| **Windows** + NVIDIA GPU | `hermeneia_*_windows_x64_cuda_installer.exe` (recommended), fallback: `hermeneia_*_windows_x64_cuda_portable.7z` or split `...7z.001`, `...7z.002`, ... |
 | **Windows**, no NVIDIA | `hermeneia_*-cpu.exe` |
 | **Mac** (Apple Silicon M1-M4) | `hermeneia_*_aarch64.dmg` |
 | **Mac** (Intel) | `hermeneia_*_x64.dmg` |
@@ -25,9 +25,13 @@ Or: right-click the app, then click **Open**.
 **Windows:** You may see a SmartScreen warning ("Windows protected your PC").
 Click **"More info"** then **"Run anyway"**.
 
-**Windows CUDA portable build:**
+**Windows CUDA (recommended):**
+- Download and run `hermeneia_*_windows_x64_cuda_installer.exe`.
+- The installer downloads and verifies CUDA package parts automatically, installs per-user, creates shortcuts, and launches the app.
+
+**Windows CUDA (manual fallback):**
 - If the release includes multiple files like `.7z.001`, `.7z.002`, download all parts into the same folder.
-- Open the first part with 7-Zip and extract it.
+- Open only the first part with 7-Zip and extract it.
 - Run `hermeneia.exe` from the extracted folder.
 - Microsoft Edge WebView2 Runtime must be installed on the target machine.
 

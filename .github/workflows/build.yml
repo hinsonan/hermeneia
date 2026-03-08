@@ -738,8 +738,12 @@ jobs:
           Set-Content -Path $checksumPath -Value $checksumLines
 
           @"
-          Windows CUDA portable download instructions
+          Windows CUDA download instructions
 
+          Recommended:
+          - Download and run hermeneia_${version}_windows_x64_cuda_installer.exe
+
+          Manual fallback (portable archive):
           1) Download all files named ${archiveBase}.001, .002, .003, ... (if present).
           2) Keep all parts in the same folder.
           3) Open ${archiveBase}.001 with 7-Zip and extract.
@@ -753,6 +757,97 @@ jobs:
           Get-Item $checksumPath | Select-Object Name, Length
           Write-Host "Release instructions file:"
           Get-Item $releaseReadmePath | Select-Object Name, Length
+
+      - name: Prepare bootstrap installer dependencies
+        shell: pwsh
+        run: |
+          $thirdPartyDir = "..\packaging\windows\third_party\7z"
+          New-Item -ItemType Directory -Force -Path $thirdPartyDir | Out-Null
+
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
+            choco install 7zip -y
+          }
+
+          $sevenZipExeCandidates = @(
+            "$env:ProgramFiles\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe",
+            (Get-Command 7z -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+          ) | Where-Object { $_ }
+
+          $sevenZipExe = $null
+          foreach ($candidate in $sevenZipExeCandidates) {
+            if (Test-Path $candidate) {
+              $sevenZipExe = $candidate
+              break
+            }
+          }
+
+          if (-not $sevenZipExe) {
+            throw "Unable to locate 7z.exe after installing 7zip"
+          }
+
+          $sevenZipDir = Split-Path $sevenZipExe -Parent
+
+          Copy-Item (Join-Path $sevenZipDir "7z.exe") (Join-Path $thirdPartyDir "7z.exe") -Force
+          Copy-Item (Join-Path $sevenZipDir "7z.dll") (Join-Path $thirdPartyDir "7z.dll") -Force
+
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y
+          }
+
+      - name: Build Windows CUDA bootstrap installer
+        shell: pwsh
+        run: |
+          $version = (Get-Content "src-tauri/tauri.conf.json" | ConvertFrom-Json).version
+          $tag = "${{ inputs.release_tag || github.ref_name }}"
+          $repo = "${{ github.repository }}"
+          $repoParts = $repo.Split("/")
+          if ($repoParts.Count -ne 2) {
+            throw "Unexpected github.repository format: $repo"
+          }
+
+          $repoOwner = $repoParts[0]
+          $repoName = $repoParts[1]
+          $assetPrefix = "hermeneia_${version}_windows_x64_cuda_portable"
+          $outputDir = (Resolve-Path "src-tauri\target\release\bundle\portable").Path
+          $nsiPath = "..\packaging\windows\bootstrap-installer.nsi"
+          $makensisCandidates = @(
+            "$env:ProgramFiles\NSIS\makensis.exe",
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            (Get-Command makensis -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue)
+          ) | Where-Object { $_ }
+
+          $makensisExe = $null
+          foreach ($candidate in $makensisCandidates) {
+            if (Test-Path $candidate) {
+              $makensisExe = $candidate
+              break
+            }
+          }
+          if (-not $makensisExe) {
+            throw "Unable to locate makensis.exe after installing NSIS"
+          }
+
+          $makensisArgs = @(
+            "/DOUTPUT_DIR=$outputDir",
+            "/DAPP_VERSION=$version",
+            "/DRELEASE_TAG=$tag",
+            "/DREPO_OWNER=$repoOwner",
+            "/DREPO_NAME=$repoName",
+            "/DASSET_PREFIX=$assetPrefix",
+            $nsiPath
+          )
+          & $makensisExe @makensisArgs
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "makensis failed with exit code $LASTEXITCODE"
+          }
+
+          $installerPath = Join-Path $outputDir "hermeneia_${version}_windows_x64_cuda_installer.exe"
+          if (-not (Test-Path $installerPath)) {
+            throw "Bootstrap installer was not created: $installerPath"
+          }
+          Get-Item $installerPath | Select-Object Name, Length
 
       - name: Remove stale Windows CUDA release assets
         if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
@@ -770,6 +865,7 @@ jobs:
           $patterns = @(
             '^hermeneia_.*_windows_x64_cuda_portable\.7z(\.\d+)?$',
             '^hermeneia_.*_windows_x64_cuda_portable\.sha256$',
+            '^hermeneia_.*_windows_x64_cuda_installer\.exe$',
             '^00_WINDOWS_CUDA_README\.txt$',
             '^hermeneia_.*_x64-cuda-portable\.7z(\.\d+)?$'
           )
@@ -798,6 +894,7 @@ jobs:
           files: |
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.7z*
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.sha256
+            hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_installer.exe
             hermeneia/src-tauri/target/release/bundle/portable/00_WINDOWS_CUDA_README.txt
 
       - name: Upload CUDA artifacts
@@ -808,6 +905,7 @@ jobs:
           path: |
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.7z*
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.sha256
+            hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_installer.exe
             hermeneia/src-tauri/target/release/bundle/portable/00_WINDOWS_CUDA_README.txt
           compression-level: 1
 
