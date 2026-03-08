@@ -484,7 +484,7 @@ jobs:
           )
           foreach ($dll in $requiredExactDlls) {
             if (-not (Test-Path (Join-Path $bundleDllDir $dll))) {
-              throw "Missing required runtime DLL in $bundleDllDir: $dll"
+              throw "Missing required runtime DLL in ${bundleDllDir}: $dll"
             }
           }
 
@@ -499,11 +499,11 @@ jobs:
           foreach ($pattern in $requiredPatternDlls) {
             $matches = @(Get-ChildItem (Join-Path $bundleDllDir $pattern) -File -ErrorAction SilentlyContinue)
             if ($matches.Count -eq 0) {
-              throw "Missing required runtime DLL pattern in $bundleDllDir: $pattern"
+              throw "Missing required runtime DLL pattern in ${bundleDllDir}: $pattern"
             }
           }
 
-          Write-Host "Bundled DLLs in $bundleDllDir:"
+          Write-Host "Bundled DLLs in ${bundleDllDir}:"
           Get-ChildItem $bundleDllDir | Sort-Object Name | Select-Object Name, Length
 
       - uses: ilammy/msvc-dev-cmd@v1
@@ -576,7 +576,7 @@ jobs:
           foreach ($pattern in $requiredStagedPatterns) {
             $matches = @(Get-ChildItem (Join-Path $bundleDllDir $pattern) -File -ErrorAction SilentlyContinue)
             if ($matches.Count -eq 0) {
-              throw "Missing staged runtime dependency in $bundleDllDir: $pattern"
+              throw "Missing staged runtime dependency in ${bundleDllDir}: $pattern"
             }
           }
 
