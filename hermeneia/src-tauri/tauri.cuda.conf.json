@@ -11,14 +11,14 @@
           "/usr/lib/hermeneia/libcurand.so.10": "cuda-libs/libcurand.so.10",
           "/usr/lib/hermeneia/libonnxruntime_providers_shared.so": "cuda-libs/libonnxruntime_providers_shared.so",
           "/usr/lib/hermeneia/libonnxruntime_providers_cuda.so": "cuda-libs/libonnxruntime_providers_cuda.so",
-          "/usr/lib/hermeneia/libcudnn.so.9": "cuda-libs/libcudnn.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_ops.so.9": "cuda-libs/libcudnn_ops.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_cnn.so.9": "cuda-libs/libcudnn_cnn.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_graph.so.9": "cuda-libs/libcudnn_graph.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_heuristic.so.9": "cuda-libs/libcudnn_heuristic.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_engines_runtime_compiled.so.9": "cuda-libs/libcudnn_engines_runtime_compiled.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_adv.so.9": "cuda-libs/libcudnn_adv.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_engines_precompiled.so.9": "cuda-libs/libcudnn_engines_precompiled.so.9.19.1"
+          "/usr/lib/hermeneia/libcudnn.so.9": "cuda-libs/libcudnn.so.9",
+          "/usr/lib/hermeneia/libcudnn_ops.so.9": "cuda-libs/libcudnn_ops.so.9",
+          "/usr/lib/hermeneia/libcudnn_cnn.so.9": "cuda-libs/libcudnn_cnn.so.9",
+          "/usr/lib/hermeneia/libcudnn_graph.so.9": "cuda-libs/libcudnn_graph.so.9",
+          "/usr/lib/hermeneia/libcudnn_heuristic.so.9": "cuda-libs/libcudnn_heuristic.so.9",
+          "/usr/lib/hermeneia/libcudnn_engines_runtime_compiled.so.9": "cuda-libs/libcudnn_engines_runtime_compiled.so.9",
+          "/usr/lib/hermeneia/libcudnn_adv.so.9": "cuda-libs/libcudnn_adv.so.9",
+          "/usr/lib/hermeneia/libcudnn_engines_precompiled.so.9": "cuda-libs/libcudnn_engines_precompiled.so.9"
         }
       },
       "appimage": {
@@ -30,14 +30,14 @@
           "usr/lib/libcurand.so.10": "cuda-libs/libcurand.so.10",
           "usr/lib/libonnxruntime_providers_shared.so": "cuda-libs/libonnxruntime_providers_shared.so",
           "usr/lib/libonnxruntime_providers_cuda.so": "cuda-libs/libonnxruntime_providers_cuda.so",
-          "usr/lib/libcudnn.so.9": "cuda-libs/libcudnn.so.9.19.1",
-          "usr/lib/libcudnn_ops.so.9": "cuda-libs/libcudnn_ops.so.9.19.1",
-          "usr/lib/libcudnn_cnn.so.9": "cuda-libs/libcudnn_cnn.so.9.19.1",
-          "usr/lib/libcudnn_graph.so.9": "cuda-libs/libcudnn_graph.so.9.19.1",
-          "usr/lib/libcudnn_heuristic.so.9": "cuda-libs/libcudnn_heuristic.so.9.19.1",
-          "usr/lib/libcudnn_engines_runtime_compiled.so.9": "cuda-libs/libcudnn_engines_runtime_compiled.so.9.19.1",
-          "usr/lib/libcudnn_adv.so.9": "cuda-libs/libcudnn_adv.so.9.19.1",
-          "usr/lib/libcudnn_engines_precompiled.so.9": "cuda-libs/libcudnn_engines_precompiled.so.9.19.1"
+          "usr/lib/libcudnn.so.9": "cuda-libs/libcudnn.so.9",
+          "usr/lib/libcudnn_ops.so.9": "cuda-libs/libcudnn_ops.so.9",
+          "usr/lib/libcudnn_cnn.so.9": "cuda-libs/libcudnn_cnn.so.9",
+          "usr/lib/libcudnn_graph.so.9": "cuda-libs/libcudnn_graph.so.9",
+          "usr/lib/libcudnn_heuristic.so.9": "cuda-libs/libcudnn_heuristic.so.9",
+          "usr/lib/libcudnn_engines_runtime_compiled.so.9": "cuda-libs/libcudnn_engines_runtime_compiled.so.9",
+          "usr/lib/libcudnn_adv.so.9": "cuda-libs/libcudnn_adv.so.9",
+          "usr/lib/libcudnn_engines_precompiled.so.9": "cuda-libs/libcudnn_engines_precompiled.so.9"
         }
       },
       "rpm": {
@@ -52,14 +52,14 @@
           "/usr/lib/hermeneia/libcurand.so.10": "cuda-libs/libcurand.so.10",
           "/usr/lib/hermeneia/libonnxruntime_providers_shared.so": "cuda-libs/libonnxruntime_providers_shared.so",
           "/usr/lib/hermeneia/libonnxruntime_providers_cuda.so": "cuda-libs/libonnxruntime_providers_cuda.so",
-          "/usr/lib/hermeneia/libcudnn.so.9": "cuda-libs/libcudnn.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_ops.so.9": "cuda-libs/libcudnn_ops.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_cnn.so.9": "cuda-libs/libcudnn_cnn.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_graph.so.9": "cuda-libs/libcudnn_graph.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_heuristic.so.9": "cuda-libs/libcudnn_heuristic.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_engines_runtime_compiled.so.9": "cuda-libs/libcudnn_engines_runtime_compiled.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_adv.so.9": "cuda-libs/libcudnn_adv.so.9.19.1",
-          "/usr/lib/hermeneia/libcudnn_engines_precompiled.so.9": "cuda-libs/libcudnn_engines_precompiled.so.9.19.1"
+          "/usr/lib/hermeneia/libcudnn.so.9": "cuda-libs/libcudnn.so.9",
+          "/usr/lib/hermeneia/libcudnn_ops.so.9": "cuda-libs/libcudnn_ops.so.9",
+          "/usr/lib/hermeneia/libcudnn_cnn.so.9": "cuda-libs/libcudnn_cnn.so.9",
+          "/usr/lib/hermeneia/libcudnn_graph.so.9": "cuda-libs/libcudnn_graph.so.9",
+          "/usr/lib/hermeneia/libcudnn_heuristic.so.9": "cuda-libs/libcudnn_heuristic.so.9",
+          "/usr/lib/hermeneia/libcudnn_engines_runtime_compiled.so.9": "cuda-libs/libcudnn_engines_runtime_compiled.so.9",
+          "/usr/lib/hermeneia/libcudnn_adv.so.9": "cuda-libs/libcudnn_adv.so.9",
+          "/usr/lib/hermeneia/libcudnn_engines_precompiled.so.9": "cuda-libs/libcudnn_engines_precompiled.so.9"
         }
       }
     }
