@@ -18,6 +18,21 @@ pub struct AudioData {
     pub channels: u16,
 }
 
+/// Shared speech-prepared audio representation used by both
+/// transcription and speaker diarization.
+///
+/// - mono
+/// - 16kHz
+/// - f32 PCM in [-1.0, 1.0]
+#[derive(Debug, Clone)]
+pub struct SpeechAudio {
+    /// Mono PCM at 16kHz, ready for speech models
+    pub samples_16k_mono: Vec<f32>,
+
+    /// Original decoded audio duration in seconds
+    pub duration_seconds: f64,
+}
+
 impl AudioData {
     /// Calculate the total duration of the audio in seconds
     ///

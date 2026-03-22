@@ -1,10 +1,13 @@
-use crate::audio::decode_audio_file;
+use crate::audio::{
+    decode_audio_file, decode_audio_file_with_progress, prepare_speech_audio,
+    DecodeProgressCallback, SpeechAudio,
+};
 use crate::error::{AudioError, Result};
 use crate::transcribe::{
     decoder::Decoder,
     language::detect_language,
     model::{get_device, ModelManager},
-    preprocessing::preprocess_audio,
+    preprocessing::preprocess_speech_audio,
     types::{ModelFiles, ProgressCallback, ProgressReporter, TranscribeParams, TranscriptResult},
 };
 use candle_core::Device;
@@ -23,6 +26,15 @@ fn device_name(device: &Device) -> &'static str {
     }
 }
 
+fn check_cancelled(cancel_flag: &Option<Arc<AtomicBool>>) -> Result<()> {
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled);
+        }
+    }
+    Ok(())
+}
+
 /// Main transcription function
 pub fn transcribe_audio(file_path: &str, params: TranscribeParams) -> Result<TranscriptResult> {
     transcribe_audio_with_progress(file_path, params, None)
@@ -34,11 +46,19 @@ pub fn transcribe_audio_with_progress(
     params: TranscribeParams,
     progress_callback: Option<ProgressCallback>,
 ) -> Result<TranscriptResult> {
-    let start_time = Instant::now();
-
-    // Load audio
     let audio_data = decode_audio_file(file_path)?;
-    let duration = audio_data.duration_seconds();
+    let speech_audio = prepare_speech_audio(&audio_data)?;
+    transcribe_prepared_audio_with_progress(&speech_audio, params, progress_callback)
+}
+
+/// Transcribe already-preprocessed mono 16kHz speech audio with progress callback.
+pub fn transcribe_prepared_audio_with_progress(
+    speech_audio: &SpeechAudio,
+    params: TranscribeParams,
+    progress_callback: Option<ProgressCallback>,
+) -> Result<TranscriptResult> {
+    let start_time = Instant::now();
+    let duration = speech_audio.duration_seconds;
 
     // Download/load model
     let model_manager = ModelManager::new()?;
@@ -54,7 +74,7 @@ pub fn transcribe_audio_with_progress(
             load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
 
         // Preprocess to mel-spectrogram (needs config for mel bins)
-        let mel = preprocess_audio(&audio_data, &config, &device)?;
+        let mel = preprocess_speech_audio(speech_audio, &config, &device)?;
 
         // Detect language if not specified and model is multilingual
         let language_token = match (params.model.is_multilingual(), &params.language) {
@@ -146,29 +166,47 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     reporter: &P,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranscriptResult> {
+    check_cancelled(&cancel_flag)?;
+
+    let reporter_ptr = reporter as *const P as usize;
+    let cancel_for_decode = cancel_flag.clone();
+    let decode_progress: DecodeProgressCallback = Box::new(move |current, total| unsafe {
+        let reporter_ref = &*(reporter_ptr as *const P);
+        reporter_ref.report(current, total);
+
+        !cancel_for_decode
+            .as_ref()
+            .map(|flag| flag.load(Ordering::SeqCst))
+            .unwrap_or(false)
+    });
+
+    let audio_data = decode_audio_file_with_progress(file_path, Some(decode_progress))?;
+    check_cancelled(&cancel_flag)?;
+
+    let speech_audio = prepare_speech_audio(&audio_data)?;
+    drop(audio_data);
+    check_cancelled(&cancel_flag)?;
+
+    transcribe_prepared_audio_with_reporter(&speech_audio, params, reporter, cancel_flag)
+}
+
+/// Transcribe already-preprocessed mono 16kHz speech audio with progress reporter.
+pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter>(
+    speech_audio: &SpeechAudio,
+    params: TranscribeParams,
+    reporter: &P,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> Result<TranscriptResult> {
     let start_time = Instant::now();
+    let duration = speech_audio.duration_seconds;
 
-    // Load audio
-    let audio_data = decode_audio_file(file_path)?;
-    let duration = audio_data.duration_seconds();
-
-    // Check for cancellation after audio decode
-    if let Some(ref flag) = cancel_flag {
-        if flag.load(Ordering::SeqCst) {
-            return Err(AudioError::Cancelled);
-        }
-    }
+    check_cancelled(&cancel_flag)?;
 
     // Download/load model
     let model_manager = ModelManager::new()?;
     let model_files = model_manager.ensure_model(params.model, params.use_quantized)?;
 
-    // Check for cancellation after model download
-    if let Some(ref flag) = cancel_flag {
-        if flag.load(Ordering::SeqCst) {
-            return Err(AudioError::Cancelled);
-        }
-    }
+    check_cancelled(&cancel_flag)?;
 
     let device = get_device(params.force_cpu)?;
     tracing::info!("Using device: {}", device_name(&device));
@@ -179,22 +217,12 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
         let (config, tokenizer, mut model) =
             load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
 
-        // Check for cancellation after model load
-        if let Some(ref flag) = cancel_flag {
-            if flag.load(Ordering::SeqCst) {
-                return Err(AudioError::Cancelled);
-            }
-        }
+        check_cancelled(&cancel_flag)?;
 
         // Preprocess to mel-spectrogram (needs config for mel bins)
-        let mel = preprocess_audio(&audio_data, &config, &device)?;
+        let mel = preprocess_speech_audio(speech_audio, &config, &device)?;
 
-        // Check for cancellation after preprocessing
-        if let Some(ref flag) = cancel_flag {
-            if flag.load(Ordering::SeqCst) {
-                return Err(AudioError::Cancelled);
-            }
-        }
+        check_cancelled(&cancel_flag)?;
 
         // Detect language if not specified and model is multilingual
         let language_token = match (params.model.is_multilingual(), &params.language) {

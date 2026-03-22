@@ -12,6 +12,57 @@ use symphonia::core::probe::Hint;
 use crate::audio::types::{AudioData, AudioInfo};
 use crate::error::{AudioError, Result};
 
+/// Progress callback for audio decoding.
+///
+/// Parameters: (decoded_frames, total_frames)
+/// - `total_frames` is 0 when unknown
+///
+/// Return `false` to cancel decoding.
+pub type DecodeProgressCallback = Box<dyn Fn(usize, usize) -> bool + Send + Sync>;
+
+fn emit_decode_progress(
+    progress: &Option<DecodeProgressCallback>,
+    decoded_frames: usize,
+    total_frames: Option<usize>,
+    force: bool,
+    last_reported_pct: &mut usize,
+    packet_counter: usize,
+) -> Result<()> {
+    let Some(cb) = progress.as_ref() else {
+        return Ok(());
+    };
+
+    let should_emit = match total_frames {
+        Some(total) if total > 0 => {
+            let pct = ((decoded_frames.min(total) * 100) / total).min(100);
+            if force || pct > *last_reported_pct {
+                *last_reported_pct = pct;
+                true
+            } else {
+                false
+            }
+        }
+        _ => force || packet_counter % 200 == 0,
+    };
+
+    if !should_emit {
+        return Ok(());
+    }
+
+    let total = total_frames.unwrap_or(0);
+    let current = if total > 0 {
+        decoded_frames.min(total)
+    } else {
+        decoded_frames
+    };
+
+    if cb(current, total) {
+        Ok(())
+    } else {
+        Err(AudioError::Cancelled)
+    }
+}
+
 /// Decodes an audio file to PCM samples in memory
 ///
 /// Supports: MP3, FLAC, WAV, OGG Vorbis, AAC, and more via symphonia
@@ -35,6 +86,17 @@ use crate::error::{AudioError, Result};
 /// # }
 /// ```
 pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
+    decode_audio_file_with_progress(path, None)
+}
+
+/// Decodes an audio file with optional progress callback.
+///
+/// The callback receives decoded frames and total frames when known.
+/// Return `false` from the callback to cancel decoding.
+pub fn decode_audio_file_with_progress<P: AsRef<Path>>(
+    path: P,
+    progress: Option<DecodeProgressCallback>,
+) -> Result<AudioData> {
     let path = path.as_ref();
     let path_str = path.to_string_lossy().to_string();
 
@@ -80,6 +142,8 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
         .sample_rate
         .ok_or_else(|| AudioError::DecodeFailed("Sample rate not found".to_string()))?;
 
+    let total_frames = track.codec_params.n_frames.map(|n| n as usize);
+
     // Try to get channels from metadata, but it may not be available for some MP3s
     let mut channels_opt = track.codec_params.channels.map(|c| c.count() as u16);
 
@@ -90,6 +154,18 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
 
     // Decode all packets into a sample buffer
     let mut samples = Vec::new();
+    let mut decoded_frames = 0usize;
+    let mut packet_counter = 0usize;
+    let mut last_reported_pct = 0usize;
+
+    emit_decode_progress(
+        &progress,
+        decoded_frames,
+        total_frames,
+        true,
+        &mut last_reported_pct,
+        packet_counter,
+    )?;
 
     // If channels not in metadata, decode first packet to get channel info
     if channels_opt.is_none() {
@@ -128,7 +204,25 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
             channels_opt = Some(ch);
 
             // Convert this first packet to samples
+            let before = samples.len();
             convert_audio_buffer_to_f32(&decoded, &mut samples);
+
+            let added_samples = samples.len().saturating_sub(before);
+            let added_frames = if ch > 0 {
+                added_samples / ch as usize
+            } else {
+                0
+            };
+            decoded_frames = decoded_frames.saturating_add(added_frames);
+            packet_counter = packet_counter.saturating_add(1);
+            emit_decode_progress(
+                &progress,
+                decoded_frames,
+                total_frames,
+                false,
+                &mut last_reported_pct,
+                packet_counter,
+            )?;
             break;
         }
     }
@@ -154,8 +248,36 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
             .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
 
         // Convert decoded audio to f32 samples
+        let before = samples.len();
         convert_audio_buffer_to_f32(&decoded, &mut samples);
+
+        let added_samples = samples.len().saturating_sub(before);
+        let added_frames = if channels > 0 {
+            added_samples / channels as usize
+        } else {
+            0
+        };
+        decoded_frames = decoded_frames.saturating_add(added_frames);
+        packet_counter = packet_counter.saturating_add(1);
+
+        emit_decode_progress(
+            &progress,
+            decoded_frames,
+            total_frames,
+            false,
+            &mut last_reported_pct,
+            packet_counter,
+        )?;
     }
+
+    emit_decode_progress(
+        &progress,
+        decoded_frames,
+        total_frames,
+        true,
+        &mut last_reported_pct,
+        packet_counter,
+    )?;
 
     Ok(AudioData {
         samples,
@@ -363,6 +485,8 @@ mod tests {
     use super::*;
     use hound::{SampleFormat, WavSpec, WavWriter};
     use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     /// Helper function to create a simple WAV file for testing
     fn create_test_wav_file(path: &str, duration_seconds: f64, sample_rate: u32, channels: u16) {
@@ -561,6 +685,30 @@ mod tests {
         assert!((info.duration_seconds - audio.duration_seconds()).abs() < 0.1);
 
         // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_decode_progress_callback_reports_frames() {
+        let temp_file = "/tmp/test_decode_progress.wav";
+        create_test_wav_file(temp_file, 1.0, 16000, 1);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let last_total = Arc::new(AtomicUsize::new(0));
+
+        let calls_cb = calls.clone();
+        let total_cb = last_total.clone();
+        let callback: DecodeProgressCallback = Box::new(move |_current, total| {
+            calls_cb.fetch_add(1, Ordering::Relaxed);
+            total_cb.store(total, Ordering::Relaxed);
+            true
+        });
+
+        let audio = decode_audio_file_with_progress(temp_file, Some(callback)).unwrap();
+        assert!(!audio.samples.is_empty());
+        assert!(calls.load(Ordering::Relaxed) > 0);
+        assert!(last_total.load(Ordering::Relaxed) > 0);
+
         let _ = std::fs::remove_file(temp_file);
     }
 }

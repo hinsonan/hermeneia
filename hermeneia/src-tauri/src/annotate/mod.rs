@@ -1,15 +1,16 @@
+use crate::audio::{decode_audio_file_with_progress, prepare_speech_audio, DecodeProgressCallback};
 use crate::error::{AudioError, Result};
 use crate::speaker::{
-    diarize_audio_with_progress, validate_diarize_params, DiarizationResult, DiarizeParams,
-    SpeakerDevice, SpeakerModel,
+    diarize_prepared_audio_with_progress, validate_diarize_params, DiarizationResult,
+    DiarizeParams, SpeakerDevice, SpeakerModel,
 };
 use crate::transcribe::{
-    transcribe_audio_with_reporter, ProgressReporter, TranscribeParams, TranscriptResult,
+    transcribe_prepared_audio_with_reporter, ProgressReporter, TranscribeParams, TranscriptResult,
     TranscriptionTask, WhisperModel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -48,8 +49,12 @@ pub struct AnnotatedResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnnotationPhase {
+    Starting,
+    DecodingAudio,
+    PreparingAudio,
+    LoadingSpeakerModel,
     Diarizing,
-    LoadingModel,
+    LoadingTranscriptionModel,
     Transcribing,
     Merging,
     Completed,
@@ -61,43 +66,91 @@ pub struct AnnotationProgress {
     pub current: Option<usize>,
     pub total: Option<usize>,
     pub message: String,
+    pub indeterminate: bool,
 }
 
 impl AnnotationProgress {
-    pub fn diarizing(current: usize, total: usize) -> Self {
-        let pct = if total > 0 {
-            current.saturating_mul(100) / total
+    pub fn starting() -> Self {
+        Self {
+            phase: AnnotationPhase::Starting,
+            current: None,
+            total: None,
+            message: "Starting annotation...".to_string(),
+            indeterminate: true,
+        }
+    }
+
+    pub fn decoding_audio() -> Self {
+        Self {
+            phase: AnnotationPhase::DecodingAudio,
+            current: None,
+            total: None,
+            message: "Decoding audio...".to_string(),
+            indeterminate: true,
+        }
+    }
+
+    pub fn decoding_audio_progress(current: usize, total: usize) -> Self {
+        if total > 0 {
+            Self {
+                phase: AnnotationPhase::DecodingAudio,
+                current: Some(current),
+                total: Some(total),
+                message: "Decoding audio...".to_string(),
+                indeterminate: false,
+            }
         } else {
-            0
-        };
+            Self::decoding_audio()
+        }
+    }
+
+    pub fn preparing_audio() -> Self {
+        Self {
+            phase: AnnotationPhase::PreparingAudio,
+            current: None,
+            total: None,
+            message: "Preparing mono 16kHz audio...".to_string(),
+            indeterminate: true,
+        }
+    }
+
+    pub fn loading_speaker_model() -> Self {
+        Self {
+            phase: AnnotationPhase::LoadingSpeakerModel,
+            current: None,
+            total: None,
+            message: "Loading speaker diarization model...".to_string(),
+            indeterminate: true,
+        }
+    }
+
+    pub fn diarizing(current: usize, total: usize) -> Self {
         Self {
             phase: AnnotationPhase::Diarizing,
             current: Some(current),
             total: Some(total),
-            message: format!("Diarizing... {}%", pct),
+            message: "Diarizing...".to_string(),
+            indeterminate: false,
         }
     }
 
-    pub fn loading_model() -> Self {
+    pub fn loading_transcription_model() -> Self {
         Self {
-            phase: AnnotationPhase::LoadingModel,
+            phase: AnnotationPhase::LoadingTranscriptionModel,
             current: None,
             total: None,
             message: "Loading transcription model...".to_string(),
+            indeterminate: true,
         }
     }
 
     pub fn transcribing(current: usize, total: usize) -> Self {
-        let pct = if total > 0 {
-            current.saturating_mul(100) / total
-        } else {
-            0
-        };
         Self {
             phase: AnnotationPhase::Transcribing,
             current: Some(current),
             total: Some(total),
-            message: format!("Transcribing... {}%", pct),
+            message: "Transcribing...".to_string(),
+            indeterminate: false,
         }
     }
 
@@ -107,6 +160,7 @@ impl AnnotationProgress {
             current: None,
             total: None,
             message: "Merging transcript with speaker segments...".to_string(),
+            indeterminate: true,
         }
     }
 
@@ -116,6 +170,7 @@ impl AnnotationProgress {
             current: Some(100),
             total: Some(100),
             message: "Annotation complete".to_string(),
+            indeterminate: false,
         }
     }
 }
@@ -216,13 +271,25 @@ struct TranscribeProgressAdapter {
 
 impl ProgressReporter for TranscribeProgressAdapter {
     fn start(&self) {
-        self.reporter.report(AnnotationProgress::loading_model());
+        self.reporter
+            .report(AnnotationProgress::loading_transcription_model());
     }
 
     fn report(&self, current: usize, total: usize) {
         self.reporter
             .report(AnnotationProgress::transcribing(current, total));
     }
+}
+
+fn check_cancelled(cancel_flag: &Option<Arc<AtomicBool>>) -> Result<()> {
+    if cancel_flag
+        .as_ref()
+        .map(|flag| flag.load(Ordering::SeqCst))
+        .unwrap_or(false)
+    {
+        return Err(AudioError::Cancelled);
+    }
+    Ok(())
 }
 
 pub fn annotate_audio_with_reporter(
@@ -239,6 +306,32 @@ pub fn annotate_audio_with_reporter(
             "Annotation requested without timestamps; speaker assignment quality will be degraded."
         );
     }
+
+    reporter.report(AnnotationProgress::starting());
+
+    check_cancelled(&cancel_flag)?;
+
+    reporter.report(AnnotationProgress::decoding_audio());
+    tracing::info!("Decoding audio once for annotation: {}", audio_path);
+    let reporter_for_decode = reporter.clone();
+    let cancel_for_decode = cancel_flag.clone();
+    let decode_progress: DecodeProgressCallback = Box::new(move |current, total| {
+        reporter_for_decode.report(AnnotationProgress::decoding_audio_progress(current, total));
+        !cancel_for_decode
+            .as_ref()
+            .map(|flag| flag.load(Ordering::SeqCst))
+            .unwrap_or(false)
+    });
+    let audio = decode_audio_file_with_progress(audio_path, Some(decode_progress))?;
+    check_cancelled(&cancel_flag)?;
+
+    reporter.report(AnnotationProgress::preparing_audio());
+    let speech_audio = prepare_speech_audio(&audio)?;
+    drop(audio);
+    check_cancelled(&cancel_flag)?;
+
+    reporter.report(AnnotationProgress::loading_speaker_model());
+
     let reporter_for_diarize = reporter.clone();
     let diarize_progress = Box::new(move |processed: i32, total: i32| {
         if processed >= 0 && total > 0 {
@@ -249,22 +342,30 @@ pub fn annotate_audio_with_reporter(
         }
     });
 
-    let diarization = diarize_audio_with_progress(
-        audio_path,
+    let diarization = diarize_prepared_audio_with_progress(
+        &speech_audio,
         params.diarize.clone(),
         Some(diarize_progress),
         cancel_flag.clone(),
     )?;
 
+    check_cancelled(&cancel_flag)?;
+
     let adapter = TranscribeProgressAdapter {
         reporter: reporter.clone(),
     };
-    let transcript = transcribe_audio_with_reporter(
-        audio_path,
+
+    // Ensure loading_model phase is emitted in annotate flow.
+    adapter.start();
+
+    let transcript = transcribe_prepared_audio_with_reporter(
+        &speech_audio,
         params.transcribe.clone(),
         &adapter,
-        cancel_flag,
+        cancel_flag.clone(),
     )?;
+
+    check_cancelled(&cancel_flag)?;
 
     reporter.report(AnnotationProgress::merging());
     let result = merge_annotation_result(&transcript, &diarization, &params.speaker_names, &params);

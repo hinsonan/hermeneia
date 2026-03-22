@@ -64,8 +64,12 @@ export interface ModelValidation {
 export type SpeakerModelKey = 'english' | 'multilingual';
 export type SpeakerDevice = 'cpu' | 'cuda' | 'coreml';
 export type AnnotationPhase =
+  | 'starting'
+  | 'decoding_audio'
+  | 'preparing_audio'
+  | 'loading_speaker_model'
   | 'diarizing'
-  | 'loading_model'
+  | 'loading_transcription_model'
   | 'transcribing'
   | 'merging'
   | 'completed';
@@ -75,6 +79,7 @@ export interface AnnotationProgress {
   current: number | null;
   total: number | null;
   message: string;
+  indeterminate: boolean;
 }
 
 export interface AnnotatedSegment {

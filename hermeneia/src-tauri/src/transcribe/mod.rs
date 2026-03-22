@@ -10,6 +10,7 @@ pub mod validator;
 
 pub use inference::{
     transcribe_audio, transcribe_audio_with_progress, transcribe_audio_with_reporter,
+    transcribe_prepared_audio_with_progress, transcribe_prepared_audio_with_reporter,
 };
 pub use model::ModelManager;
 pub use requirements::ModelRequirements;

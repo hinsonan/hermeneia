@@ -71,13 +71,25 @@ struct CliAnnotationReporter;
 impl AnnotationProgressReporter for CliAnnotationReporter {
     fn report(&self, progress: AnnotationProgress) {
         match progress.phase {
+            AnnotationPhase::Starting => {
+                eprint!("  Starting annotation...");
+            }
+            AnnotationPhase::DecodingAudio => {
+                eprint!("\n  Decoding audio...");
+            }
+            AnnotationPhase::PreparingAudio => {
+                eprint!("\n  Preparing audio...");
+            }
+            AnnotationPhase::LoadingSpeakerModel => {
+                eprint!("\n  [1/2] Loading speaker model...");
+            }
             AnnotationPhase::Diarizing => {
                 if let (Some(current), Some(total)) = (progress.current, progress.total) {
                     let pct = if total > 0 { current * 100 / total } else { 0 };
                     eprint!("\r  [1/2] Diarization: {}% ({}/{})", pct, current, total);
                 }
             }
-            AnnotationPhase::LoadingModel => {
+            AnnotationPhase::LoadingTranscriptionModel => {
                 eprint!("\n  [2/2] Loading transcription model...");
             }
             AnnotationPhase::Transcribing => {

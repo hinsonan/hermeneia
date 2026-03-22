@@ -1,22 +1,38 @@
 import { Component, Show } from "solid-js";
-import type { TranscriptionProgress } from "../types/transcription";
+import type { AnnotationProgress, TranscriptionProgress } from "../types/transcription";
 import "./TranscriptionProgressBar.css";
 
+type JobProgress = TranscriptionProgress | AnnotationProgress;
+
 interface TranscriptionProgressBarProps {
-  progress: TranscriptionProgress | null;
+  progress: JobProgress | null;
 }
 
 const TranscriptionProgressBar: Component<TranscriptionProgressBarProps> = (props) => {
   const percentage = () => {
     const p = props.progress;
-    if (!p || p.current === null || p.total === null || p.total === 0) {
+    if (!p) {
       return 0;
     }
+
+    if (p.current === null || p.total === null || p.total === 0) {
+      return 0;
+    }
+
     return Math.min(100, Math.round((p.current / p.total) * 100));
   };
 
   const isIndeterminate = () => {
-    return props.progress?.phase === 'loading_model';
+    const p = props.progress;
+    if (!p) {
+      return false;
+    }
+
+    if ("indeterminate" in p && typeof p.indeterminate === "boolean") {
+      return p.indeterminate;
+    }
+
+    return p.phase === "loading_model";
   };
 
   return (
@@ -32,7 +48,7 @@ const TranscriptionProgressBar: Component<TranscriptionProgressBarProps> = (prop
           </Show>
         </div>
 
-        <div class={`progress-bar-container ${isIndeterminate() ? 'indeterminate' : ''}`}>
+        <div class={`progress-bar-container ${isIndeterminate() ? "indeterminate" : ""}`}>
           <Show when={isIndeterminate()} fallback={
             <div
               class="progress-bar-fill"

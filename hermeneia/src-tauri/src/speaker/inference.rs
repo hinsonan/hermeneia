@@ -1,10 +1,9 @@
-use crate::audio::decode_audio_file;
+use crate::audio::{decode_audio_file, prepare_speech_audio, SpeechAudio};
 use crate::error::{AudioError, Result};
 use crate::speaker::{
     model::SpeakerModelManager,
     types::{validate_diarize_params, DiarizationResult, DiarizeParams, SpeakerSegment},
 };
-use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType};
 use sherpa_rs::diarize::{Diarize, DiarizeConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -12,6 +11,17 @@ use std::time::Instant;
 
 /// Progress callback: (num_processed_chunks, num_total_chunks)
 pub type DiarizeProgressCallback = Box<dyn Fn(i32, i32) + Send + Sync>;
+
+fn check_cancelled(cancel: &Option<Arc<AtomicBool>>) -> Result<()> {
+    if cancel
+        .as_ref()
+        .map(|c| c.load(Ordering::SeqCst))
+        .unwrap_or(false)
+    {
+        return Err(AudioError::Cancelled);
+    }
+    Ok(())
+}
 
 /// Diarize an audio file. Downloads models on first use.
 pub fn diarize_audio(audio_path: &str, params: DiarizeParams) -> Result<DiarizationResult> {
@@ -25,46 +35,46 @@ pub fn diarize_audio_with_progress(
     progress: Option<DiarizeProgressCallback>,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<DiarizationResult> {
+    validate_diarize_params(&params)?;
+    check_cancelled(&cancel)?;
+
+    tracing::info!("Decoding audio: {}", audio_path);
+    let audio = decode_audio_file(audio_path)?;
+    check_cancelled(&cancel)?;
+
+    let speech_audio = prepare_speech_audio(&audio)?;
+    drop(audio);
+    check_cancelled(&cancel)?;
+
+    diarize_prepared_audio_with_progress(&speech_audio, params, progress, cancel)
+}
+
+/// Diarize already-preprocessed mono 16kHz speech audio.
+pub fn diarize_prepared_audio(
+    speech_audio: &SpeechAudio,
+    params: DiarizeParams,
+) -> Result<DiarizationResult> {
+    diarize_prepared_audio_with_progress(speech_audio, params, None, None)
+}
+
+/// Diarize already-preprocessed mono 16kHz speech audio with progress/cancel.
+pub fn diarize_prepared_audio_with_progress(
+    speech_audio: &SpeechAudio,
+    params: DiarizeParams,
+    progress: Option<DiarizeProgressCallback>,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<DiarizationResult> {
     let start = Instant::now();
     validate_diarize_params(&params)?;
 
-    // 1. Download / locate ONNX models
     tracing::info!("Ensuring speaker diarization models...");
     let (seg_path, emb_path) = SpeakerModelManager::ensure_models(&params.model)?;
 
-    // 2. Check cancellation
-    if cancel
-        .as_ref()
-        .map(|c| c.load(Ordering::SeqCst))
-        .unwrap_or(false)
-    {
-        return Err(AudioError::Cancelled);
-    }
-
-    // 3. Decode audio to f32 PCM
-    tracing::info!("Decoding audio: {}", audio_path);
-    let audio = decode_audio_file(audio_path)?;
-    let audio_duration = audio.duration_seconds() as f32;
-
-    // 4. Convert to mono
-    let mono_samples = convert_to_mono(&audio.samples, audio.channels);
-
-    // 5. Resample to 16kHz (sherpa-rs requirement)
-    let samples_16k = resample_to_16khz(&mono_samples, audio.sample_rate)?;
-
-    // 6. Check cancellation again
-    if cancel
-        .as_ref()
-        .map(|c| c.load(Ordering::SeqCst))
-        .unwrap_or(false)
-    {
-        return Err(AudioError::Cancelled);
-    }
+    check_cancelled(&cancel)?;
 
     let device_name = params.device.provider_string().to_string();
     let model_name = params.model.display_name().to_string();
 
-    // 7. Build DiarizeConfig
     let config = DiarizeConfig {
         num_clusters: params.num_speakers,
         threshold: Some(params.threshold),
@@ -72,7 +82,6 @@ pub fn diarize_audio_with_progress(
         ..Default::default()
     };
 
-    // 8. Construct Diarize and run inference
     tracing::info!(
         "Running diarization with {} model on {}...",
         model_name,
@@ -82,8 +91,6 @@ pub fn diarize_audio_with_progress(
     let mut sd = Diarize::new(&seg_path, &emb_path, config)
         .map_err(|e| AudioError::DiarizationFailed(e.to_string()))?;
 
-    // Wrap the optional progress callback into sherpa-rs's expected signature:
-    // Box<dyn Fn(i32, i32) -> i32 + Send + 'static>
     let cancel_for_callback = cancel.clone();
     let sherpa_callback = progress.map(|cb| {
         let cb = Arc::new(cb);
@@ -96,9 +103,12 @@ pub fn diarize_audio_with_progress(
                 return 1;
             }
             cb(processed, total);
-            0 // returning 0 tells sherpa-rs to continue
+            0
         }) as Box<dyn Fn(i32, i32) -> i32 + Send + 'static>
     });
+
+    // sherpa-rs consumes Vec<f32>, so clone when using shared prepared audio.
+    let samples_16k = speech_audio.samples_16k_mono.clone();
 
     let segments = sd.compute(samples_16k, sherpa_callback).map_err(|e| {
         if cancel
@@ -112,7 +122,6 @@ pub fn diarize_audio_with_progress(
         }
     })?;
 
-    // 9. Map sherpa_rs::Segment → SpeakerSegment, count unique speakers
     let result_segments: Vec<SpeakerSegment> = segments
         .iter()
         .map(|s| SpeakerSegment {
@@ -134,56 +143,16 @@ pub fn diarize_audio_with_progress(
     Ok(DiarizationResult {
         segments: result_segments,
         num_speakers,
-        audio_duration,
+        audio_duration: speech_audio.duration_seconds as f32,
         inference_time,
         model: model_name,
         device: device_name,
     })
 }
 
-/// Convert interleaved multi-channel PCM to mono by averaging channels.
-fn convert_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    if channels <= 1 {
-        return samples.to_vec();
-    }
-    samples
-        .chunks(channels as usize)
-        .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
-        .collect()
-}
-
-/// Resample mono PCM from `source_rate` to 16kHz.
-fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> {
-    if source_rate == 16000 {
-        return Ok(samples.to_vec());
-    }
-
-    let params = SincInterpolationParameters {
-        sinc_len: 128,
-        f_cutoff: 0.98,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 128,
-        window: rubato::WindowFunction::BlackmanHarris2,
-    };
-
-    let mut resampler =
-        SincFixedIn::<f32>::new(16000.0 / source_rate as f64, 2.0, params, samples.len(), 1)
-            .map_err(|e| AudioError::AudioPreprocessing(format!("Resampler init: {}", e)))?;
-
-    let mut wave_out = resampler.output_buffer_allocate(true);
-    let wave_in = [samples];
-    let (_, output_frames) = resampler
-        .process_into_buffer(&wave_in, &mut wave_out, None)
-        .map_err(|e| AudioError::AudioPreprocessing(format!("Resampling: {}", e)))?;
-
-    let mut output = wave_out.into_iter().next().unwrap();
-    output.truncate(output_frames);
-    Ok(output)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::audio::{convert_to_mono, resample_to_16khz};
 
     #[test]
     fn test_convert_to_mono_passthrough() {
@@ -194,7 +163,6 @@ mod tests {
 
     #[test]
     fn test_convert_to_mono_stereo() {
-        // Stereo: L=0.0, R=1.0 → mono=0.5
         let samples = vec![0.0f32, 1.0, 0.0, 1.0];
         let mono = convert_to_mono(&samples, 2);
         assert_eq!(mono.len(), 2);

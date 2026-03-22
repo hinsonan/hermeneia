@@ -29,6 +29,8 @@ import type {
 import type { DownloadProgress } from "../types/models";
 import "./Transcription.css";
 
+type JobProgress = TranscriptionProgress | AnnotationProgress;
+
 const MODEL_OPTIONS: ModelOption[] = [
   { value: "tiny", label: "Tiny", description: "Fastest, least accurate (~1GB VRAM)" },
   { value: "tiny.en", label: "Tiny (English)", description: "English-only, faster" },
@@ -91,7 +93,7 @@ const Transcription: Component = () => {
   const [result, setResult] = createSignal<TranscriptResult | null>(null);
   const [annotatedResult, setAnnotatedResult] = createSignal<AnnotatedResult | null>(null);
   const [speakerNames, setSpeakerNames] = createSignal<Record<string, string>>({});
-  const [transcriptionProgress, setTranscriptionProgress] = createSignal<TranscriptionProgress | null>(null);
+  const [transcriptionProgress, setTranscriptionProgress] = createSignal<JobProgress | null>(null);
 
   // Cancel dialog
   const [showCancelDialog, setShowCancelDialog] = createSignal(false);
@@ -370,24 +372,6 @@ const Transcription: Component = () => {
     }
   };
 
-  const mapAnnotationProgress = (p: AnnotationProgress): TranscriptionProgress => {
-    if (p.phase === "loading_model" || p.phase === "merging") {
-      return {
-        phase: "loading_model",
-        current: p.current,
-        total: p.total,
-        message: p.message,
-      };
-    }
-
-    return {
-      phase: "transcribing",
-      current: p.current,
-      total: p.total,
-      message: p.message,
-    };
-  };
-
   // Start transcription/annotation
   const handleTranscribe = async () => {
     if (!filePath()) return;
@@ -403,7 +387,17 @@ const Transcription: Component = () => {
     }
 
     setIsTranscribing(true);
-    setTranscriptionProgress(null);
+    if (isAnnotateMode()) {
+      setTranscriptionProgress({
+        phase: "starting",
+        current: null,
+        total: null,
+        message: "Starting annotation...",
+        indeterminate: true,
+      } as AnnotationProgress);
+    } else {
+      setTranscriptionProgress(null);
+    }
 
     try {
       const eventName = isAnnotateMode() ? "annotation-progress" : "transcription-progress";
@@ -411,7 +405,7 @@ const Transcription: Component = () => {
       progressUnlisten = await listen(eventName, (event) => {
         const payload = event.payload as AnnotationProgress | TranscriptionProgress;
         if (isAnnotateMode()) {
-          setTranscriptionProgress(mapAnnotationProgress(payload as AnnotationProgress));
+          setTranscriptionProgress(payload as AnnotationProgress);
         } else {
           setTranscriptionProgress(payload as TranscriptionProgress);
         }
@@ -943,6 +937,11 @@ const Transcription: Component = () => {
                 <GreekScrollLoader />
                 <h2>
                   {transcriptionProgress()?.phase === "loading_model"
+                    || transcriptionProgress()?.phase === "starting"
+                    || transcriptionProgress()?.phase === "decoding_audio"
+                    || transcriptionProgress()?.phase === "preparing_audio"
+                    || transcriptionProgress()?.phase === "loading_speaker_model"
+                    || transcriptionProgress()?.phase === "loading_transcription_model"
                     ? "Loading / Preparing..."
                     : isAnnotateMode()
                     ? transcriptionProgress()?.message?.startsWith("Diarizing")
