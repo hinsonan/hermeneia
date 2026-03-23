@@ -114,7 +114,7 @@ jobs:
       - run: npm ci
 
       - name: Build Tauri (CPU)
-        run: npm run build:cpu -- --bundles deb,rpm,appimage
+        run: npm run build:cpu -- --bundles deb,rpm,appimage -- --no-default-features
 
       - uses: actions/upload-artifact@v4
         with:
@@ -373,7 +373,7 @@ jobs:
       - run: npm ci
 
       - name: Build Tauri (CPU)
-        run: npx tauri build --bundles nsis
+        run: npx tauri build --bundles nsis -- --no-default-features
 
       - uses: actions/upload-artifact@v4
         with:
@@ -976,7 +976,7 @@ jobs:
       - run: npm ci
 
       - name: Build Tauri (Intel)
-        run: npx tauri build --bundles dmg
+        run: npx tauri build --bundles dmg -- --no-default-features
 
       - uses: actions/upload-artifact@v4
         with:
@@ -1041,7 +1041,7 @@ jobs:
       - run: npm ci
 
       - name: Build Tauri (Metal)
-        run: npx tauri build --features metal --bundles dmg
+        run: npx tauri build --features metal --bundles dmg -- --no-default-features
 
       - uses: actions/upload-artifact@v4
         with:
