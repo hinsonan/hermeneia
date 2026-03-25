@@ -2,7 +2,12 @@ export type WhisperModel = 'tiny' | 'tiny.en' | 'base' | 'base.en' | 'small' | '
 export type TranscriptionTask = 'transcribe' | 'translate';
 
 // Progress reporting types
-export type TranscriptionPhase = 'loading_model' | 'transcribing';
+export type TranscriptionPhase =
+  | 'decoding_audio'
+  | 'preparing_audio'
+  | 'loading_model'
+  | 'transcribing'
+  | 'completed';
 
 export interface TranscriptionProgress {
   phase: TranscriptionPhase;

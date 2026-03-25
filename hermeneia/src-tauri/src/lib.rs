@@ -180,12 +180,44 @@ async fn transcribe_audio_file(
             use_quantized: false,
         };
 
-        // Create progress reporter and signal start
-        let reporter = TauriProgressReporter::new(app_handle);
-        reporter.start();
+        // Create progress reporter
+        let reporter = Arc::new(TauriProgressReporter::new(app_handle));
 
-        transcribe::transcribe_audio_with_reporter(&file_path, params, &reporter, Some(cancel_flag))
-            .map_err(|e| e.to_string())
+        // Stage 1: decode audio (with explicit decode progress events)
+        reporter.emit_decoding_audio();
+        let reporter_for_decode = reporter.clone();
+        let cancel_for_decode = cancel_flag.clone();
+        let decode_progress: DecodeProgressCallback = Box::new(move |current, total| {
+            reporter_for_decode.emit_decoding_audio_progress(current, total);
+
+            !cancel_for_decode.load(Ordering::SeqCst)
+        });
+
+        let audio_data = decode_audio_file_with_progress(&file_path, Some(decode_progress))
+            .map_err(|e| e.to_string())?;
+
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled.to_string());
+        }
+
+        // Stage 2: prepare mono 16kHz speech audio
+        reporter.emit_preparing_audio();
+        let speech_audio = prepare_speech_audio(&audio_data).map_err(|e| e.to_string())?;
+        drop(audio_data);
+
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled.to_string());
+        }
+
+        // Stage 3+: load model + transcribe
+        reporter.start();
+        transcribe::transcribe_prepared_audio_with_reporter(
+            &speech_audio,
+            params,
+            &*reporter,
+            Some(cancel_flag),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?

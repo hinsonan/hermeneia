@@ -32,7 +32,15 @@ const TranscriptionProgressBar: Component<TranscriptionProgressBarProps> = (prop
       return p.indeterminate;
     }
 
-    return p.phase === "loading_model";
+    if (p.phase === "loading_model" || p.phase === "preparing_audio") {
+      return true;
+    }
+
+    if (p.phase === "decoding_audio") {
+      return p.current === null || p.total === null || p.total === 0;
+    }
+
+    return false;
   };
 
   return (

@@ -29,12 +29,34 @@ impl TauriProgressReporter {
             tracing::warn!("Failed to emit progress event: {}", e);
         }
     }
+
+    /// Emit decode progress events.
+    pub fn emit_decoding_audio(&self) {
+        self.emit(TranscriptionProgress::decoding_audio());
+    }
+
+    /// Emit decode progress with frame counts.
+    pub fn emit_decoding_audio_progress(&self, current: usize, total: usize) {
+        self.emit(TranscriptionProgress::decoding_audio_progress(
+            current, total,
+        ));
+    }
+
+    /// Emit preparing-audio stage event.
+    pub fn emit_preparing_audio(&self) {
+        self.emit(TranscriptionProgress::preparing_audio());
+    }
+
+    /// Emit loading-model stage event.
+    pub fn emit_loading_model(&self) {
+        self.emit(TranscriptionProgress::loading_model());
+    }
 }
 
 impl ProgressReporter for TauriProgressReporter {
     fn start(&self) {
         tracing::info!("Transcription starting: loading model...");
-        self.emit(TranscriptionProgress::loading_model());
+        self.emit_loading_model();
     }
 
     fn report(&self, current: usize, total: usize) {

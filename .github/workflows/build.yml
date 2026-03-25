@@ -290,6 +290,8 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
+          body_path: .github/RELEASE_NOTES_HEADER.md
+          fail_on_unmatched_files: true
           files: hermeneia/release-cuda-assets/*
 
       # No release: upload as artifact for inspection
@@ -901,6 +903,8 @@ jobs:
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           draft: true
+          body_path: .github/RELEASE_NOTES_HEADER.md
+          fail_on_unmatched_files: true
           files: |
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.7z*
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.sha256
@@ -1120,4 +1124,17 @@ jobs:
           draft: true
           generate_release_notes: true
           body_path: .github/RELEASE_NOTES_HEADER.md
+          fail_on_unmatched_files: true
           files: release-assets/*
+
+      - name: Verify release includes download guide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          body=$(gh release view "$RELEASE_TAG" --json body --jq '.body')
+          if [[ "$body" != *"## Download"* ]]; then
+            echo "Release body is missing the download guide heading (## Download)."
+            exit 1
+          fi
