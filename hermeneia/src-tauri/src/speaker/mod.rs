@@ -4,7 +4,8 @@ pub mod types;
 
 pub use inference::{
     diarize_audio, diarize_audio_with_progress, diarize_prepared_audio,
-    diarize_prepared_audio_with_progress, DiarizeProgressCallback,
+    diarize_prepared_audio_with_callbacks, diarize_prepared_audio_with_progress, DiarizeCallbacks,
+    DiarizeProgressCallback, DiarizeStage, DiarizeStageProgress, DiarizeStageProgressCallback,
 };
 pub use model::SpeakerModelManager;
 pub use types::{

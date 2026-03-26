@@ -941,6 +941,8 @@ const Transcription: Component = () => {
                     || transcriptionProgress()?.phase === "decoding_audio"
                     || transcriptionProgress()?.phase === "preparing_audio"
                     || transcriptionProgress()?.phase === "loading_speaker_model"
+                    || transcriptionProgress()?.phase === "ensuring_speaker_models"
+                    || transcriptionProgress()?.phase === "initializing_speaker_runtime"
                     || transcriptionProgress()?.phase === "loading_transcription_model"
                     ? "Loading / Preparing..."
                     : isAnnotateMode()

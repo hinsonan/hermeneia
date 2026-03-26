@@ -73,6 +73,8 @@ export type AnnotationPhase =
   | 'decoding_audio'
   | 'preparing_audio'
   | 'loading_speaker_model'
+  | 'ensuring_speaker_models'
+  | 'initializing_speaker_runtime'
   | 'diarizing'
   | 'loading_transcription_model'
   | 'transcribing'

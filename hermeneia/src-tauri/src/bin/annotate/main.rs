@@ -83,6 +83,12 @@ impl AnnotationProgressReporter for CliAnnotationReporter {
             AnnotationPhase::LoadingSpeakerModel => {
                 eprint!("\n  [1/2] Loading speaker model...");
             }
+            AnnotationPhase::EnsuringSpeakerModels => {
+                eprint!("\n  [1/2] Ensuring speaker model files...");
+            }
+            AnnotationPhase::InitializingSpeakerRuntime => {
+                eprint!("\n  [1/2] Initializing speaker runtime...");
+            }
             AnnotationPhase::Diarizing => {
                 if let (Some(current), Some(total)) = (progress.current, progress.total) {
                     let pct = if total > 0 { current * 100 / total } else { 0 };

@@ -1,8 +1,8 @@
 use crate::audio::{decode_audio_file_with_progress, prepare_speech_audio, DecodeProgressCallback};
 use crate::error::{AudioError, Result};
 use crate::speaker::{
-    diarize_prepared_audio_with_progress, validate_diarize_params, DiarizationResult,
-    DiarizeParams, SpeakerDevice, SpeakerModel,
+    diarize_prepared_audio_with_callbacks, validate_diarize_params, DiarizationResult,
+    DiarizeCallbacks, DiarizeParams, DiarizeStage, SpeakerDevice, SpeakerModel,
 };
 use crate::transcribe::{
     transcribe_prepared_audio_with_reporter, ProgressReporter, TranscribeParams, TranscriptResult,
@@ -53,6 +53,8 @@ pub enum AnnotationPhase {
     DecodingAudio,
     PreparingAudio,
     LoadingSpeakerModel,
+    EnsuringSpeakerModels,
+    InitializingSpeakerRuntime,
     Diarizing,
     LoadingTranscriptionModel,
     Transcribing,
@@ -120,6 +122,26 @@ impl AnnotationProgress {
             current: None,
             total: None,
             message: "Loading speaker diarization model...".to_string(),
+            indeterminate: true,
+        }
+    }
+
+    pub fn ensuring_speaker_models() -> Self {
+        Self {
+            phase: AnnotationPhase::EnsuringSpeakerModels,
+            current: None,
+            total: None,
+            message: "Ensuring speaker diarization models...".to_string(),
+            indeterminate: true,
+        }
+    }
+
+    pub fn initializing_speaker_runtime() -> Self {
+        Self {
+            phase: AnnotationPhase::InitializingSpeakerRuntime,
+            current: None,
+            total: None,
+            message: "Initializing speaker runtime...".to_string(),
             indeterminate: true,
         }
     }
@@ -332,20 +354,50 @@ pub fn annotate_audio_with_reporter(
 
     reporter.report(AnnotationProgress::loading_speaker_model());
 
-    let reporter_for_diarize = reporter.clone();
-    let diarize_progress = Box::new(move |processed: i32, total: i32| {
-        if processed >= 0 && total > 0 {
-            reporter_for_diarize.report(AnnotationProgress::diarizing(
-                processed as usize,
-                total as usize,
-            ));
-        }
-    });
+    let reporter_for_diarize_stage = reporter.clone();
+    let diarize_stage_progress = Arc::new(
+        move |stage_progress: crate::speaker::DiarizeStageProgress| match stage_progress.stage {
+            DiarizeStage::EnsuringModels => {
+                reporter_for_diarize_stage.report(AnnotationProgress::ensuring_speaker_models());
+            }
+            DiarizeStage::InitializingRuntime => {
+                reporter_for_diarize_stage
+                    .report(AnnotationProgress::initializing_speaker_runtime());
+            }
+            DiarizeStage::Diarizing => {
+                if let (Some(current), Some(total)) = (stage_progress.current, stage_progress.total)
+                {
+                    reporter_for_diarize_stage
+                        .report(AnnotationProgress::diarizing(current, total));
+                } else {
+                    reporter_for_diarize_stage.report(AnnotationProgress {
+                        phase: AnnotationPhase::Diarizing,
+                        current: None,
+                        total: None,
+                        message: stage_progress.message.to_string(),
+                        indeterminate: true,
+                    });
+                }
+            }
+            DiarizeStage::Finalizing => {
+                reporter_for_diarize_stage.report(AnnotationProgress {
+                    phase: AnnotationPhase::Diarizing,
+                    current: None,
+                    total: None,
+                    message: stage_progress.message.to_string(),
+                    indeterminate: true,
+                });
+            }
+        },
+    );
 
-    let diarization = diarize_prepared_audio_with_progress(
+    let diarization = diarize_prepared_audio_with_callbacks(
         &speech_audio,
         params.diarize.clone(),
-        Some(diarize_progress),
+        DiarizeCallbacks {
+            chunk_progress: None,
+            stage_progress: Some(diarize_stage_progress),
+        },
         cancel_flag.clone(),
     )?;
 
