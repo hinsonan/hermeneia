@@ -1,6 +1,6 @@
 [package]
 name = "hermeneia"
-version = "2026.2.2"
+version = "2026.3.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -50,6 +50,16 @@ path = "src/bin/transcribe/main.rs"
 name = "translate"
 path = "src/bin/translate/main.rs"
 
+# Binary for speaker diarization testing
+[[bin]]
+name = "speaker"
+path = "src/bin/speaker/main.rs"
+
+# Binary for speaker-annotated transcription (diarization + transcription merged)
+[[bin]]
+name = "annotate"
+path = "src/bin/annotate/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -91,6 +101,10 @@ byteorder = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# Speaker diarization via sherpa-onnx ONNX runtime
+# download-binaries is enabled via the default "sherpa-download" feature (disabled for cuda builds)
+sherpa-rs = { version = "0.6.8", default-features = false }
+
 # custom
 thiserror = "1"
 anyhow = "1"
@@ -103,8 +117,11 @@ once_cell = "1.19"
 nvml-wrapper = { version = "0.10", optional = true }
 
 [features]
-default = []
-cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "nvml-wrapper"]
+# sherpa-download: auto-download pre-built sherpa-onnx binaries (cannot combine with cuda)
+# Disabled for CUDA builds via --no-default-features so sherpa-rs builds from source instead
+default = ["sherpa-download"]
+sherpa-download = ["sherpa-rs/download-binaries"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "nvml-wrapper", "sherpa-rs/cuda"]
 metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
 # Optimized release profile for CPU inference performance

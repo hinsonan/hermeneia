@@ -9,8 +9,11 @@ pub type ProgressCallback = Box<dyn Fn(usize, usize) + Send + Sync>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptionPhase {
+    DecodingAudio,
+    PreparingAudio,
     LoadingModel,
     Transcribing,
+    Completed,
 }
 
 /// Progress event payload for Tauri events
@@ -23,6 +26,40 @@ pub struct TranscriptionProgress {
 }
 
 impl TranscriptionProgress {
+    /// Create a "decoding audio" progress event (indeterminate).
+    pub fn decoding_audio() -> Self {
+        Self {
+            phase: TranscriptionPhase::DecodingAudio,
+            current: None,
+            total: None,
+            message: "Decoding audio...".to_string(),
+        }
+    }
+
+    /// Create a "decoding audio" progress event with known progress.
+    pub fn decoding_audio_progress(current: usize, total: usize) -> Self {
+        if total > 0 {
+            Self {
+                phase: TranscriptionPhase::DecodingAudio,
+                current: Some(current.min(total)),
+                total: Some(total),
+                message: "Decoding audio...".to_string(),
+            }
+        } else {
+            Self::decoding_audio()
+        }
+    }
+
+    /// Create a "preparing audio" progress event.
+    pub fn preparing_audio() -> Self {
+        Self {
+            phase: TranscriptionPhase::PreparingAudio,
+            current: None,
+            total: None,
+            message: "Preparing mono 16kHz audio...".to_string(),
+        }
+    }
+
     /// Create a "loading model" progress event
     pub fn loading_model() -> Self {
         Self {
@@ -51,7 +88,7 @@ impl TranscriptionProgress {
     /// Create a "completed" progress event
     pub fn completed() -> Self {
         Self {
-            phase: TranscriptionPhase::Transcribing,
+            phase: TranscriptionPhase::Completed,
             current: Some(100),
             total: Some(100),
             message: "Transcription complete".to_string(),
@@ -117,8 +154,13 @@ impl WhisperModel {
     /// Check if this model is multilingual
     pub fn is_multilingual(&self) -> bool {
         match self {
-            Self::Tiny | Self::Base | Self::Small | Self::Medium
-            | Self::Large | Self::LargeV2 | Self::LargeV3 => true,
+            Self::Tiny
+            | Self::Base
+            | Self::Small
+            | Self::Medium
+            | Self::Large
+            | Self::LargeV2
+            | Self::LargeV3 => true,
             Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn => false,
         }
     }

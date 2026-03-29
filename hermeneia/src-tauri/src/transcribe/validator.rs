@@ -93,12 +93,14 @@ impl ModelValidator {
                     }
                 } else {
                     warnings.push(
-                        "Could not detect VRAM. Ensure your GPU has sufficient memory.".to_string()
+                        "Could not detect VRAM. Ensure your GPU has sufficient memory.".to_string(),
                     );
                 }
 
                 // Check compute capability (only relevant for CUDA)
-                if let (Some(min_cc), Some(actual_cc)) = (reqs.min_compute_capability, gpu.compute_capability) {
+                if let (Some(min_cc), Some(actual_cc)) =
+                    (reqs.min_compute_capability, gpu.compute_capability)
+                {
                     if actual_cc < min_cc {
                         warnings.push(format!(
                             "GPU compute capability {}.{} is below recommended {}.{}. Performance may be degraded.",
@@ -172,9 +174,9 @@ impl ModelValidator {
                     ValidationResult::Ok => return *model,
                     ValidationResult::Warning(warnings) => {
                         // Accept warnings that aren't about insufficient memory
-                        let has_insufficient_warning = warnings.iter().any(|w| {
-                            w.contains("Insufficient") || w.contains("Not enough")
-                        });
+                        let has_insufficient_warning = warnings
+                            .iter()
+                            .any(|w| w.contains("Insufficient") || w.contains("Not enough"));
                         if !has_insufficient_warning {
                             return *model;
                         }
@@ -234,7 +236,7 @@ mod tests {
                 device_type: GpuDeviceType::NvidiaCuda,
                 vram_total_gb: Some(vram_gb),
                 vram_available_gb: Some(vram_gb * 0.9), // Assume 90% available
-                compute_capability: Some((8, 6)), // RTX 30xx series
+                compute_capability: Some((8, 6)),       // RTX 30xx series
             }),
         }
     }
@@ -245,7 +247,10 @@ mod tests {
         let validator = ModelValidator::with_capabilities(caps);
         let result = validator.validate_model(WhisperModel::Tiny, true);
         // Tiny should work on 4GB RAM (needs 2GB)
-        assert!(matches!(result, ValidationResult::Ok | ValidationResult::Warning(_)));
+        assert!(matches!(
+            result,
+            ValidationResult::Ok | ValidationResult::Warning(_)
+        ));
     }
 
     #[test]
@@ -263,7 +268,10 @@ mod tests {
         let validator = ModelValidator::with_capabilities(caps);
         let result = validator.validate_model(WhisperModel::Large, false);
         // Large needs 10GB VRAM, should be OK with 12GB
-        assert!(matches!(result, ValidationResult::Ok | ValidationResult::Warning(_)));
+        assert!(matches!(
+            result,
+            ValidationResult::Ok | ValidationResult::Warning(_)
+        ));
     }
 
     #[test]
@@ -306,7 +314,9 @@ mod tests {
         let result = validator.validate_model(WhisperModel::Small, false);
         // Should warn about slow performance on CPU and recommend tiny/base
         if let ValidationResult::Warning(warnings) = result {
-            assert!(warnings.iter().any(|w| w.contains("CPU may be slow") && w.contains("'tiny' or 'base'")));
+            assert!(warnings
+                .iter()
+                .any(|w| w.contains("CPU may be slow") && w.contains("'tiny' or 'base'")));
         } else {
             panic!("Expected warning for Small model on CPU");
         }

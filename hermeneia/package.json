@@ -1,6 +1,6 @@
 {
   "name": "hermeneia",
-  "version": "2026.2.2",
+  "version": "2026.03.0",
   "description": "",
   "type": "module",
   "scripts": {
@@ -13,10 +13,10 @@
     "build:cuda": "export HOST_UID=$(id -u) && export HOST_GID=$(id -g) && cd src-tauri && docker-compose -f docker-compose.cuda.yml run --rm build-dev",
     "build:cuda:bundle": "./scripts/build-cuda-bundle.sh",
     "dev:cuda": "./scripts/dev-cuda.sh",
-    "build:cpu": "NO_STRIP=true tauri build",
+    "build:cpu": "LD_LIBRARY_PATH=$PWD/src-tauri/target/release:$LD_LIBRARY_PATH APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=true tauri build",
     "dev:cpu": "tauri dev --release",
     "build": "vite build",
-    "build:tauri": "NO_STRIP=true tauri build",
+    "build:tauri": "LD_LIBRARY_PATH=$PWD/src-tauri/target/release:$LD_LIBRARY_PATH APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=true tauri build",
     "serve": "vite preview",
     "tauri": "tauri"
   },

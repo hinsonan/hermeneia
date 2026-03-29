@@ -2,7 +2,12 @@ export type WhisperModel = 'tiny' | 'tiny.en' | 'base' | 'base.en' | 'small' | '
 export type TranscriptionTask = 'transcribe' | 'translate';
 
 // Progress reporting types
-export type TranscriptionPhase = 'loading_model' | 'transcribing';
+export type TranscriptionPhase =
+  | 'decoding_audio'
+  | 'preparing_audio'
+  | 'loading_model'
+  | 'transcribing'
+  | 'completed';
 
 export interface TranscriptionProgress {
   phase: TranscriptionPhase;
@@ -58,4 +63,62 @@ export interface ModelValidation {
   status: 'ok' | 'warning' | 'error';
   messages: string[];
   recommended_model: string | null;
+}
+
+// Annotation types (merged into transcription page flow)
+export type SpeakerModelKey = 'english' | 'multilingual';
+export type SpeakerDevice = 'cpu' | 'cuda' | 'coreml';
+export type AnnotationPhase =
+  | 'starting'
+  | 'decoding_audio'
+  | 'preparing_audio'
+  | 'loading_speaker_model'
+  | 'ensuring_speaker_models'
+  | 'initializing_speaker_runtime'
+  | 'diarizing'
+  | 'loading_transcription_model'
+  | 'transcribing'
+  | 'merging'
+  | 'completed';
+
+export interface AnnotationProgress {
+  phase: AnnotationPhase;
+  current: number | null;
+  total: number | null;
+  message: string;
+  indeterminate: boolean;
+}
+
+export interface AnnotatedSegment {
+  index: number;
+  start: number;
+  end: number;
+  speaker: number;
+  speaker_name: string;
+  text: string;
+}
+
+export interface AnnotatedResult {
+  segments: AnnotatedSegment[];
+  speaker_names: Record<string, string>;
+  num_speakers: number;
+  language: string | null;
+  audio_duration: number;
+  diarization_inference_time: number;
+  transcription_inference_time: number;
+  total_inference_time: number;
+  whisper_model: string;
+  speaker_model: string;
+  speaker_device: string;
+}
+
+export interface SpeakerModelRequirement {
+  key: SpeakerModelKey;
+  display_name: string;
+  approx_size_mb: number;
+  is_cached: boolean;
+  segmentation_model_id: string;
+  segmentation_file: string;
+  embedding_model_id: string;
+  embedding_file: string;
 }

@@ -55,11 +55,7 @@ pub fn to_model_load_error(e: candle_core::Error, device: &Device, model_name: &
 }
 
 /// Convert a candle error during model initialization to AudioError with OOM detection.
-pub fn to_model_init_error(
-    e: candle_core::Error,
-    device: &Device,
-    model_name: &str,
-) -> AudioError {
+pub fn to_model_init_error(e: candle_core::Error, device: &Device, model_name: &str) -> AudioError {
     let err_str = e.to_string();
     if is_oom_error(&err_str) {
         let device_label = device_memory_label(device);
@@ -101,9 +97,8 @@ pub fn load_safetensors_varbuilder(
     #[cfg(target_os = "windows")]
     {
         tracing::info!("Using buffered safetensors loading (Windows)");
-        let data = std::fs::read(weights_path).map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to read weights file: {}", e))
-        })?;
+        let data = std::fs::read(weights_path)
+            .map_err(|e| candle_core::Error::Msg(format!("Failed to read weights file: {}", e)))?;
         VarBuilder::from_buffered_safetensors(data, dtype, device)
     }
     #[cfg(not(target_os = "windows"))]

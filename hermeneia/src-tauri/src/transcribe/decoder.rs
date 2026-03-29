@@ -1,5 +1,7 @@
 use crate::error::{AudioError, Result};
-use crate::transcribe::types::{ProgressCallback, TranscribeParams, TranscriptionTask, TranscriptSegment};
+use crate::transcribe::types::{
+    ProgressCallback, TranscribeParams, TranscriptSegment, TranscriptionTask,
+};
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::ops::{log_softmax, softmax};
 use candle_transformers::models::whisper::{self as m, Config};
@@ -87,7 +89,9 @@ impl<'a> Decoder<'a> {
         let no_speech_token = m::NO_SPEECH_TOKENS
             .iter()
             .find_map(|token| token_id(tokenizer, token).ok())
-            .ok_or_else(|| AudioError::TranscriptionFailed("No speech token not found".to_string()))?;
+            .ok_or_else(|| {
+                AudioError::TranscriptionFailed("No speech token not found".to_string())
+            })?;
 
         Ok(Self {
             model,
@@ -213,18 +217,17 @@ impl<'a> Decoder<'a> {
             let (_, seq_len, _) = ys
                 .dims3()
                 .map_err(|e| AudioError::TranscriptionFailed(format!("Dims3: {}", e)))?;
-            let logits = self
-                .model
-                .decoder
-                .final_linear(
-                    &ys.i((..1, seq_len - 1..))
-                        .map_err(|e| AudioError::TranscriptionFailed(format!("Index error: {}", e)))?,
-                )
-                .map_err(|e| AudioError::TranscriptionFailed(format!("Final linear: {}", e)))?
-                .i(0)
-                .map_err(|e| AudioError::TranscriptionFailed(format!("Index error: {}", e)))?
-                .i(0)
-                .map_err(|e| AudioError::TranscriptionFailed(format!("Index error: {}", e)))?;
+            let logits =
+                self.model
+                    .decoder
+                    .final_linear(&ys.i((..1, seq_len - 1..)).map_err(|e| {
+                        AudioError::TranscriptionFailed(format!("Index error: {}", e))
+                    })?)
+                    .map_err(|e| AudioError::TranscriptionFailed(format!("Final linear: {}", e)))?
+                    .i(0)
+                    .map_err(|e| AudioError::TranscriptionFailed(format!("Index error: {}", e)))?
+                    .i(0)
+                    .map_err(|e| AudioError::TranscriptionFailed(format!("Index error: {}", e)))?;
 
             // Apply timestamp rules when timestamps are enabled
             let logits = if self.timestamps {
@@ -239,15 +242,18 @@ impl<'a> Decoder<'a> {
 
             // Sample next token
             let next_token = if temperature > 0.0 {
-                let prs = softmax(&(&logits / temperature).map_err(|e| {
-                    AudioError::TranscriptionFailed(format!("Division: {}", e))
-                })?, 0)
+                let prs = softmax(
+                    &(&logits / temperature)
+                        .map_err(|e| AudioError::TranscriptionFailed(format!("Division: {}", e)))?,
+                    0,
+                )
                 .map_err(|e| AudioError::TranscriptionFailed(format!("Softmax: {}", e)))?;
                 let logits_v: Vec<f32> = prs
                     .to_vec1()
                     .map_err(|e| AudioError::TranscriptionFailed(format!("To vec: {}", e)))?;
-                let distr = WeightedIndex::new(&logits_v)
-                    .map_err(|e| AudioError::TranscriptionFailed(format!("WeightedIndex: {}", e)))?;
+                let distr = WeightedIndex::new(&logits_v).map_err(|e| {
+                    AudioError::TranscriptionFailed(format!("WeightedIndex: {}", e))
+                })?;
                 distr.sample(&mut self.rng) as u32
             } else {
                 // Greedy sampling
@@ -271,7 +277,8 @@ impl<'a> Decoder<'a> {
                 .map_err(|e| AudioError::TranscriptionFailed(format!("To scalar: {}", e)))?
                 as f64;
 
-            if next_token == self.eot_token || tokens.len() > self.model.config.max_target_positions {
+            if next_token == self.eot_token || tokens.len() > self.model.config.max_target_positions
+            {
                 break;
             }
             sum_logprob += prob.ln();
@@ -359,11 +366,9 @@ impl<'a> Decoder<'a> {
                             0.0
                         };
                     }
-                    masks.push(
-                        Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
-                            AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
-                        })?,
-                    );
+                    masks.push(Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
+                        AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
+                    })?);
                 }
                 // After a single timestamp (start of segment), allow text tokens
                 // Don't mask anything - let the model generate text naturally
@@ -390,11 +395,9 @@ impl<'a> Decoder<'a> {
                         0.0
                     };
                 }
-                masks.push(
-                    Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
-                        AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
-                    })?,
-                );
+                masks.push(Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
+                    AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
+                })?);
             }
         }
 
@@ -423,11 +426,9 @@ impl<'a> Decoder<'a> {
                             0.0
                         };
                     }
-                    masks.push(
-                        Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
-                            AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
-                        })?,
-                    );
+                    masks.push(Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
+                        AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
+                    })?);
                 }
             }
         }
@@ -505,7 +506,12 @@ impl<'a> Decoder<'a> {
     }
 
     /// Run decoding on full audio
-    pub fn run(&mut self, mel: &Tensor, progress_callback: Option<ProgressCallback>, cancel_flag: Option<Arc<AtomicBool>>) -> Result<Vec<Segment>> {
+    pub fn run(
+        &mut self,
+        mel: &Tensor,
+        progress_callback: Option<ProgressCallback>,
+        cancel_flag: Option<Arc<AtomicBool>>,
+    ) -> Result<Vec<Segment>> {
         let (_, _, content_frames) = mel
             .dims3()
             .map_err(|e| AudioError::TranscriptionFailed(format!("Dims3: {}", e)))?;
@@ -520,7 +526,11 @@ impl<'a> Decoder<'a> {
             // Check for cancellation
             if let Some(ref flag) = cancel_flag {
                 if flag.load(Ordering::SeqCst) {
-                    tracing::info!("Transcription cancelled by user at frame {}/{}", seek, content_frames);
+                    tracing::info!(
+                        "Transcription cancelled by user at frame {}/{}",
+                        seek,
+                        content_frames
+                    );
                     return Err(AudioError::Cancelled);
                 }
             }
@@ -592,7 +602,11 @@ impl<'a> Decoder<'a> {
                     }
 
                     if token > self.no_timestamps_token {
-                        tracing::debug!("Timestamp token: {} (time={:.2}s)", token, (token - self.no_timestamps_token - 1) as f32 / 50.0);
+                        tracing::debug!(
+                            "Timestamp token: {} (time={:.2}s)",
+                            token,
+                            (token - self.no_timestamps_token - 1) as f32 / 50.0
+                        );
                         let timestamp_s = (token - self.no_timestamps_token - 1) as f32 / 50.0;
                         if !tokens_to_decode.is_empty() {
                             if let Ok(text) = self.tokenizer.decode(&tokens_to_decode, true) {
@@ -615,7 +629,10 @@ impl<'a> Decoder<'a> {
                     }
                 }
 
-                tracing::debug!("End of segment, tokens_to_decode remaining: {:?}", tokens_to_decode);
+                tracing::debug!(
+                    "End of segment, tokens_to_decode remaining: {:?}",
+                    tokens_to_decode
+                );
 
                 if !tokens_to_decode.is_empty() {
                     if let Ok(text) = self.tokenizer.decode(&tokens_to_decode, true) {

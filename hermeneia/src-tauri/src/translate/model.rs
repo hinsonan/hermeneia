@@ -25,12 +25,13 @@ pub struct ModelManager {
 impl ModelManager {
     /// Create new model manager using HuggingFace default cache
     pub fn new() -> Result<Self> {
-        let api = ApiBuilder::new().with_progress(false).build().map_err(|e| {
-            AudioError::ModelDownload {
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .build()
+            .map_err(|e| AudioError::ModelDownload {
                 model: "N/A".to_string(),
                 details: format!("API init failed: {}", e),
-            }
-        })?;
+            })?;
         Ok(Self { api })
     }
 
@@ -353,14 +354,12 @@ pub fn get_device(force_cpu: bool) -> Result<Device> {
 
     #[cfg(feature = "cuda")]
     {
-        return Device::cuda_if_available(0)
-            .map_err(|e| AudioError::GpuError(e.to_string()));
+        return Device::cuda_if_available(0).map_err(|e| AudioError::GpuError(e.to_string()));
     }
 
     #[cfg(feature = "metal")]
     {
-        return Device::new_metal(0)
-            .map_err(|e| AudioError::GpuError(e.to_string()));
+        return Device::new_metal(0).map_err(|e| AudioError::GpuError(e.to_string()));
     }
 
     #[allow(unreachable_code)]

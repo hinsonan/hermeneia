@@ -3,11 +3,11 @@
 // Generate test audio files for profiling trim operations
 // Supports WAV (direct), MP3, and FLAC (via ffmpeg conversion)
 
-use hound::{WavWriter, WavSpec, SampleFormat};
+use clap::Parser;
+use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
 use std::path::PathBuf;
 use std::process::Command;
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(name = "generate-test-audio")]
@@ -106,7 +106,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Total samples: {}", total_frames * args.channels as usize);
 
     let estimated_size = total_frames * args.channels as usize * (args.bits / 8) as usize;
-    println!("  Estimated size: {:.2} MB", estimated_size as f64 / 1_000_000.0);
+    println!(
+        "  Estimated size: {:.2} MB",
+        estimated_size as f64 / 1_000_000.0
+    );
 
     println!("\nGenerating samples...");
 
@@ -140,7 +143,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let elapsed = start.elapsed();
     println!("\nWAV generation complete!");
     println!("  Time taken: {:.2} seconds", elapsed.as_secs_f64());
-    println!("  WAV size: {:.2} MB", std::fs::metadata(&wav_path)?.len() as f64 / 1_000_000.0);
+    println!(
+        "  WAV size: {:.2} MB",
+        std::fs::metadata(&wav_path)?.len() as f64 / 1_000_000.0
+    );
 
     // Convert to MP3/FLAC if needed
     if needs_conversion {
@@ -182,7 +188,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let convert_elapsed = convert_start.elapsed();
-        println!("  Conversion time: {:.2} seconds", convert_elapsed.as_secs_f64());
+        println!(
+            "  Conversion time: {:.2} seconds",
+            convert_elapsed.as_secs_f64()
+        );
 
         // Remove temporary WAV file
         std::fs::remove_file(&wav_path)?;
@@ -191,7 +200,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\nFinal output:");
     println!("  File: {}", args.output.display());
-    println!("  Size: {:.2} MB", std::fs::metadata(&args.output)?.len() as f64 / 1_000_000.0);
+    println!(
+        "  Size: {:.2} MB",
+        std::fs::metadata(&args.output)?.len() as f64 / 1_000_000.0
+    );
 
     Ok(())
 }

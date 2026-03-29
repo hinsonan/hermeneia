@@ -1,5 +1,7 @@
 // src-tauri/src/audio/waveform.rs
 
+use std::fs::File;
+use std::path::Path;
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
@@ -7,8 +9,6 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
-use std::fs::File;
-use std::path::Path;
 
 use crate::audio::types::WaveformPeaks;
 use crate::error::{AudioError, Result};
@@ -122,7 +122,12 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
 
     // Probe the file
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe: {}", e)))?;
 
     let mut format = probed.format;
@@ -146,7 +151,13 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
         let total_frames_opt = track.codec_params.n_frames;
         let codec_params = track.codec_params.clone();
 
-        (track_id, sample_rate, channels_opt, codec_params, total_frames_opt)
+        (
+            track_id,
+            sample_rate,
+            channels_opt,
+            codec_params,
+            total_frames_opt,
+        )
     };
 
     // Create decoder
@@ -180,17 +191,17 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
     } else {
         // Decode first packet to determine channels
         let ch = loop {
-            let packet = format
-                .next_packet()
-                .map_err(|e| AudioError::DecodeFailed(format!("Failed to read first packet: {}", e)))?;
+            let packet = format.next_packet().map_err(|e| {
+                AudioError::DecodeFailed(format!("Failed to read first packet: {}", e))
+            })?;
 
             if packet.track_id() != track_id {
                 continue;
             }
 
-            let decoded = decoder
-                .decode(&packet)
-                .map_err(|e| AudioError::DecodeFailed(format!("Failed to decode first packet: {}", e)))?;
+            let decoded = decoder.decode(&packet).map_err(|e| {
+                AudioError::DecodeFailed(format!("Failed to decode first packet: {}", e))
+            })?;
 
             // Get channel count from decoded audio
             let ch = match &decoded {
@@ -573,8 +584,8 @@ fn process_samples_generic<T, F>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::types::AudioData;
     use crate::audio::encoder::encode_wav;
+    use crate::audio::types::AudioData;
     use std::path::PathBuf;
 
     /// Helper to create synthetic audio data for testing
@@ -626,8 +637,7 @@ mod tests {
         let temp_file = create_test_wav_file(&audio, "basic");
 
         // Extract 100 peaks
-        let peaks = extract_waveform_peaks(&temp_file, Some(100))
-            .expect("Failed to extract peaks");
+        let peaks = extract_waveform_peaks(&temp_file, Some(100)).expect("Failed to extract peaks");
 
         // Verify basic properties
         assert_eq!(peaks.num_peaks, 100);
@@ -645,8 +655,7 @@ mod tests {
         let audio = create_test_audio(2.0, 44100, 2);
         let temp_file = create_test_wav_file(&audio, "valid_range");
 
-        let peaks = extract_waveform_peaks(&temp_file, Some(200))
-            .expect("Failed to extract peaks");
+        let peaks = extract_waveform_peaks(&temp_file, Some(200)).expect("Failed to extract peaks");
 
         // All peaks should be in valid amplitude range [-1.0, 1.0]
         for &min in &peaks.min_peaks {
@@ -665,8 +674,7 @@ mod tests {
         let audio = create_test_audio(1.5, 44100, 2);
         let temp_file = create_test_wav_file(&audio, "min_max");
 
-        let peaks = extract_waveform_peaks(&temp_file, Some(150))
-            .expect("Failed to extract peaks");
+        let peaks = extract_waveform_peaks(&temp_file, Some(150)).expect("Failed to extract peaks");
 
         // For each segment, min should be <= max
         for i in 0..peaks.num_peaks {
@@ -736,8 +744,7 @@ mod tests {
         let temp_file = create_test_wav_file(&audio, "default");
 
         // Test with None (should default to 2000)
-        let peaks = extract_waveform_peaks(&temp_file, None)
-            .expect("Failed with default peaks");
+        let peaks = extract_waveform_peaks(&temp_file, None).expect("Failed with default peaks");
 
         assert_eq!(peaks.num_peaks, 2000);
 
@@ -775,8 +782,7 @@ mod tests {
         let temp_file = create_test_wav_file(&audio, "amplitude_variation");
 
         // Extract 30 peaks (10 per second)
-        let peaks = extract_waveform_peaks(&temp_file, Some(30))
-            .expect("Failed to extract peaks");
+        let peaks = extract_waveform_peaks(&temp_file, Some(30)).expect("Failed to extract peaks");
 
         // First 10 peaks should be near 0 (silence)
         for i in 0..10 {

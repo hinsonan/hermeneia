@@ -1,31 +1,82 @@
 // src-tauri/src/audio/decoder.rs
 
+use std::fs::File;
+use std::path::Path;
 use symphonia::core::audio::AudioBufferRef;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use std::fs::File;
-use std::path::Path;
 
 use crate::audio::types::{AudioData, AudioInfo};
 use crate::error::{AudioError, Result};
 
+/// Progress callback for audio decoding.
+///
+/// Parameters: (decoded_frames, total_frames)
+/// - `total_frames` is 0 when unknown
+///
+/// Return `false` to cancel decoding.
+pub type DecodeProgressCallback = Box<dyn Fn(usize, usize) -> bool + Send + Sync>;
+
+fn emit_decode_progress(
+    progress: &Option<DecodeProgressCallback>,
+    decoded_frames: usize,
+    total_frames: Option<usize>,
+    force: bool,
+    last_reported_pct: &mut usize,
+    packet_counter: usize,
+) -> Result<()> {
+    let Some(cb) = progress.as_ref() else {
+        return Ok(());
+    };
+
+    let should_emit = match total_frames {
+        Some(total) if total > 0 => {
+            let pct = ((decoded_frames.min(total) * 100) / total).min(100);
+            if force || pct > *last_reported_pct {
+                *last_reported_pct = pct;
+                true
+            } else {
+                false
+            }
+        }
+        _ => force || packet_counter % 200 == 0,
+    };
+
+    if !should_emit {
+        return Ok(());
+    }
+
+    let total = total_frames.unwrap_or(0);
+    let current = if total > 0 {
+        decoded_frames.min(total)
+    } else {
+        decoded_frames
+    };
+
+    if cb(current, total) {
+        Ok(())
+    } else {
+        Err(AudioError::Cancelled)
+    }
+}
+
 /// Decodes an audio file to PCM samples in memory
-/// 
+///
 /// Supports: MP3, FLAC, WAV, OGG Vorbis, AAC, and more via symphonia
-/// 
+///
 /// # Arguments
 /// * `path` - Path to the audio file
-/// 
+///
 /// # Returns
 /// AudioData containing all decoded PCM samples
-/// 
+///
 /// # Example
 /// ```no_run
 /// use hermeneia_lib::audio::{decode_audio_file, AudioData};
-/// 
+///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let audio = decode_audio_file("sermon.mp3")?;
 /// println!("Loaded {} seconds of audio", audio.duration_seconds());
@@ -35,6 +86,17 @@ use crate::error::{AudioError, Result};
 /// # }
 /// ```
 pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
+    decode_audio_file_with_progress(path, None)
+}
+
+/// Decodes an audio file with optional progress callback.
+///
+/// The callback receives decoded frames and total frames when known.
+/// Return `false` from the callback to cancel decoding.
+pub fn decode_audio_file_with_progress<P: AsRef<Path>>(
+    path: P,
+    progress: Option<DecodeProgressCallback>,
+) -> Result<AudioData> {
     let path = path.as_ref();
     let path_str = path.to_string_lossy().to_string();
 
@@ -55,7 +117,12 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
 
     // Probe the media source to detect format
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe format: {}", e)))?;
 
     let mut format = probed.format;
@@ -75,6 +142,8 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
         .sample_rate
         .ok_or_else(|| AudioError::DecodeFailed("Sample rate not found".to_string()))?;
 
+    let total_frames = track.codec_params.n_frames.map(|n| n as usize);
+
     // Try to get channels from metadata, but it may not be available for some MP3s
     let mut channels_opt = track.codec_params.channels.map(|c| c.count() as u16);
 
@@ -85,22 +154,38 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
 
     // Decode all packets into a sample buffer
     let mut samples = Vec::new();
+    let mut decoded_frames = 0usize;
+    let mut packet_counter = 0usize;
+    let mut last_reported_pct = 0usize;
+
+    emit_decode_progress(
+        &progress,
+        decoded_frames,
+        total_frames,
+        true,
+        &mut last_reported_pct,
+        packet_counter,
+    )?;
 
     // If channels not in metadata, decode first packet to get channel info
     if channels_opt.is_none() {
         loop {
             let packet = match format.next_packet() {
                 Ok(packet) => packet,
-                Err(_) => return Err(AudioError::DecodeFailed("Could not read first packet to determine channels".to_string())),
+                Err(_) => {
+                    return Err(AudioError::DecodeFailed(
+                        "Could not read first packet to determine channels".to_string(),
+                    ))
+                }
             };
 
             if packet.track_id() != track_id {
                 continue;
             }
 
-            let decoded = decoder
-                .decode(&packet)
-                .map_err(|e| AudioError::DecodeFailed(format!("Decode error on first packet: {}", e)))?;
+            let decoded = decoder.decode(&packet).map_err(|e| {
+                AudioError::DecodeFailed(format!("Decode error on first packet: {}", e))
+            })?;
 
             // Get channel count from decoded audio
             let ch = match &decoded {
@@ -119,12 +204,31 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
             channels_opt = Some(ch);
 
             // Convert this first packet to samples
+            let before = samples.len();
             convert_audio_buffer_to_f32(&decoded, &mut samples);
+
+            let added_samples = samples.len().saturating_sub(before);
+            let added_frames = if ch > 0 {
+                added_samples / ch as usize
+            } else {
+                0
+            };
+            decoded_frames = decoded_frames.saturating_add(added_frames);
+            packet_counter = packet_counter.saturating_add(1);
+            emit_decode_progress(
+                &progress,
+                decoded_frames,
+                total_frames,
+                false,
+                &mut last_reported_pct,
+                packet_counter,
+            )?;
             break;
         }
     }
 
-    let channels = channels_opt.ok_or_else(|| AudioError::DecodeFailed("Could not determine channel count".to_string()))?;
+    let channels = channels_opt
+        .ok_or_else(|| AudioError::DecodeFailed("Could not determine channel count".to_string()))?;
 
     loop {
         // Get next packet
@@ -144,8 +248,36 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
             .map_err(|e| AudioError::DecodeFailed(format!("Decode error: {}", e)))?;
 
         // Convert decoded audio to f32 samples
+        let before = samples.len();
         convert_audio_buffer_to_f32(&decoded, &mut samples);
+
+        let added_samples = samples.len().saturating_sub(before);
+        let added_frames = if channels > 0 {
+            added_samples / channels as usize
+        } else {
+            0
+        };
+        decoded_frames = decoded_frames.saturating_add(added_frames);
+        packet_counter = packet_counter.saturating_add(1);
+
+        emit_decode_progress(
+            &progress,
+            decoded_frames,
+            total_frames,
+            false,
+            &mut last_reported_pct,
+            packet_counter,
+        )?;
     }
+
+    emit_decode_progress(
+        &progress,
+        decoded_frames,
+        total_frames,
+        true,
+        &mut last_reported_pct,
+        packet_counter,
+    )?;
 
     Ok(AudioData {
         samples,
@@ -155,13 +287,13 @@ pub fn decode_audio_file<P: AsRef<Path>>(path: P) -> Result<AudioData> {
 }
 
 /// Get audio file metadata without decoding all samples
-/// 
+///
 /// Much faster than decode_audio_file() for just getting duration/info
-/// 
+///
 /// # Example
 /// ```no_run
 /// use hermeneia_lib::audio::get_audio_info;
-/// 
+///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let info = get_audio_info("sermon.mp3")?;
 /// println!("Duration: {:.2} minutes", info.duration_seconds / 60.0);
@@ -186,7 +318,12 @@ pub fn get_audio_info<P: AsRef<Path>>(path: P) -> Result<AudioInfo> {
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| AudioError::DecodeFailed(format!("Failed to probe: {}", e)))?;
 
     let mut format = probed.format;
@@ -280,7 +417,9 @@ fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
             interleave_planes(buf.planes().planes(), output, |&s| s as f32 / 32768.0);
         }
         AudioBufferRef::S24(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| s.inner() as f32 / 8388608.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                s.inner() as f32 / 8388608.0
+            });
         }
         AudioBufferRef::S32(buf) => {
             interleave_planes(buf.planes().planes(), output, |&s| s as f32 / 2147483648.0);
@@ -288,16 +427,24 @@ fn convert_audio_buffer_to_f32(buffer: &AudioBufferRef, output: &mut Vec<f32>) {
 
         // Convert unsigned integers to f32
         AudioBufferRef::U8(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 128.0) / 128.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s as f32 - 128.0) / 128.0
+            });
         }
         AudioBufferRef::U16(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 32768.0) / 32768.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s as f32 - 32768.0) / 32768.0
+            });
         }
         AudioBufferRef::U24(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s.inner() as f32 - 8388608.0) / 8388608.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s.inner() as f32 - 8388608.0) / 8388608.0
+            });
         }
         AudioBufferRef::U32(buf) => {
-            interleave_planes(buf.planes().planes(), output, |&s| (s as f32 - 2147483648.0) / 2147483648.0);
+            interleave_planes(buf.planes().planes(), output, |&s| {
+                (s as f32 - 2147483648.0) / 2147483648.0
+            });
         }
     }
 }
@@ -336,16 +483,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hound::{WavWriter, WavSpec, SampleFormat};
+    use hound::{SampleFormat, WavSpec, WavWriter};
     use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     /// Helper function to create a simple WAV file for testing
-    fn create_test_wav_file(
-        path: &str,
-        duration_seconds: f64,
-        sample_rate: u32,
-        channels: u16,
-    ) {
+    fn create_test_wav_file(path: &str, duration_seconds: f64, sample_rate: u32, channels: u16) {
         let spec = WavSpec {
             channels,
             sample_rate,
@@ -358,7 +502,9 @@ mod tests {
 
         // Write a simple sine wave
         for i in 0..num_samples {
-            let sample = ((i as f32 * 440.0 * 2.0 * std::f32::consts::PI / sample_rate as f32).sin() * 16384.0) as i16;
+            let sample = ((i as f32 * 440.0 * 2.0 * std::f32::consts::PI / sample_rate as f32)
+                .sin()
+                * 16384.0) as i16;
             writer.write_sample(sample).expect("Failed to write sample");
         }
 
@@ -402,7 +548,7 @@ mod tests {
         assert!(result.is_err());
 
         match result.unwrap_err() {
-            AudioError::FileOpen { .. } => {}, // Expected error
+            AudioError::FileOpen { .. } => {} // Expected error
             _ => panic!("Expected FileOpen error"),
         }
     }
@@ -460,7 +606,11 @@ mod tests {
 
     #[test]
     fn test_decode_different_sample_rates() {
-        let rates = vec![(22050, "/tmp/test_22k.wav"), (44100, "/tmp/test_44k.wav"), (48000, "/tmp/test_48k.wav")];
+        let rates = vec![
+            (22050, "/tmp/test_22k.wav"),
+            (44100, "/tmp/test_44k.wav"),
+            (48000, "/tmp/test_48k.wav"),
+        ];
 
         for (rate, path) in rates {
             create_test_wav_file(path, 0.5, rate, 2);
@@ -481,7 +631,11 @@ mod tests {
 
         // All samples should be in valid f32 range [-1.0, 1.0]
         for &sample in &audio.samples {
-            assert!(sample >= -1.0 && sample <= 1.0, "Sample {} out of range", sample);
+            assert!(
+                sample >= -1.0 && sample <= 1.0,
+                "Sample {} out of range",
+                sample
+            );
         }
 
         // Cleanup
@@ -531,6 +685,30 @@ mod tests {
         assert!((info.duration_seconds - audio.duration_seconds()).abs() < 0.1);
 
         // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    #[test]
+    fn test_decode_progress_callback_reports_frames() {
+        let temp_file = "/tmp/test_decode_progress.wav";
+        create_test_wav_file(temp_file, 1.0, 16000, 1);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let last_total = Arc::new(AtomicUsize::new(0));
+
+        let calls_cb = calls.clone();
+        let total_cb = last_total.clone();
+        let callback: DecodeProgressCallback = Box::new(move |_current, total| {
+            calls_cb.fetch_add(1, Ordering::Relaxed);
+            total_cb.store(total, Ordering::Relaxed);
+            true
+        });
+
+        let audio = decode_audio_file_with_progress(temp_file, Some(callback)).unwrap();
+        assert!(!audio.samples.is_empty());
+        assert!(calls.load(Ordering::Relaxed) > 0);
+        assert!(last_total.load(Ordering::Relaxed) > 0);
+
         let _ = std::fs::remove_file(temp_file);
     }
 }

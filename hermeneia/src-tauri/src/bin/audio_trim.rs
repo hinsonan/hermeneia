@@ -1,7 +1,7 @@
 use clap::Parser;
-use hermeneia_lib::audio::{get_audio_info, TrimParams};
 use hermeneia_lib::audio::trim::trim_audio_file;
-use tracing::{info, error};
+use hermeneia_lib::audio::{get_audio_info, TrimParams};
+use tracing::{error, info};
 
 /// Command-line tool for trimming audio files
 #[derive(Parser, Debug)]
@@ -34,7 +34,7 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
 

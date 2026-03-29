@@ -1,8 +1,10 @@
+pub mod annotate;
 pub mod audio;
 pub mod download;
 pub mod error;
 pub mod gpu;
 pub mod gpu_cleanup;
+pub mod speaker;
 pub mod system_info;
 pub mod transcribe;
 pub mod translate;
@@ -15,8 +17,6 @@ pub use audio::*;
 pub use error::{AudioError, Result};
 pub use transcribe::*;
 
-
-
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UpdateInfo {
     pub available: bool,
@@ -24,6 +24,34 @@ pub struct UpdateInfo {
     pub latest_version: String,
     pub release_url: String,
     pub release_notes: String,
+}
+
+const ANNOTATION_PROGRESS_EVENT: &str = "annotation-progress";
+
+struct TauriAnnotationProgressReporter {
+    app_handle: tauri::AppHandle,
+}
+
+impl annotate::AnnotationProgressReporter for TauriAnnotationProgressReporter {
+    fn report(&self, progress: annotate::AnnotationProgress) {
+        use tauri::Emitter;
+
+        if let Err(e) = self.app_handle.emit(ANNOTATION_PROGRESS_EVENT, progress) {
+            tracing::warn!("Failed to emit annotation progress event: {}", e);
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SpeakerModelRequirement {
+    pub key: String,
+    pub display_name: String,
+    pub approx_size_mb: f32,
+    pub is_cached: bool,
+    pub segmentation_model_id: String,
+    pub segmentation_file: String,
+    pub embedding_model_id: String,
+    pub embedding_file: String,
 }
 
 /// Global audio player state managed by Tauri
@@ -66,8 +94,7 @@ async fn get_waveform_peaks(
 ) -> std::result::Result<WaveformPeaks, String> {
     // Run blocking audio processing in a dedicated thread pool
     tokio::task::spawn_blocking(move || {
-        audio::extract_waveform_peaks(&file_path, num_peaks)
-            .map_err(|e| e.to_string())
+        audio::extract_waveform_peaks(&file_path, num_peaks).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -95,8 +122,7 @@ async fn trim_audio_file(
     // Run blocking audio processing in a dedicated thread pool
     tokio::task::spawn_blocking(move || {
         // Validate parameters
-        let params = TrimParams::new(start_seconds, end_seconds)
-            .map_err(|e| e.to_string())?;
+        let params = TrimParams::new(start_seconds, end_seconds).map_err(|e| e.to_string())?;
 
         // Use optimized trim function (WAV direct copy or streaming)
         audio::trim::trim_audio_file(&input_path, &output_path, &params)
@@ -136,8 +162,8 @@ async fn transcribe_audio_file(
     };
 
     tokio::task::spawn_blocking(move || {
-        let model_enum = parse_whisper_model(&model)
-            .ok_or_else(|| format!("Invalid model: {}", model))?;
+        let model_enum =
+            parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
 
         let task_enum = match task.as_str() {
             "transcribe" => TranscriptionTask::Transcribe,
@@ -154,11 +180,146 @@ async fn transcribe_audio_file(
             use_quantized: false,
         };
 
-        // Create progress reporter and signal start
-        let reporter = TauriProgressReporter::new(app_handle);
-        reporter.start();
+        // Create progress reporter
+        let reporter = Arc::new(TauriProgressReporter::new(app_handle));
 
-        transcribe::transcribe_audio_with_reporter(&file_path, params, &reporter, Some(cancel_flag))
+        // Stage 1: decode audio (with explicit decode progress events)
+        reporter.emit_decoding_audio();
+        let reporter_for_decode = reporter.clone();
+        let cancel_for_decode = cancel_flag.clone();
+        let decode_progress: DecodeProgressCallback = Box::new(move |current, total| {
+            reporter_for_decode.emit_decoding_audio_progress(current, total);
+
+            !cancel_for_decode.load(Ordering::SeqCst)
+        });
+
+        let audio_data = decode_audio_file_with_progress(&file_path, Some(decode_progress))
+            .map_err(|e| e.to_string())?;
+
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled.to_string());
+        }
+
+        // Stage 2: prepare mono 16kHz speech audio
+        reporter.emit_preparing_audio();
+        let speech_audio = prepare_speech_audio(&audio_data).map_err(|e| e.to_string())?;
+        drop(audio_data);
+
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled.to_string());
+        }
+
+        // Stage 3+: load model + transcribe
+        reporter.start();
+        transcribe::transcribe_prepared_audio_with_reporter(
+            &speech_audio,
+            params,
+            &*reporter,
+            Some(cancel_flag),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Run full speaker annotation pipeline (diarize + transcribe + merge).
+#[tauri::command]
+async fn annotate_audio_file(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    file_path: String,
+    transcribe_model: String,
+    speaker_model: String,
+    task: String,
+    language: Option<String>,
+    timestamps: bool,
+    num_speakers: Option<i32>,
+    threshold: f32,
+    device: String,
+    speaker_names: Option<std::collections::HashMap<i32, String>>,
+) -> std::result::Result<annotate::AnnotatedResult, String> {
+    // Swap in a fresh cancel flag so any previous job's flag stays true
+    let cancel_flag = {
+        let mut guard = state.cancel_inference.lock().unwrap();
+        let new_flag = Arc::new(AtomicBool::new(false));
+        *guard = new_flag.clone();
+        new_flag
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let transcribe_model_enum =
+            annotate::parse_whisper_model(&transcribe_model).map_err(|e| e.to_string())?;
+        let speaker_model_enum =
+            annotate::parse_speaker_model(&speaker_model).map_err(|e| e.to_string())?;
+        let task_enum = annotate::parse_task(&task).map_err(|e| e.to_string())?;
+        let device_enum = annotate::parse_speaker_device(&device).map_err(|e| e.to_string())?;
+
+        let annotate_params = annotate::AnnotateParams {
+            transcribe: TranscribeParams {
+                model: transcribe_model_enum,
+                task: task_enum,
+                language,
+                timestamps,
+                force_cpu: false,
+                use_quantized: false,
+            },
+            diarize: speaker::DiarizeParams {
+                model: speaker_model_enum,
+                num_speakers,
+                threshold,
+                device: device_enum,
+            },
+            speaker_names: speaker_names.unwrap_or_default(),
+        };
+
+        let reporter = Arc::new(TauriAnnotationProgressReporter { app_handle });
+        annotate::annotate_audio_with_reporter(
+            &file_path,
+            annotate_params,
+            reporter,
+            Some(cancel_flag),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Returns speaker diarization model bundles and required Hugging Face IDs.
+#[tauri::command]
+fn list_speaker_model_requirements() -> Vec<SpeakerModelRequirement> {
+    let models = [
+        speaker::SpeakerModel::English,
+        speaker::SpeakerModel::Multilingual,
+    ];
+    models
+        .iter()
+        .map(|model| {
+            let (seg_repo, seg_file) = model.segmentation_source();
+            let (emb_repo, emb_file) = model.embedding_source();
+
+            SpeakerModelRequirement {
+                key: model.cli_key().to_string(),
+                display_name: model.display_name().to_string(),
+                approx_size_mb: model.approx_size_mb(),
+                is_cached: speaker::SpeakerModelManager::is_cached(model),
+                segmentation_model_id: seg_repo.to_string(),
+                segmentation_file: seg_file.to_string(),
+                embedding_model_id: emb_repo.to_string(),
+                embedding_file: emb_file.to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Ensure speaker diarization model bundle is downloaded and cached.
+#[tauri::command]
+async fn ensure_speaker_model_downloaded(model: String) -> std::result::Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let model_enum = annotate::parse_speaker_model(&model).map_err(|e| e.to_string())?;
+        speaker::SpeakerModelManager::ensure_models(&model_enum)
+            .map(|_| ())
             .map_err(|e| e.to_string())
     })
     .await
@@ -201,7 +362,7 @@ async fn get_system_capabilities() -> std::result::Result<system_info::SystemCap
 /// Model validation result for frontend
 #[derive(serde::Serialize)]
 pub struct ModelValidation {
-    pub status: String,  // "ok" | "warning" | "error"
+    pub status: String, // "ok" | "warning" | "error"
     pub messages: Vec<String>,
     pub recommended_model: Option<String>,
 }
@@ -213,8 +374,8 @@ async fn validate_model_selection(
     force_cpu: bool,
 ) -> std::result::Result<ModelValidation, String> {
     tokio::task::spawn_blocking(move || {
-        let model_enum = parse_whisper_model(&model)
-            .ok_or_else(|| format!("Invalid model: {}", model))?;
+        let model_enum =
+            parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
 
         let validator = ModelValidator::new().map_err(|e| e.to_string())?;
         let result = validator.validate_model(model_enum, force_cpu);
@@ -224,7 +385,8 @@ async fn validate_model_selection(
                 ValidationResult::Ok => "ok",
                 ValidationResult::Warning(_) => "warning",
                 ValidationResult::Error(_) => "error",
-            }.to_string(),
+            }
+            .to_string(),
             messages: match result {
                 ValidationResult::Ok => vec![],
                 ValidationResult::Warning(w) => w,
@@ -363,12 +525,15 @@ async fn translate_text_file(
         let is_srt = file_path.to_lowercase().ends_with(".srt");
 
         // Emit loading model phase
-        let _ = app_handle.emit("translation-progress", serde_json::json!({
-            "phase": "loading_model",
-            "current": null,
-            "total": null,
-            "message": "Loading translation model..."
-        }));
+        let _ = app_handle.emit(
+            "translation-progress",
+            serde_json::json!({
+                "phase": "loading_model",
+                "current": null,
+                "total": null,
+                "message": "Loading translation model..."
+            }),
+        );
 
         // Set up translation parameters
         let params = translate::TranslateParams {
@@ -394,14 +559,18 @@ async fn translate_text_file(
 
             // Create progress callback that emits Tauri events
             let app_handle_clone = app_handle.clone();
-            let progress_callback: translate::BatchProgressCallback = Box::new(move |current, total, _text| {
-                let _ = app_handle_clone.emit("translation-progress", serde_json::json!({
-                    "phase": "translating",
-                    "current": current,
-                    "total": total,
-                    "message": format!("Translating segment {} of {}", current, total)
-                }));
-            });
+            let progress_callback: translate::BatchProgressCallback =
+                Box::new(move |current, total, _text| {
+                    let _ = app_handle_clone.emit(
+                        "translation-progress",
+                        serde_json::json!({
+                            "phase": "translating",
+                            "current": current,
+                            "total": total,
+                            "message": format!("Translating segment {} of {}", current, total)
+                        }),
+                    );
+                });
 
             // Translate all segments with single model load
             let (translated_texts, model_used, _inference_time) = translate::translate_texts_batch(
@@ -409,11 +578,16 @@ async fn translate_text_file(
                 params,
                 Some(progress_callback),
                 Some(cancel_flag),
-            ).map_err(|e| format!("Translation failed: {}", e))?;
+            )
+            .map_err(|e| format!("Translation failed: {}", e))?;
 
             // Reassemble SRT with translated text
             let translated_srt = srt_file.with_translated_text(translated_texts);
-            (translated_srt.render(), model_used.display_name().to_string(), total_segments)
+            (
+                translated_srt.render(),
+                model_used.display_name().to_string(),
+                total_segments,
+            )
         } else {
             // Plain text file - split into chunks and batch translate
             // Keep chunks small (~125 tokens ≈ 500 chars) to match the scale
@@ -445,7 +619,11 @@ async fn translate_text_file(
             .map_err(|e| format!("Translation failed: {}", e))?;
 
             let translated_text = translated_chunks.join("\n\n");
-            (translated_text, model_used.display_name().to_string(), total_chunks)
+            (
+                translated_text,
+                model_used.display_name().to_string(),
+                total_chunks,
+            )
         };
 
         let inference_time = start_time.elapsed().as_secs_f64();
@@ -465,7 +643,6 @@ async fn translate_text_file(
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-
 // ============================================================================
 // Model Download & Cache Management Commands
 // ============================================================================
@@ -473,11 +650,9 @@ async fn translate_text_file(
 /// List all available models with their cache status
 #[tauri::command]
 async fn list_models() -> std::result::Result<Vec<download::ModelInfo>, String> {
-    tokio::task::spawn_blocking(|| {
-        download::list_all_models().map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(|| download::list_all_models().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Download a model by its HuggingFace model ID with progress events
@@ -648,7 +823,10 @@ async fn resolve_translation_model(
         };
         let mm = translate::model::ModelManager::new().map_err(|e| e.to_string())?;
         let model = mm.select_model(&params).map_err(|e| e.to_string())?;
-        Ok((model.model_id().to_string(), model.display_name().to_string()))
+        Ok((
+            model.model_id().to_string(),
+            model.display_name().to_string(),
+        ))
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -687,7 +865,10 @@ async fn check_for_updates(_force: Option<bool>) -> std::result::Result<UpdateIn
         .await
         .map_err(|e| e.to_string())?;
 
-    let tag = resp["tag_name"].as_str().unwrap_or("").trim_start_matches('v');
+    let tag = resp["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v');
     let release_url = resp["html_url"].as_str().unwrap_or("").to_string();
     let release_notes = resp["body"].as_str().unwrap_or("").to_string();
 
@@ -706,7 +887,11 @@ async fn check_for_updates(_force: Option<bool>) -> std::result::Result<UpdateIn
 fn is_newer(remote: &str, local: &str) -> bool {
     fn parse(v: &str) -> [u64; 3] {
         let mut parts = v.splitn(3, '.').map(|p| p.parse().unwrap_or(0));
-        [parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0)]
+        [
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+            parts.next().unwrap_or(0),
+        ]
     }
     parse(remote) > parse(local)
 }
@@ -729,9 +914,12 @@ pub fn run() {
             get_waveform_peaks,
             trim_audio_file,
             transcribe_audio_file,
+            annotate_audio_file,
             write_text_file,
             get_system_capabilities,
             validate_model_selection,
+            list_speaker_model_requirements,
+            ensure_speaker_model_downloaded,
             translate_text_file,
             check_marian_pair_supported,
             resolve_translation_model,

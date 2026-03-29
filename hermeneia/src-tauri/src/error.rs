@@ -102,6 +102,14 @@ pub enum AudioError {
     #[error("Tokenization error: {0}")]
     TokenizationError(String),
 
+    /// Speaker diarization inference failed
+    #[error("Speaker diarization failed: {0}")]
+    DiarizationFailed(String),
+
+    /// Invalid diarization parameters
+    #[error("Invalid diarization parameters: {0}")]
+    InvalidDiarizeParams(String),
+
     /// Operation was cancelled by the user
     #[error("Operation cancelled")]
     Cancelled,

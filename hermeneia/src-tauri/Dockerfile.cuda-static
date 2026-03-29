@@ -21,7 +21,23 @@ RUN apt-get update && apt-get install -y \
     librsvg2-dev \
     libasound2-dev \
     patchelf \
+    # Required for sherpa-onnx CUDA build (no download-binaries):
+    # clang/libclang-dev → bindgen FFI binding generation
+    # cmake + ninja-build → sherpa-onnx CMake build system
+    clang \
+    libclang-dev \
+    cmake \
+    ninja-build \
+    # cuDNN 9 for ORT CUDA provider (RNN/LSTM ops)
+    libcudnn9-cuda-12 \
     && rm -rf /var/lib/apt/lists/*
+
+# Explicitly tell bindgen where libclang lives.
+# Ubuntu 22.04 ships LLVM 14; libclang-dev installs the .so there.
+ENV LIBCLANG_PATH=/usr/lib/llvm-14/lib
+
+# PTX JIT: compile for sm_75 baseline, driver JIT-compiles to actual GPU (RTX 5090 = sm_120)
+ENV CUDA_COMPUTE_CAP=75
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -32,23 +48,19 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
-# Configure for universal GPU support via PTX (Parallel Thread Execution)
-# PTX is NVIDIA's virtual ISA that JIT-compiles to any GPU at runtime
-#
-# Strategy: Build PTX for a baseline compute capability
-# - compute_75 (Turing) covers: RTX 20/30/40/50 series, T4, A100, H100
-# - At runtime, CUDA driver JIT-compiles PTX to actual GPU architecture
-# - Works on ANY GPU with compute capability >= 7.5
-# - First inference is ~10-20% slower (JIT compile time), then cached
-#
-# This single binary supports:
-#   ✓ RTX 20-series (Turing, sm_75)
-#   ✓ RTX 30-series (Ampere, sm_86)
-#   ✓ RTX 40-series (Ada, sm_89)
-#   ✓ RTX 50-series (Blackwell, sm_120)
-#   ✓ A100, H100, and newer datacenter GPUs
-#
-ENV CUDA_COMPUTE_CAP=75
+
+# Download pre-built sherpa-onnx with CUDA 12.x + cuDNN 9.x ORT (built by k2-fsa).
+# Setting SHERPA_LIB_PATH tells sherpa-rs-sys to skip cmake and use these libs directly,
+# bypassing the cmake-hardcoded ORT 1.17.1-patched which only supports CUDA 11.
+ARG SHERPA_ONNX_VERSION=1.12.28
+ARG SHERPA_ONNX_SHA256=9e816c408fced966dc1f2127050769dfb4a35f45f55e1099a051906e3f0c90d3
+RUN curl -fsSL -o /tmp/sherpa-onnx-cuda12.tar.bz2 \
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_ONNX_VERSION}/sherpa-onnx-v${SHERPA_ONNX_VERSION}-cuda-12.x-cudnn-9.x-linux-x64-gpu.tar.bz2" && \
+    echo "${SHERPA_ONNX_SHA256}  /tmp/sherpa-onnx-cuda12.tar.bz2" | sha256sum -c - && \
+    mkdir -p /opt/sherpa-onnx-cuda12 && \
+    tar -xjf /tmp/sherpa-onnx-cuda12.tar.bz2 -C /opt/sherpa-onnx-cuda12 && \
+    rm /tmp/sherpa-onnx-cuda12.tar.bz2
+ENV SHERPA_LIB_PATH=/opt/sherpa-onnx-cuda12/sherpa-onnx-v${SHERPA_ONNX_VERSION}-cuda-12.x-cudnn-9.x-linux-x64-gpu
 
 WORKDIR /build
 
@@ -62,6 +74,8 @@ RUN mkdir -p /build/lib && \
     cp -P ${CUDA_HOME}/lib64/libnvrtc.so* /build/lib/ && \
     cp -P ${CUDA_HOME}/lib64/libcufft.so* /build/lib/ 2>/dev/null || true && \
     cp -P ${CUDA_HOME}/lib64/libcurand.so* /build/lib/ 2>/dev/null || true && \
+    echo "=== Copying cuDNN 9 libraries ===" && \
+    cp -P /usr/lib/x86_64-linux-gnu/libcudnn*.so* /build/lib/ 2>/dev/null || true && \
     echo "" && \
     echo "=== Bundled libraries ===" && \
     ls -lh /build/lib/
@@ -84,6 +98,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     libfuse2 \
     file \
     xdg-utils \
+    squashfs-tools \
+    desktop-file-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # appimagetool for post-processing AppImages (remove bundled libcuda stub)

@@ -7,17 +7,17 @@ use crate::audio::types::AudioData;
 use crate::error::Result;
 
 /// Encode PCM audio data to a WAV file
-/// 
+///
 /// Outputs 32-bit float WAV files for maximum quality
-/// 
+///
 /// # Arguments
 /// * `audio` - The audio data to encode
 /// * `output_path` - Where to save the WAV file
-/// 
+///
 /// # Example
 /// ```
 /// use hermeneia_lib::audio::{AudioData, encode_wav};
-/// 
+///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// // Create some test audio data
 /// let audio = AudioData {
@@ -25,7 +25,7 @@ use crate::error::Result;
 ///     sample_rate: 44100,
 ///     channels: 1,
 /// };
-/// 
+///
 /// // Encode to WAV file
 /// # let temp_dir = std::env::temp_dir();
 /// # let output_path = temp_dir.join("test_output.wav");
