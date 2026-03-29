@@ -25,9 +25,13 @@ Or: right-click the app, then click **Open**.
 **Windows:** You may see a SmartScreen warning ("Windows protected your PC").
 Click **"More info"** then **"Run anyway"**.
 
-**Windows CUDA (recommended):**
+**Windows CUDA (recommended for pre-releases and releases):**
 - Download and run `hermeneia_*_windows_x64_cuda_installer.exe`.
 - The installer downloads and verifies CUDA package parts automatically, installs per-user, creates shortcuts, and launches the app.
+
+**Windows CUDA (draft releases):**
+- Draft release assets are not publicly downloadable by URL, so the bootstrap installer may fail to fetch package parts.
+- For draft testing, download the portable archive assets directly from the release page and use the manual fallback steps below.
 
 **Windows CUDA (manual fallback):**
 - If the release includes multiple files like `.7z.001`, `.7z.002`, download all parts into the same folder.

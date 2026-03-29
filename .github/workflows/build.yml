@@ -23,9 +23,16 @@ on:
         type: boolean
         default: true
       create_release:
-        description: 'Create a draft GitHub Release (requires build_target=all)'
+        description: 'Create a GitHub Release (requires build_target=all)'
         type: boolean
         default: false
+      release_visibility:
+        description: 'Release visibility when creating a release'
+        type: choice
+        default: 'prerelease'
+        options:
+          - prerelease
+          - draft
       release_tag:
         description: 'Release tag (e.g. v0.1.0)'
         type: string
@@ -289,7 +296,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          draft: true
+          draft: ${{ inputs.release_visibility == 'draft' }}
+          prerelease: ${{ inputs.release_visibility != 'draft' }}
           body_path: .github/RELEASE_NOTES_HEADER.md
           fail_on_unmatched_files: true
           files: hermeneia/release-cuda-assets/*
@@ -672,7 +680,6 @@ jobs:
           $assetPrefix = "hermeneia_${version}_windows_x64_cuda_portable"
           $archiveBase = "$assetPrefix.7z"
           $checksumPath = Join-Path $bundleDir "$assetPrefix.sha256"
-          $releaseReadmePath = Join-Path $bundleDir "00_WINDOWS_CUDA_README.txt"
 
           if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
             throw "7z is required to package the Windows CUDA portable build"
@@ -682,7 +689,6 @@ jobs:
           Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
           Get-ChildItem (Join-Path $bundleDir "$assetPrefix.7z*") -ErrorAction SilentlyContinue | Remove-Item -Force
           Remove-Item $checksumPath -ErrorAction SilentlyContinue
-          Remove-Item $releaseReadmePath -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
           Copy-Item "src-tauri\target\release\hermeneia.exe" $stagingDir
@@ -739,26 +745,10 @@ jobs:
           }
           Set-Content -Path $checksumPath -Value $checksumLines
 
-          @"
-          Windows CUDA download instructions
-
-          Recommended:
-          - Download and run hermeneia_${version}_windows_x64_cuda_installer.exe
-
-          Manual fallback (portable archive):
-          1) Download all files named ${archiveBase}.001, .002, .003, ... (if present).
-          2) Keep all parts in the same folder.
-          3) Open ${archiveBase}.001 with 7-Zip and extract.
-          4) Run hermeneia.exe from the extracted folder.
-          5) Optional: verify integrity using ${assetPrefix}.sha256.
-          "@ | Set-Content -Path $releaseReadmePath
-
           Write-Host "Packaged CUDA archive parts:"
           Get-ChildItem (Join-Path $bundleDir "$assetPrefix.7z*") | Select-Object Name, Length
           Write-Host "Checksum file:"
           Get-Item $checksumPath | Select-Object Name, Length
-          Write-Host "Release instructions file:"
-          Get-Item $releaseReadmePath | Select-Object Name, Length
 
       - name: Prepare bootstrap installer dependencies
         shell: pwsh
@@ -878,7 +868,6 @@ jobs:
             '^hermeneia_.*_windows_x64_cuda_portable\.7z(\.\d+)?$',
             '^hermeneia_.*_windows_x64_cuda_portable\.sha256$',
             '^hermeneia_.*_windows_x64_cuda_installer\.exe$',
-            '^00_WINDOWS_CUDA_README\.txt$',
             '^hermeneia_.*_x64-cuda-portable\.7z(\.\d+)?$'
           )
 
@@ -897,19 +886,30 @@ jobs:
             }
           }
 
-      - name: Attach CUDA artifacts to Release
+      - name: Attach CUDA portable artifacts to Release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          draft: true
+          draft: ${{ inputs.release_visibility == 'draft' }}
+          prerelease: ${{ inputs.release_visibility != 'draft' }}
           body_path: .github/RELEASE_NOTES_HEADER.md
           fail_on_unmatched_files: true
           files: |
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.7z*
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.sha256
+
+      - name: Attach CUDA bootstrap installer to Release
+        if: (startsWith(github.ref, 'refs/tags/v') || inputs.create_release == true) && inputs.release_visibility != 'draft'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          draft: ${{ inputs.release_visibility == 'draft' }}
+          prerelease: ${{ inputs.release_visibility != 'draft' }}
+          body_path: .github/RELEASE_NOTES_HEADER.md
+          fail_on_unmatched_files: true
+          files: |
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_installer.exe
-            hermeneia/src-tauri/target/release/bundle/portable/00_WINDOWS_CUDA_README.txt
 
       - name: Upload CUDA artifacts
         if: "!startsWith(github.ref, 'refs/tags/v') && inputs.create_release != true"
@@ -920,7 +920,6 @@ jobs:
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.7z*
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_portable.sha256
             hermeneia/src-tauri/target/release/bundle/portable/hermeneia_*_windows_x64_cuda_installer.exe
-            hermeneia/src-tauri/target/release/bundle/portable/00_WINDOWS_CUDA_README.txt
           compression-level: 1
 
   # ===========================================================================
@@ -1054,7 +1053,7 @@ jobs:
           compression-level: 1
 
   # ===========================================================================
-  # Job 7: Create/update draft GitHub Release (tag pushes only)
+  # Job 7: Create/update GitHub Release (tag pushes only)
   # CUDA artifacts are already attached directly by their jobs.
   # This job handles CPU + Metal artifacts.
   # ===========================================================================
@@ -1117,11 +1116,12 @@ jobs:
           echo "Release assets:"
           ls -lh release-assets/
 
-      - name: Create draft Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
-          draft: true
+          draft: ${{ inputs.release_visibility == 'draft' }}
+          prerelease: ${{ inputs.release_visibility != 'draft' }}
           generate_release_notes: true
           body_path: .github/RELEASE_NOTES_HEADER.md
           fail_on_unmatched_files: true
