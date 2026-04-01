@@ -1,12 +1,13 @@
 use crate::audio::{decode_audio_file_with_progress, prepare_speech_audio, DecodeProgressCallback};
 use crate::error::{AudioError, Result};
+use crate::runtime_cache::{global_runtime_cache, RuntimeCacheManager};
 use crate::speaker::{
-    diarize_prepared_audio_with_callbacks, validate_diarize_params, DiarizationResult,
+    diarize_prepared_audio_with_callbacks_cached, validate_diarize_params, DiarizationResult,
     DiarizeCallbacks, DiarizeParams, DiarizeStage, SpeakerDevice, SpeakerModel,
 };
 use crate::transcribe::{
-    transcribe_prepared_audio_with_reporter, ProgressReporter, TranscribeParams, TranscriptResult,
-    TranscriptionTask, WhisperModel,
+    transcribe_prepared_audio_with_reporter_cached, ProgressReporter, TranscribeParams,
+    TranscriptResult, TranscriptionTask, WhisperModel,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -320,6 +321,22 @@ pub fn annotate_audio_with_reporter(
     reporter: Arc<dyn AnnotationProgressReporter>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<AnnotatedResult> {
+    annotate_audio_with_reporter_cached(
+        audio_path,
+        params,
+        reporter,
+        cancel_flag,
+        Some(global_runtime_cache()),
+    )
+}
+
+pub fn annotate_audio_with_reporter_cached(
+    audio_path: &str,
+    params: AnnotateParams,
+    reporter: Arc<dyn AnnotationProgressReporter>,
+    cancel_flag: Option<Arc<AtomicBool>>,
+    runtime_cache: Option<Arc<RuntimeCacheManager>>,
+) -> Result<AnnotatedResult> {
     validate_diarize_params(&params.diarize)?;
 
     let start = Instant::now();
@@ -391,7 +408,7 @@ pub fn annotate_audio_with_reporter(
         },
     );
 
-    let diarization = diarize_prepared_audio_with_callbacks(
+    let diarization = diarize_prepared_audio_with_callbacks_cached(
         &speech_audio,
         params.diarize.clone(),
         DiarizeCallbacks {
@@ -399,6 +416,7 @@ pub fn annotate_audio_with_reporter(
             stage_progress: Some(diarize_stage_progress),
         },
         cancel_flag.clone(),
+        runtime_cache.clone(),
     )?;
 
     check_cancelled(&cancel_flag)?;
@@ -410,11 +428,12 @@ pub fn annotate_audio_with_reporter(
     // Ensure loading_model phase is emitted in annotate flow.
     adapter.start();
 
-    let transcript = transcribe_prepared_audio_with_reporter(
+    let transcript = transcribe_prepared_audio_with_reporter_cached(
         &speech_audio,
         params.transcribe.clone(),
         &adapter,
         cancel_flag.clone(),
+        runtime_cache,
     )?;
 
     check_cancelled(&cancel_flag)?;
@@ -430,7 +449,13 @@ pub fn annotate_audio_with_reporter(
 }
 
 pub fn annotate_audio(audio_path: &str, params: AnnotateParams) -> Result<AnnotatedResult> {
-    annotate_audio_with_reporter(audio_path, params, Arc::new(NoAnnotationProgress), None)
+    annotate_audio_with_reporter_cached(
+        audio_path,
+        params,
+        Arc::new(NoAnnotationProgress),
+        None,
+        Some(global_runtime_cache()),
+    )
 }
 
 fn merge_annotation_result(

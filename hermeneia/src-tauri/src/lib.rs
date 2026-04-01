@@ -4,6 +4,7 @@ pub mod download;
 pub mod error;
 pub mod gpu;
 pub mod gpu_cleanup;
+pub mod runtime_cache;
 pub mod speaker;
 pub mod system_info;
 pub mod transcribe;
@@ -60,6 +61,7 @@ pub struct AppState {
     pub cancel_inference: Mutex<Arc<AtomicBool>>,
     pub cancel_download: Mutex<Arc<AtomicBool>>,
     pub is_downloading: Arc<AtomicBool>,
+    pub runtime_cache: Arc<runtime_cache::RuntimeCacheManager>,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -161,6 +163,8 @@ async fn transcribe_audio_file(
         new_flag
     };
 
+    let runtime_cache = state.runtime_cache.clone();
+
     tokio::task::spawn_blocking(move || {
         let model_enum =
             parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
@@ -211,11 +215,12 @@ async fn transcribe_audio_file(
 
         // Stage 3+: load model + transcribe
         reporter.start();
-        transcribe::transcribe_prepared_audio_with_reporter(
+        transcribe::transcribe_prepared_audio_with_reporter_cached(
             &speech_audio,
             params,
             &*reporter,
             Some(cancel_flag),
+            Some(runtime_cache),
         )
         .map_err(|e| e.to_string())
     })
@@ -247,6 +252,8 @@ async fn annotate_audio_file(
         new_flag
     };
 
+    let runtime_cache = state.runtime_cache.clone();
+
     tokio::task::spawn_blocking(move || {
         let transcribe_model_enum =
             annotate::parse_whisper_model(&transcribe_model).map_err(|e| e.to_string())?;
@@ -274,11 +281,12 @@ async fn annotate_audio_file(
         };
 
         let reporter = Arc::new(TauriAnnotationProgressReporter { app_handle });
-        annotate::annotate_audio_with_reporter(
+        annotate::annotate_audio_with_reporter_cached(
             &file_path,
             annotate_params,
             reporter,
             Some(cancel_flag),
+            Some(runtime_cache),
         )
         .map_err(|e| e.to_string())
     })
@@ -324,6 +332,30 @@ async fn ensure_speaker_model_downloaded(model: String) -> std::result::Result<(
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
+}
+
+#[tauri::command]
+fn get_runtime_cache_stats(state: tauri::State<'_, AppState>) -> runtime_cache::RuntimeCacheStats {
+    state.runtime_cache.stats()
+}
+
+#[tauri::command]
+fn clear_runtime_cache(
+    state: tauri::State<'_, AppState>,
+    kind: String,
+) -> std::result::Result<(), String> {
+    match kind.as_str() {
+        "whisper" => state.runtime_cache.clear_whisper(),
+        "speaker" => state.runtime_cache.clear_speaker(),
+        "all" => state.runtime_cache.clear_all(),
+        _ => {
+            return Err(format!(
+                "Invalid cache kind: {} (expected whisper|speaker|all)",
+                kind
+            ))
+        }
+    }
+    Ok(())
 }
 
 fn parse_whisper_model(s: &str) -> Option<WhisperModel> {
@@ -908,6 +940,7 @@ pub fn run() {
             cancel_inference: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancel_download: Mutex::new(Arc::new(AtomicBool::new(false))),
             is_downloading: Arc::new(AtomicBool::new(false)),
+            runtime_cache: runtime_cache::global_runtime_cache(),
         })
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -920,6 +953,8 @@ pub fn run() {
             validate_model_selection,
             list_speaker_model_requirements,
             ensure_speaker_model_downloaded,
+            get_runtime_cache_stats,
+            clear_runtime_cache,
             translate_text_file,
             check_marian_pair_supported,
             resolve_translation_model,
