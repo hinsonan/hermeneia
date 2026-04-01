@@ -1,5 +1,8 @@
 use crate::audio::{decode_audio_file, prepare_speech_audio, SpeechAudio};
 use crate::error::{AudioError, Result};
+use crate::runtime_cache::{
+    global_runtime_cache, RuntimeCacheManager, SpeakerRuntime, SpeakerRuntimeKey,
+};
 use crate::speaker::{
     model::SpeakerModelManager,
     types::{validate_diarize_params, DiarizationResult, DiarizeParams, SpeakerSegment},
@@ -9,6 +12,31 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+const CUDA_WARMUP_DURATION_SEC: f32 = 2.0;
+const SPEECH_SAMPLE_RATE: usize = 16_000;
+
+fn should_attempt_warmup(
+    warmed_up: bool,
+    device: &crate::speaker::SpeakerDevice,
+    cancel: &Option<Arc<AtomicBool>>,
+) -> bool {
+    if warmed_up {
+        return false;
+    }
+    if !matches!(device, crate::speaker::SpeakerDevice::Cuda) {
+        return false;
+    }
+    !cancel
+        .as_ref()
+        .map(|c| c.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+fn warmup_sample_count(total_samples: usize) -> usize {
+    let warmup_samples = (CUDA_WARMUP_DURATION_SEC * SPEECH_SAMPLE_RATE as f32) as usize;
+    warmup_samples.min(total_samples)
+}
 
 /// Progress callback: (num_processed_chunks, num_total_chunks)
 pub type DiarizeProgressCallback = Box<dyn Fn(i32, i32) + Send + Sync>;
@@ -150,6 +178,70 @@ fn create_diarizer(
         .map_err(|e| AudioError::DiarizationFailed(e.to_string()))
 }
 
+fn load_speaker_runtime(
+    params: &DiarizeParams,
+    cancel: &Option<Arc<AtomicBool>>,
+    stage_progress: &Option<DiarizeStageProgressCallback>,
+) -> Result<SpeakerRuntime> {
+    let (seg_path, emb_path) = ensure_model_paths(params, cancel, stage_progress)?;
+    check_cancelled(cancel)?;
+
+    let diarize = create_diarizer(&seg_path, &emb_path, params, stage_progress)?;
+
+    Ok(SpeakerRuntime {
+        diarize,
+        provider: params.device.provider_string().to_string(),
+        warmed_up: false,
+    })
+}
+
+fn maybe_warmup_speaker_runtime(
+    runtime: &mut SpeakerRuntime,
+    device: &crate::speaker::SpeakerDevice,
+    speech_audio: &SpeechAudio,
+    cancel: &Option<Arc<AtomicBool>>,
+) {
+    if !should_attempt_warmup(runtime.warmed_up, device, cancel) {
+        if !matches!(device, crate::speaker::SpeakerDevice::Cuda) {
+            runtime.warmed_up = true;
+        }
+        return;
+    }
+
+    let samples_len = warmup_sample_count(speech_audio.samples_16k_mono.len());
+    if samples_len < SPEECH_SAMPLE_RATE / 2 {
+        runtime.warmed_up = true;
+        return;
+    }
+    let samples = speech_audio.samples_16k_mono[..samples_len].to_vec();
+
+    tracing::info!(
+        provider = %runtime.provider,
+        samples = samples.len(),
+        "Warming up cached speaker runtime"
+    );
+
+    let warmup_start = Instant::now();
+    let result = runtime.diarize.compute(samples, None);
+    let warmup_ms = warmup_start.elapsed().as_millis();
+
+    match result {
+        Ok(_) => {
+            tracing::info!(warmup_ms, "Speaker runtime warmup completed");
+        }
+        Err(e) => {
+            tracing::warn!(
+                warmup_ms,
+                error = %e,
+                "Speaker runtime warmup failed; continuing without warmup"
+            );
+        }
+    }
+
+    // Mark attempted regardless of outcome so we only pay this once.
+    runtime.warmed_up = true;
+}
+
 fn compute_speaker_segments(
     sd: &mut Diarize,
     speech_audio: &SpeechAudio,
@@ -271,6 +363,22 @@ pub fn diarize_prepared_audio_with_callbacks(
     callbacks: DiarizeCallbacks,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<DiarizationResult> {
+    diarize_prepared_audio_with_callbacks_cached(
+        speech_audio,
+        params,
+        callbacks,
+        cancel,
+        Some(global_runtime_cache()),
+    )
+}
+
+pub fn diarize_prepared_audio_with_callbacks_cached(
+    speech_audio: &SpeechAudio,
+    params: DiarizeParams,
+    callbacks: DiarizeCallbacks,
+    cancel: Option<Arc<AtomicBool>>,
+    runtime_cache: Option<Arc<RuntimeCacheManager>>,
+) -> Result<DiarizationResult> {
     let start = Instant::now();
     validate_diarize_params(&params)?;
     check_cancelled(&cancel)?;
@@ -278,25 +386,44 @@ pub fn diarize_prepared_audio_with_callbacks(
     let device_name = params.device.provider_string().to_string();
     let model_name = params.model.display_name().to_string();
 
-    let (seg_path, emb_path) = ensure_model_paths(&params, &cancel, &callbacks.stage_progress)?;
-    check_cancelled(&cancel)?;
-
     tracing::info!(
         "Running diarization with {} model on {}...",
         model_name,
         device_name
     );
 
-    let mut sd = create_diarizer(&seg_path, &emb_path, &params, &callbacks.stage_progress)?;
-    check_cancelled(&cancel)?;
+    let result_segments = if let Some(cache) = runtime_cache {
+        let key = SpeakerRuntimeKey {
+            model: params.model.clone(),
+            device: params.device.clone(),
+        };
 
-    let result_segments = compute_speaker_segments(
-        &mut sd,
-        speech_audio,
-        callbacks.chunk_progress,
-        callbacks.stage_progress.clone(),
-        cancel.clone(),
-    )?;
+        cache.with_speaker_runtime(
+            key,
+            || load_speaker_runtime(&params, &cancel, &callbacks.stage_progress),
+            |runtime| {
+                maybe_warmup_speaker_runtime(runtime, &params.device, speech_audio, &cancel);
+                compute_speaker_segments(
+                    &mut runtime.diarize,
+                    speech_audio,
+                    callbacks.chunk_progress,
+                    callbacks.stage_progress.clone(),
+                    cancel.clone(),
+                )
+            },
+        )?
+    } else {
+        let mut runtime = load_speaker_runtime(&params, &cancel, &callbacks.stage_progress)?;
+        maybe_warmup_speaker_runtime(&mut runtime, &params.device, speech_audio, &cancel);
+        compute_speaker_segments(
+            &mut runtime.diarize,
+            speech_audio,
+            callbacks.chunk_progress,
+            callbacks.stage_progress.clone(),
+            cancel.clone(),
+        )?
+    };
+
     check_cancelled(&cancel)?;
 
     emit_stage(
@@ -324,7 +451,10 @@ pub fn diarize_prepared_audio_with_callbacks(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::audio::{convert_to_mono, resample_to_16khz};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     #[test]
     fn test_convert_to_mono_passthrough() {
@@ -346,5 +476,33 @@ mod tests {
         let samples = vec![0.1f32, 0.2, 0.3];
         let out = resample_to_16khz(&samples, 16000).unwrap();
         assert_eq!(out, samples);
+    }
+
+    #[test]
+    fn test_should_skip_warmup_when_already_warmed() {
+        let cancel = None;
+        let should = should_attempt_warmup(true, &crate::speaker::SpeakerDevice::Cuda, &cancel);
+        assert!(!should);
+    }
+
+    #[test]
+    fn test_should_skip_warmup_on_cpu() {
+        let cancel = None;
+        let should = should_attempt_warmup(false, &crate::speaker::SpeakerDevice::Cpu, &cancel);
+        assert!(!should);
+    }
+
+    #[test]
+    fn test_should_skip_warmup_when_cancelled() {
+        let cancel = Some(Arc::new(AtomicBool::new(true)));
+        let should = should_attempt_warmup(false, &crate::speaker::SpeakerDevice::Cuda, &cancel);
+        assert!(!should);
+    }
+
+    #[test]
+    fn test_warmup_sample_window_bounds() {
+        let max_samples = (CUDA_WARMUP_DURATION_SEC * SPEECH_SAMPLE_RATE as f32) as usize;
+        assert_eq!(warmup_sample_count(100), 100);
+        assert_eq!(warmup_sample_count(max_samples + 10_000), max_samples);
     }
 }

@@ -3,6 +3,9 @@ use crate::audio::{
     DecodeProgressCallback, SpeechAudio,
 };
 use crate::error::{AudioError, Result};
+use crate::runtime_cache::{
+    global_runtime_cache, RuntimeCacheManager, WhisperRuntime, WhisperRuntimeKey,
+};
 use crate::transcribe::{
     decoder::Decoder,
     language::detect_language,
@@ -33,6 +36,115 @@ fn check_cancelled(cancel_flag: &Option<Arc<AtomicBool>>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn should_auto_detect_language(
+    model: crate::transcribe::WhisperModel,
+    language: Option<&str>,
+) -> bool {
+    model.is_multilingual() && language.is_none()
+}
+
+fn build_whisper_runtime_key(params: &TranscribeParams) -> WhisperRuntimeKey {
+    WhisperRuntimeKey {
+        model: params.model,
+        force_cpu: params.force_cpu,
+        use_quantized: params.use_quantized,
+    }
+}
+
+fn load_whisper_runtime(params: &TranscribeParams) -> Result<WhisperRuntime> {
+    let model_manager = ModelManager::new()?;
+    let model_files = model_manager.ensure_model(params.model, params.use_quantized)?;
+    let device = get_device(params.force_cpu)?;
+    tracing::info!("Using device: {}", device_name(&device));
+
+    let (config, tokenizer, model) =
+        load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
+
+    Ok(WhisperRuntime {
+        config,
+        tokenizer,
+        model,
+        device,
+    })
+}
+
+fn run_with_whisper_runtime<P: ProgressReporter>(
+    runtime: &mut WhisperRuntime,
+    speech_audio: &SpeechAudio,
+    params: &TranscribeParams,
+    reporter: &P,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> Result<(Vec<crate::transcribe::TranscriptSegment>, String)> {
+    check_cancelled(&cancel_flag)?;
+
+    let mel = preprocess_speech_audio(speech_audio, &runtime.config, &runtime.device)?;
+    check_cancelled(&cancel_flag)?;
+
+    let language_token = if should_auto_detect_language(params.model, params.language.as_deref()) {
+        tracing::info!("Auto-detecting language...");
+        Some(detect_language(
+            &mut runtime.model,
+            &runtime.tokenizer,
+            &mel,
+            &runtime.device,
+        )?)
+    } else {
+        match (params.model.is_multilingual(), &params.language) {
+            (false, None) => None,
+            (true, Some(lang)) => {
+                let token = runtime
+                    .tokenizer
+                    .token_to_id(&format!("<|{lang}|>"))
+                    .ok_or_else(|| {
+                        AudioError::TranscriptionFailed(format!(
+                            "Language '{}' not supported",
+                            lang
+                        ))
+                    })?;
+                Some(token)
+            }
+            (false, Some(lang)) => {
+                tracing::warn!(
+                "Ignoring language '{}' for English-only model; these models only support English",
+                lang
+            );
+                None
+            }
+            (true, None) => None,
+        }
+    };
+
+    let reporter_ptr = reporter as *const P as usize;
+    let callback: ProgressCallback = Box::new(move |current, total| unsafe {
+        let reporter_ref = &*(reporter_ptr as *const P);
+        reporter_ref.report(current, total);
+    });
+
+    let mut params_with_token = params.clone();
+    params_with_token.language = None;
+    let mut decoder = Decoder::new_with_language_token(
+        &mut runtime.model,
+        &runtime.tokenizer,
+        &runtime.config,
+        &runtime.device,
+        &params_with_token,
+        language_token,
+    )?;
+
+    let raw_segments = decoder.run(&mel, Some(callback), cancel_flag)?;
+    let segments = decoder.extract_segments(raw_segments);
+
+    let text = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    crate::gpu_cleanup::synchronize_device(&runtime.device);
+
+    Ok((segments, text))
 }
 
 /// Main transcription function
@@ -197,98 +309,55 @@ pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter>(
     reporter: &P,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranscriptResult> {
+    transcribe_prepared_audio_with_reporter_cached(
+        speech_audio,
+        params,
+        reporter,
+        cancel_flag,
+        Some(global_runtime_cache()),
+    )
+}
+
+pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
+    speech_audio: &SpeechAudio,
+    params: TranscribeParams,
+    reporter: &P,
+    cancel_flag: Option<Arc<AtomicBool>>,
+    runtime_cache: Option<Arc<RuntimeCacheManager>>,
+) -> Result<TranscriptResult> {
     let start_time = Instant::now();
     let duration = speech_audio.duration_seconds;
 
     check_cancelled(&cancel_flag)?;
 
-    // Download/load model
-    let model_manager = ModelManager::new()?;
-    let model_files = model_manager.ensure_model(params.model, params.use_quantized)?;
+    let (segments, text) = if let Some(cache) = runtime_cache {
+        let key = build_whisper_runtime_key(&params);
 
-    check_cancelled(&cancel_flag)?;
-
-    let device = get_device(params.force_cpu)?;
-    tracing::info!("Using device: {}", device_name(&device));
-
-    // Scope model lifetime so GPU memory is freed before building result
-    let (segments, text) = {
-        // Load model and tokenizer
-        let (config, tokenizer, mut model) =
-            load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
-
-        check_cancelled(&cancel_flag)?;
-
-        // Preprocess to mel-spectrogram (needs config for mel bins)
-        let mel = preprocess_speech_audio(speech_audio, &config, &device)?;
-
-        check_cancelled(&cancel_flag)?;
-
-        // Detect language if not specified and model is multilingual
-        let language_token = match (params.model.is_multilingual(), &params.language) {
-            (true, None) => {
-                tracing::info!("Auto-detecting language...");
-                Some(detect_language(&mut model, &tokenizer, &mel, &device)?)
-            }
-            (false, None) => None,
-            (true, Some(lang)) => {
-                let token = tokenizer
-                    .token_to_id(&format!("<|{lang}|>"))
-                    .ok_or_else(|| {
-                        AudioError::TranscriptionFailed(format!(
-                            "Language '{}' not supported",
-                            lang
-                        ))
-                    })?;
-                Some(token)
-            }
-            (false, Some(lang)) => {
-                // English-only models don't support language selection - ignore and continue
-                tracing::warn!(
-                    "Ignoring language '{}' for English-only model; these models only support English",
-                    lang
-                );
-                None
-            }
-        };
-
-        // Use raw pointer to avoid lifetime issues with the closure
-        let reporter_ptr = reporter as *const P as usize;
-
-        let callback: ProgressCallback = Box::new(move |current, total| unsafe {
-            let reporter_ref = &*(reporter_ptr as *const P);
-            reporter_ref.report(current, total);
-        });
-
-        // Run inference with full decoder
-        let mut params_with_token = params.clone();
-        params_with_token.language = None;
-        let mut decoder = Decoder::new_with_language_token(
-            &mut model,
-            &tokenizer,
-            &config,
-            &device,
-            &params_with_token,
-            language_token,
-        )?;
-        let raw_segments = decoder.run(&mel, Some(callback), cancel_flag)?;
-        let segments = decoder.extract_segments(raw_segments);
-
-        // Signal completion
-        reporter.finish();
-
-        let text = segments
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        // Sync GPU before model/mel/decoder drop at end of scope
-        crate::gpu_cleanup::synchronize_device(&device);
-        tracing::info!("Model resources released from {}", device_name(&device));
-
-        (segments, text)
+        cache.with_whisper_runtime(
+            key,
+            || load_whisper_runtime(&params),
+            |runtime| {
+                run_with_whisper_runtime(
+                    runtime,
+                    speech_audio,
+                    &params,
+                    reporter,
+                    cancel_flag.clone(),
+                )
+            },
+        )?
+    } else {
+        let mut runtime = load_whisper_runtime(&params)?;
+        run_with_whisper_runtime(
+            &mut runtime,
+            speech_audio,
+            &params,
+            reporter,
+            cancel_flag.clone(),
+        )?
     };
+
+    reporter.finish();
 
     Ok(TranscriptResult {
         segments,
@@ -362,5 +431,38 @@ fn enrich_oom_error(error: AudioError, model: crate::transcribe::WhisperModel) -
             }
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcribe::{TranscribeParams, TranscriptionTask, WhisperModel};
+
+    #[test]
+    fn test_transcribe_uses_cache_key_fields() {
+        let params = TranscribeParams {
+            model: WhisperModel::Small,
+            task: TranscriptionTask::Transcribe,
+            language: Some("en".to_string()),
+            timestamps: true,
+            force_cpu: true,
+            use_quantized: false,
+        };
+
+        let key = build_whisper_runtime_key(&params);
+        assert_eq!(key.model, WhisperModel::Small);
+        assert!(key.force_cpu);
+        assert!(!key.use_quantized);
+    }
+
+    #[test]
+    fn test_language_auto_detect_branching_logic() {
+        assert!(should_auto_detect_language(WhisperModel::Small, None));
+        assert!(!should_auto_detect_language(
+            WhisperModel::Small,
+            Some("en")
+        ));
+        assert!(!should_auto_detect_language(WhisperModel::SmallEn, None));
     }
 }

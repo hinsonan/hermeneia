@@ -5,7 +5,7 @@ use crate::error::{AudioError, Result};
 /// Available speaker diarization model bundles.
 /// Each bundle pairs the pyannote-segmentation-3.0 segmentation model
 /// with a language-appropriate 3DSpeaker embedding model.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpeakerModel {
     /// English-optimized: 3DSpeaker ERes2Net trained on VoxCeleb (~26.5 MB embedding)
     #[default]
@@ -63,7 +63,7 @@ impl SpeakerModel {
 }
 
 /// Inference device / execution provider for ONNX Runtime
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpeakerDevice {
     /// CPU inference (stable, default)
     #[default]
