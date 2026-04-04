@@ -2,7 +2,7 @@ name: Deploy GitHub Pages
 
 on:
   push:
-    branches: [master, 20-create-github-pages-site-and-publish-workflow]
+    branches: [master]
     paths:
       - website/**
   workflow_dispatch:
