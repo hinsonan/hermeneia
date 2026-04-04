@@ -4,6 +4,7 @@
 //! them with progress events, cancelling downloads, and managing the cache.
 
 use crate::error::{AudioError, Result};
+use crate::hf_cache::hf_hub_cache_dir;
 use crate::transcribe::WhisperModel;
 use crate::translate::catalog::{load_model_catalog, CatalogModel, ModelFamily};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -49,10 +50,7 @@ pub struct ModelInfo {
 
 /// Get the HuggingFace hub cache directory (cross-platform).
 fn hf_cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("huggingface")
-        .join("hub")
+    hf_hub_cache_dir()
 }
 
 /// Convert a HuggingFace model id (e.g. "openai/whisper-tiny") to its cache

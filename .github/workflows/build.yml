@@ -382,8 +382,50 @@ jobs:
 
       - run: npm ci
 
+      - name: Stage Sherpa runtime DLLs for CPU bundle
+        shell: pwsh
+        run: |
+          if (-not $env:SHERPA_LIB_PATH) {
+            throw "SHERPA_LIB_PATH is not set"
+          }
+
+          $cpuDllDir = "src-tauri\cpu-libs"
+          New-Item -ItemType Directory -Force -Path $cpuDllDir | Out-Null
+
+          $sherpaLibDir = Join-Path $env:SHERPA_LIB_PATH "lib"
+          $sherpaBinDir = Join-Path $env:SHERPA_LIB_PATH "bin"
+
+          if (Test-Path $sherpaBinDir) {
+            $binDlls = @(Get-ChildItem (Join-Path $sherpaBinDir "*.dll") -File -ErrorAction Stop)
+            if ($binDlls.Count -gt 0) {
+              $binDlls | Copy-Item -Destination $cpuDllDir -Force -ErrorAction Stop
+            }
+            else {
+              Write-Warning "No DLL files found in $sherpaBinDir"
+            }
+          }
+          if (Test-Path $sherpaLibDir) {
+            $libDlls = @(Get-ChildItem (Join-Path $sherpaLibDir "*.dll") -File -ErrorAction Stop)
+            if ($libDlls.Count -gt 0) {
+              $libDlls | Copy-Item -Destination $cpuDllDir -Force -ErrorAction Stop
+            }
+            else {
+              Write-Warning "No DLL files found in $sherpaLibDir"
+            }
+          }
+
+          $requiredCpuDlls = @(
+            "sherpa-onnx-c-api.dll",
+            "onnxruntime.dll"
+          )
+          foreach ($dll in $requiredCpuDlls) {
+            if (-not (Test-Path (Join-Path $cpuDllDir $dll))) {
+              throw "Missing required CPU runtime DLL in ${cpuDllDir}: $dll"
+            }
+          }
+
       - name: Build Tauri (CPU)
-        run: npx tauri build --bundles nsis -- --no-default-features
+        run: npx tauri build --config src-tauri/tauri.cpu.windows.conf.json --bundles nsis -- --no-default-features
 
       - uses: actions/upload-artifact@v4
         with:

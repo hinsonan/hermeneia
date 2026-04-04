@@ -1,4 +1,5 @@
 use crate::error::{AudioError, Result};
+use crate::hf_cache::hf_hub_cache_dir;
 use crate::transcribe::types::{ModelFiles, WhisperModel};
 use candle_core::Device;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -77,11 +78,7 @@ impl ModelManager {
 
     /// Get cache directory path
     pub fn cache_dir(&self) -> std::path::PathBuf {
-        // HuggingFace cache is typically at ~/.cache/huggingface/hub
-        dirs::cache_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("huggingface")
-            .join("hub")
+        hf_hub_cache_dir()
     }
 }
 
