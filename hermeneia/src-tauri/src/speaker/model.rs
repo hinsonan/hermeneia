@@ -1,4 +1,5 @@
 use crate::error::{AudioError, Result};
+use crate::hf_cache::hf_hub_cache_dir;
 use crate::speaker::types::SpeakerModel;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use std::path::PathBuf;
@@ -49,10 +50,7 @@ impl SpeakerModelManager {
     /// True if both model repos have been fetched to the hf-hub cache.
     /// Checks for the blobs directory as a proxy for downloaded content.
     pub fn is_cached(model: &SpeakerModel) -> bool {
-        let base = dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from(".cache"))
-            .join("huggingface")
-            .join("hub");
+        let base = hf_hub_cache_dir();
 
         let (seg_repo, _) = model.segmentation_source();
         let (emb_repo, _) = model.embedding_source();
