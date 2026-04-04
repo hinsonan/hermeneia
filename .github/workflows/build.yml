@@ -396,10 +396,22 @@ jobs:
           $sherpaBinDir = Join-Path $env:SHERPA_LIB_PATH "bin"
 
           if (Test-Path $sherpaBinDir) {
-            Copy-Item (Join-Path $sherpaBinDir "*.dll") $cpuDllDir -Force -ErrorAction SilentlyContinue
+            $binDlls = @(Get-ChildItem (Join-Path $sherpaBinDir "*.dll") -File -ErrorAction Stop)
+            if ($binDlls.Count -gt 0) {
+              $binDlls | Copy-Item -Destination $cpuDllDir -Force -ErrorAction Stop
+            }
+            else {
+              Write-Warning "No DLL files found in $sherpaBinDir"
+            }
           }
           if (Test-Path $sherpaLibDir) {
-            Copy-Item (Join-Path $sherpaLibDir "*.dll") $cpuDllDir -Force -ErrorAction SilentlyContinue
+            $libDlls = @(Get-ChildItem (Join-Path $sherpaLibDir "*.dll") -File -ErrorAction Stop)
+            if ($libDlls.Count -gt 0) {
+              $libDlls | Copy-Item -Destination $cpuDllDir -Force -ErrorAction Stop
+            }
+            else {
+              Write-Warning "No DLL files found in $sherpaLibDir"
+            }
           }
 
           $requiredCpuDlls = @(
