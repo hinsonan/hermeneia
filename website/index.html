@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hermeneia — Divine Word Transcription & Translation</title>
+    <meta name="description" content="Hermeneia is a desktop app for accurate audio transcription and multilingual translation with offline-first workflows and optional NVIDIA/Metal acceleration." />
+    <meta name="keywords" content="transcription, translation, audio, desktop app, offline, multilingual, nvidia, metal" />
+
+    <link rel="icon" type="image/png" href="assets/logo-32x32.png" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" aria-label="Toggle dark mode">
+      <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="5" />
+        <line x1="12" y1="1" x2="12" y2="3" />
+        <line x1="12" y1="21" x2="12" y2="23" />
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+        <line x1="1" y1="12" x2="3" y2="12" />
+        <line x1="21" y1="12" x2="23" y2="12" />
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+      </svg>
+      <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+      </svg>
+    </button>
+
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="#hero" class="nav-logo">
+          <img src="assets/logo.png" alt="Hermeneia Logo" class="nav-logo-img" />
+          <span>Hermeneia</span>
+        </a>
+        <ul class="nav-links">
+          <li><a href="#features">Features</a></li>
+          <li><a href="#download">Download</a></li>
+          <li><a href="https://github.com/hinsonan/hermeneia" target="_blank" rel="noopener">GitHub</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <section id="hero" class="hero">
+      <div class="hero-inner">
+        <div class="hero-content">
+          <div class="hero-copy">
+            <p class="hero-subtitle">The Word, Decoded</p>
+            <h1 class="hero-title">Hermeneia</h1>
+            <p class="hero-description">
+              Hermeneia turns recorded speech into clean text, then translates it
+              across common languages like <strong>English, Spanish, French, German, Portuguese, Arabic, Hindi, Chinese, and Japanese</strong>. Built for real-world
+              ministry, students, teachers, and administrators with optional NVIDIA and Metal acceleration.
+            </p>
+            <div class="hero-actions">
+              <a href="#download" class="btn btn-primary">Download</a>
+              <a href="https://github.com/hinsonan/hermeneia" class="btn btn-secondary" target="_blank" rel="noopener">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                View on GitHub
+              </a>
+            </div>
+          </div>
+
+          <div class="hero-banner-container">
+            <picture>
+              <source
+                type="image/webp"
+                srcset="assets/banner-960.webp 960w, assets/banner-1600.webp 1600w"
+                sizes="(max-width: 1024px) 92vw, 56vw"
+              />
+              <img
+                src="assets/banner-1600.webp"
+                alt="Hermeneia application artwork"
+                class="hero-banner"
+                width="1600"
+                height="1600"
+                fetchpriority="high"
+                decoding="async"
+              />
+            </picture>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="ornamental-divider">
+      <span class="divider-line"></span>
+      <span class="divider-symbol">
+        <svg viewBox="0 0 28 28" width="28" height="28">
+          <line x1="14" y1="26" x2="14" y2="4" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M14 21 C11 19, 8 18, 6 15" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 21 C17 19, 20 18, 22 15" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 15 C12 13, 9 12, 7 9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 15 C16 13, 19 12, 21 9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 9 C13 7, 11 5, 10 3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 9 C15 7, 17 5, 18 3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <circle cx="6" cy="15" r="1.3" fill="currentColor"/>
+          <circle cx="22" cy="15" r="1.3" fill="currentColor"/>
+          <circle cx="7" cy="9" r="1.3" fill="currentColor"/>
+          <circle cx="21" cy="9" r="1.3" fill="currentColor"/>
+          <circle cx="10" cy="3" r="1.3" fill="currentColor"/>
+          <circle cx="18" cy="3" r="1.3" fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="divider-line"></span>
+    </div>
+
+    <section id="features" class="features">
+      <div class="features-inner">
+        <h2 class="section-title">Features</h2>
+        <p class="section-description">
+          Everything you need to transcribe, translate, and edit audio — all offline, all on your machine.
+        </p>
+
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            </div>
+            <h3>Accurate Transcription</h3>
+            <p>Convert speech to clear text with high accuracy and punctuation-aware output. Supports MP3, WAV, FLAC, OGG, M4A, and AAC.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 8l6 6" />
+                <path d="M4 14l6-6 2-3" />
+                <path d="M2 5h12" />
+                <path d="M7 2h1" />
+                <path d="M22 22l-5-10-5 10" />
+                <path d="M14 18h6" />
+              </svg>
+            </div>
+            <h3>Multilingual Translation</h3>
+            <p>Translate between common language pairs like English-Spanish, English-French, English-German, English-Portuguese, English-Arabic, English-Hindi, and English-Chinese.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="6" width="20" height="12" rx="2" />
+                <path d="M12 12h.01" />
+                <path d="M17 12h.01" />
+                <path d="M7 12h.01" />
+              </svg>
+            </div>
+            <h3>Accelerated Processing</h3>
+            <p>Optional NVIDIA and Apple Metal acceleration for faster transcription and translation on supported systems.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 12h2l3-9 4 18 4-18 3 9h2" />
+              </svg>
+            </div>
+            <h3>Audio Editor</h3>
+            <p>Visual waveform editor with precise trimming. Select regions and cut audio with frame-level accuracy.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </div>
+            <h3>Export & Share</h3>
+            <p>Save transcripts and translations as professional SRT captions with precise timestamps, or export to plain text for easy editing and sharing.</p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
+              </svg>
+            </div>
+            <h3>Cross-Platform</h3>
+            <p>Native desktop apps for Linux, macOS, and Windows. Fully offline operation keeps sensitive audio and transcripts on your machine.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="ornamental-divider">
+      <span class="divider-line"></span>
+      <span class="divider-symbol">
+        <svg viewBox="0 0 28 28" width="28" height="28">
+          <line x1="14" y1="26" x2="14" y2="4" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M14 21 C11 19, 8 18, 6 15" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 21 C17 19, 20 18, 22 15" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 15 C12 13, 9 12, 7 9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 15 C16 13, 19 12, 21 9" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 9 C13 7, 11 5, 10 3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M14 9 C15 7, 17 5, 18 3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <circle cx="6" cy="15" r="1.3" fill="currentColor"/>
+          <circle cx="22" cy="15" r="1.3" fill="currentColor"/>
+          <circle cx="7" cy="9" r="1.3" fill="currentColor"/>
+          <circle cx="21" cy="9" r="1.3" fill="currentColor"/>
+          <circle cx="10" cy="3" r="1.3" fill="currentColor"/>
+          <circle cx="18" cy="3" r="1.3" fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="divider-line"></span>
+    </div>
+
+    <section id="download" class="download">
+      <div class="download-inner">
+        <h2 class="section-title">Download</h2>
+        <p class="section-description">
+          Get the latest release for your platform. All packages are self-contained — no cloud services, no accounts needed.
+        </p>
+
+        <div class="download-options">
+          <div class="download-card">
+            <h3>Linux</h3>
+            <div class="download-links">
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="deb-cpu" target="_blank" rel="noopener">
+                <span class="dl-format">.deb</span>
+                <span class="dl-label">Debian / Ubuntu (CPU)</span>
+              </a>
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="deb-cuda" target="_blank" rel="noopener">
+                <span class="dl-format">.deb</span>
+                <span class="dl-label">Debian / Ubuntu (NVIDIA)</span>
+              </a>
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="rpm-cpu" target="_blank" rel="noopener">
+                <span class="dl-format">.rpm</span>
+                <span class="dl-label">Fedora / RHEL (CPU)</span>
+              </a>
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="rpm-cuda" target="_blank" rel="noopener">
+                <span class="dl-format">.rpm</span>
+                <span class="dl-label">Fedora / RHEL (NVIDIA)</span>
+              </a>
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="appimage-cpu" target="_blank" rel="noopener">
+                <span class="dl-format">.AppImage</span>
+                <span class="dl-label">Any distro (CPU)</span>
+              </a>
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="appimage-cuda" target="_blank" rel="noopener">
+                <span class="dl-format">.AppImage</span>
+                <span class="dl-label">Any distro (NVIDIA)</span>
+              </a>
+            </div>
+          </div>
+
+          <div class="download-card">
+            <h3>macOS</h3>
+            <div class="download-links">
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="dmg-aarch64" target="_blank" rel="noopener">
+                <span class="dl-format">.dmg</span>
+                <span class="dl-label">Apple Silicon (M1/M2/M3)</span>
+              </a>
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="dmg-x64" target="_blank" rel="noopener">
+                <span class="dl-format">.dmg</span>
+                <span class="dl-label">Intel Mac (x64)</span>
+              </a>
+            </div>
+            <p class="dl-note">Metal acceleration included automatically</p>
+          </div>
+
+          <div class="download-card">
+            <h3>Windows</h3>
+            <div class="download-links">
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="exe-cpu" target="_blank" rel="noopener">
+                <span class="dl-format">.exe</span>
+                <span class="dl-label">Standard Installer (CPU)</span>
+              </a>
+              <a href="https://github.com/hinsonan/hermeneia/releases/latest" class="dl-link" data-asset="exe-cuda" target="_blank" rel="noopener">
+                <span class="dl-format">.exe</span>
+                <span class="dl-label">NVIDIA GPU Installer</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <div class="download-cta">
+          <a href="https://github.com/hinsonan/hermeneia/releases" class="btn btn-primary" target="_blank" rel="noopener">
+            All Releases on GitHub
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        <div class="footer-ornament">&#x2720;</div>
+        <p class="footer-text">
+          Hermeneia is open-source software released under the GPL License.
+        </p>
+        <p class="footer-links">
+          <a href="https://github.com/hinsonan/hermeneia" target="_blank" rel="noopener">GitHub</a>
+          <span class="footer-sep">&#x00B7;</span>
+          <a href="https://github.com/hinsonan/hermeneia/issues" target="_blank" rel="noopener">Issues</a>
+          <span class="footer-sep">&#x00B7;</span>
+          <a href="https://github.com/hinsonan/hermeneia/blob/main/README.md" target="_blank" rel="noopener">Documentation</a>
+        </p>
+        <p class="footer-copy">Built for private, multilingual audio workflows</p>
+      </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+  </body>
+</html>
