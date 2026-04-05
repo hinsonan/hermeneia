@@ -182,13 +182,13 @@ fn load_speaker_runtime(
     params: &DiarizeParams,
     cancel: &Option<Arc<AtomicBool>>,
     stage_progress: &Option<DiarizeStageProgressCallback>,
-) -> Result<SpeakerRuntime> {
+) -> Result<crate::runtime_cache::SpeakerRuntime> {
     let (seg_path, emb_path) = ensure_model_paths(params, cancel, stage_progress)?;
     check_cancelled(cancel)?;
 
     let diarize = create_diarizer(&seg_path, &emb_path, params, stage_progress)?;
 
-    Ok(SpeakerRuntime {
+    Ok(crate::runtime_cache::SpeakerRuntime {
         diarize,
         provider: params.device.provider_string().to_string(),
         warmed_up: false,

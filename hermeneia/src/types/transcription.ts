@@ -10,6 +10,7 @@ export type TranscriptionPhase =
   | 'completed';
 
 export interface TranscriptionProgress {
+  job_id: string;
   phase: TranscriptionPhase;
   current: number | null;
   total: number | null;
@@ -82,6 +83,7 @@ export type AnnotationPhase =
   | 'completed';
 
 export interface AnnotationProgress {
+  job_id: string;
   phase: AnnotationPhase;
   current: number | null;
   total: number | null;
