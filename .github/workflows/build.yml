@@ -87,7 +87,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libasound2-dev patchelf
+            librsvg2-dev libasound2-dev patchelf libarchive-tools
 
       - name: Reset sherpa-rs build metadata
         run: |
@@ -118,10 +118,47 @@ jobs:
 
           echo "SHERPA_LIB_PATH=${GITHUB_WORKSPACE}/hermeneia/${extracted_dir}" >> "$GITHUB_ENV"
 
+      - name: Stage sherpa runtime libs for Linux bundles
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/sherpa-libs
+          cp -fL "$SHERPA_LIB_PATH/lib/libsherpa-onnx-c-api.so" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libsherpa-onnx-cxx-api.so" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libonnxruntime.so" src-tauri/sherpa-libs/
+          test -f src-tauri/sherpa-libs/libsherpa-onnx-c-api.so
+          test -f src-tauri/sherpa-libs/libsherpa-onnx-cxx-api.so
+          test -f src-tauri/sherpa-libs/libonnxruntime.so
+          ls -l src-tauri/sherpa-libs
+
       - run: npm ci
 
       - name: Build Tauri (CPU)
-        run: npm run build:cpu -- --verbose --bundles deb,rpm,appimage -- --no-default-features
+        run: |
+          RUSTFLAGS="-C link-args=-Wl,-rpath,\$ORIGIN/../lib/hermeneia:\$ORIGIN/../lib" \
+          LD_LIBRARY_PATH="$SHERPA_LIB_PATH/lib:$LD_LIBRARY_PATH" \
+          npm run build:cpu -- --config src-tauri/tauri.runtime-libs.conf.json --verbose --bundles deb,rpm,appimage -- --no-default-features
+
+      - name: Verify sherpa libs in deb/rpm payloads
+        run: |
+          set -euo pipefail
+
+          deb_files=(src-tauri/target/release/bundle/deb/*.deb)
+          rpm_files=(src-tauri/target/release/bundle/rpm/*.rpm)
+          test -e "${deb_files[0]}"
+          test -e "${rpm_files[0]}"
+
+          deb_file="${deb_files[0]}"
+          rpm_file="${rpm_files[0]}"
+
+          tmpdir="$(mktemp -d)"
+          bsdtar -xf "$deb_file" -C "$tmpdir"
+          deb_listing="$(bsdtar -tf "$tmpdir/data.tar.gz")"
+          rpm_listing="$(bsdtar -tf "$rpm_file")"
+
+          for lib in libsherpa-onnx-c-api.so libsherpa-onnx-cxx-api.so libonnxruntime.so; do
+            printf '%s\n' "$deb_listing" | grep -qx "usr/lib/hermeneia/$lib"
+            printf '%s\n' "$rpm_listing" | grep -qx "./usr/lib/hermeneia/$lib"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -1018,10 +1055,40 @@ jobs:
 
           echo "SHERPA_LIB_PATH=${GITHUB_WORKSPACE}/hermeneia/${extracted_dir}" >> "$GITHUB_ENV"
 
+      - name: Stage sherpa runtime libs for macOS bundles (Intel)
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/sherpa-libs
+          cp -fL "$SHERPA_LIB_PATH/lib/libsherpa-onnx-c-api.dylib" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libsherpa-onnx-cxx-api.dylib" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libonnxruntime.dylib" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libonnxruntime.1.17.1.dylib" src-tauri/sherpa-libs/
+          ls -l src-tauri/sherpa-libs
+
       - run: npm ci
 
       - name: Build Tauri (Intel)
-        run: npx tauri build --bundles dmg -- --no-default-features
+        run: |
+          RUSTFLAGS="-C link-arg=-Wl,-rpath,@executable_path/../Frameworks" \
+          npx tauri build --config src-tauri/tauri.runtime-libs.conf.json --bundles dmg -- --no-default-features
+
+      - name: Verify bundled sherpa dylibs (Intel)
+        run: |
+          set -euo pipefail
+          app_path="src-tauri/target/release/bundle/macos/hermeneia.app"
+          test -d "$app_path"
+          for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.dylib libonnxruntime.1.17.1.dylib; do
+            test -f "$app_path/Contents/Frameworks/$lib"
+          done
+          hermeneia_links="$(otool -L "$app_path/Contents/MacOS/hermeneia")"
+          printf '%s\n' "$hermeneia_links"
+          printf '%s\n' "$hermeneia_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+
+          if [ -f "$app_path/Contents/MacOS/speaker" ]; then
+            speaker_links="$(otool -L "$app_path/Contents/MacOS/speaker")"
+            printf '%s\n' "$speaker_links"
+            printf '%s\n' "$speaker_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -1083,10 +1150,40 @@ jobs:
 
           echo "SHERPA_LIB_PATH=${GITHUB_WORKSPACE}/hermeneia/${extracted_dir}" >> "$GITHUB_ENV"
 
+      - name: Stage sherpa runtime libs for macOS bundles (ARM)
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/sherpa-libs
+          cp -fL "$SHERPA_LIB_PATH/lib/libsherpa-onnx-c-api.dylib" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libsherpa-onnx-cxx-api.dylib" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libonnxruntime.dylib" src-tauri/sherpa-libs/
+          cp -fL "$SHERPA_LIB_PATH/lib/libonnxruntime.1.17.1.dylib" src-tauri/sherpa-libs/
+          ls -l src-tauri/sherpa-libs
+
       - run: npm ci
 
       - name: Build Tauri (Metal)
-        run: npx tauri build --features metal --bundles dmg -- --no-default-features
+        run: |
+          RUSTFLAGS="-C link-arg=-Wl,-rpath,@executable_path/../Frameworks" \
+          npx tauri build --config src-tauri/tauri.runtime-libs.conf.json --features metal --bundles dmg -- --no-default-features
+
+      - name: Verify bundled sherpa dylibs (ARM)
+        run: |
+          set -euo pipefail
+          app_path="src-tauri/target/release/bundle/macos/hermeneia.app"
+          test -d "$app_path"
+          for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.dylib libonnxruntime.1.17.1.dylib; do
+            test -f "$app_path/Contents/Frameworks/$lib"
+          done
+          hermeneia_links="$(otool -L "$app_path/Contents/MacOS/hermeneia")"
+          printf '%s\n' "$hermeneia_links"
+          printf '%s\n' "$hermeneia_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+
+          if [ -f "$app_path/Contents/MacOS/speaker" ]; then
+            speaker_links="$(otool -L "$app_path/Contents/MacOS/speaker")"
+            printf '%s\n' "$speaker_links"
+            printf '%s\n' "$speaker_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

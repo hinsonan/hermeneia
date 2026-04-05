@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/lib/hermeneia/libsherpa-onnx-c-api.so": "sherpa-libs/libsherpa-onnx-c-api.so",
+          "/usr/lib/hermeneia/libsherpa-onnx-cxx-api.so": "sherpa-libs/libsherpa-onnx-cxx-api.so",
+          "/usr/lib/hermeneia/libonnxruntime.so": "sherpa-libs/libonnxruntime.so"
+        }
+      },
+      "appimage": {
+        "files": {
+          "usr/lib/libsherpa-onnx-c-api.so": "sherpa-libs/libsherpa-onnx-c-api.so",
+          "usr/lib/libsherpa-onnx-cxx-api.so": "sherpa-libs/libsherpa-onnx-cxx-api.so",
+          "usr/lib/libonnxruntime.so": "sherpa-libs/libonnxruntime.so"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/lib/hermeneia/libsherpa-onnx-c-api.so": "sherpa-libs/libsherpa-onnx-c-api.so",
+          "/usr/lib/hermeneia/libsherpa-onnx-cxx-api.so": "sherpa-libs/libsherpa-onnx-cxx-api.so",
+          "/usr/lib/hermeneia/libonnxruntime.so": "sherpa-libs/libonnxruntime.so"
+        }
+      }
+    },
+    "macOS": {
+      "files": {
+        "Frameworks/libsherpa-onnx-c-api.dylib": "sherpa-libs/libsherpa-onnx-c-api.dylib",
+        "Frameworks/libsherpa-onnx-cxx-api.dylib": "sherpa-libs/libsherpa-onnx-cxx-api.dylib",
+        "Frameworks/libonnxruntime.dylib": "sherpa-libs/libonnxruntime.dylib",
+        "Frameworks/libonnxruntime.1.17.1.dylib": "sherpa-libs/libonnxruntime.1.17.1.dylib"
+      }
+    }
+  }
+}
