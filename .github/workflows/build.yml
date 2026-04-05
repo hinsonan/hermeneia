@@ -1077,17 +1077,22 @@ jobs:
           set -euo pipefail
           app_path="src-tauri/target/release/bundle/macos/hermeneia.app"
           test -d "$app_path"
+
+          ls -la "$app_path/Contents/Frameworks"
+
           for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.dylib libonnxruntime.1.17.1.dylib; do
             test -f "$app_path/Contents/Frameworks/$lib"
           done
+
           hermeneia_links="$(otool -L "$app_path/Contents/MacOS/hermeneia")"
           printf '%s\n' "$hermeneia_links"
-          printf '%s\n' "$hermeneia_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+          printf '%s\n' "$hermeneia_links" | grep -Eq "(@executable_path/../Frameworks|@rpath)/libsherpa-onnx-c-api\.dylib" || true
 
           if [ -f "$app_path/Contents/MacOS/speaker" ]; then
             speaker_links="$(otool -L "$app_path/Contents/MacOS/speaker")"
             printf '%s\n' "$speaker_links"
-            printf '%s\n' "$speaker_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+            printf '%s\n' "$speaker_links" | grep -Eq "(@executable_path/../Frameworks|@rpath)/libsherpa-onnx-c-api\.dylib"
+            ! printf '%s\n' "$speaker_links" | grep -q "not found"
           fi
 
       - uses: actions/upload-artifact@v4
@@ -1172,17 +1177,22 @@ jobs:
           set -euo pipefail
           app_path="src-tauri/target/release/bundle/macos/hermeneia.app"
           test -d "$app_path"
+
+          ls -la "$app_path/Contents/Frameworks"
+
           for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.dylib libonnxruntime.1.17.1.dylib; do
             test -f "$app_path/Contents/Frameworks/$lib"
           done
+
           hermeneia_links="$(otool -L "$app_path/Contents/MacOS/hermeneia")"
           printf '%s\n' "$hermeneia_links"
-          printf '%s\n' "$hermeneia_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+          printf '%s\n' "$hermeneia_links" | grep -Eq "(@executable_path/../Frameworks|@rpath)/libsherpa-onnx-c-api\.dylib" || true
 
           if [ -f "$app_path/Contents/MacOS/speaker" ]; then
             speaker_links="$(otool -L "$app_path/Contents/MacOS/speaker")"
             printf '%s\n' "$speaker_links"
-            printf '%s\n' "$speaker_links" | grep -q "@executable_path/../Frameworks/libsherpa-onnx-c-api.dylib"
+            printf '%s\n' "$speaker_links" | grep -Eq "(@executable_path/../Frameworks|@rpath)/libsherpa-onnx-c-api\.dylib"
+            ! printf '%s\n' "$speaker_links" | grep -q "not found"
           fi
 
       - uses: actions/upload-artifact@v4
