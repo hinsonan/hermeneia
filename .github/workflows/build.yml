@@ -120,35 +120,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Build Tauri (CPU deb/rpm)
-        run: npm run build:cpu -- --bundles deb,rpm -- --no-default-features
-
-      - name: Build Tauri (CPU appimage with retry)
-        run: |
-          set -euo pipefail
-
-          max_attempts=3
-          attempt=1
-
-          until [ "$attempt" -gt "$max_attempts" ]; do
-            echo "AppImage build attempt ${attempt}/${max_attempts}"
-
-            if npm run build:cpu -- --bundles appimage -- --no-default-features; then
-              exit 0
-            fi
-
-            if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "AppImage build failed after ${max_attempts} attempts."
-              exit 1
-            fi
-
-            echo "AppImage build failed. Clearing Tauri bundler cache before retry..."
-            rm -f ~/.cache/tauri/linuxdeploy* ~/.cache/tauri/appimagetool*
-            rm -rf src-tauri/target/release/bundle/appimage
-
-            attempt=$((attempt + 1))
-            sleep 5
-          done
+      - name: Build Tauri (CPU)
+        run: npm run build:cpu -- --verbose --bundles deb,rpm,appimage -- --no-default-features
 
       - uses: actions/upload-artifact@v4
         with:
@@ -224,7 +197,7 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      - name: Build CUDA bundles in Docker (deb/rpm)
+      - name: Build CUDA bundles in Docker
         run: |
           mkdir -p ~/.cargo-docker-cache/registry ~/.cargo-docker-cache/git
           docker run --rm \
@@ -249,59 +222,9 @@ jobs:
               cp -L ${SHERPA_LIB_PATH}/lib/libonnxruntime_providers_cuda.so src-tauri/cuda-libs/ &&
               npm ci &&
               export LD_LIBRARY_PATH=$(pwd)/src-tauri/cuda-libs:$(pwd)/src-tauri/target/release:$LD_LIBRARY_PATH &&
-              npx tauri build --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm -- --no-default-features --features cuda
+              npx tauri build --config src-tauri/tauri.cuda.conf.json --bundles deb,rpm,appimage -- --no-default-features --features cuda &&
+              sh /project/hermeneia/scripts/fix-appimage-cuda.sh /project/hermeneia/src-tauri/target/release/bundle/appimage
             '
-
-      - name: Build CUDA appimage in Docker (with retry)
-        run: |
-          set -euo pipefail
-
-          max_attempts=3
-          attempt=1
-
-          until [ "$attempt" -gt "$max_attempts" ]; do
-            echo "CUDA AppImage build attempt ${attempt}/${max_attempts}"
-
-            if docker run --rm \
-              -v "$GITHUB_WORKSPACE:/project" \
-              -v "$HOME/.cargo-docker-cache/registry:/root/.cargo/registry" \
-              -v "$HOME/.cargo-docker-cache/git:/root/.cargo/git" \
-              -w /project/hermeneia \
-              -e NO_STRIP=true \
-              -e APPIMAGE_EXTRACT_AND_RUN=1 \
-              -e "RUSTFLAGS=-C link-args=-Wl,-rpath,\$ORIGIN/../lib/hermeneia:\$ORIGIN/../lib" \
-              hermeneia-cuda-bundler:12.8 \
-              sh -c '
-                ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 &&
-                mkdir -p src-tauri/cuda-libs &&
-                cp /build/lib/libcudart.so.12 src-tauri/cuda-libs/ &&
-                cp /build/lib/libcublas.so.12 src-tauri/cuda-libs/ &&
-                cp /build/lib/libcublasLt.so.12 src-tauri/cuda-libs/ &&
-                cp /build/lib/libnvrtc.so.12 src-tauri/cuda-libs/ &&
-                cp /build/lib/libcurand.so.10 src-tauri/cuda-libs/ &&
-                cp -L /build/lib/libcudnn*.so.9* src-tauri/cuda-libs/ &&
-                cp -L ${SHERPA_LIB_PATH}/lib/libonnxruntime_providers_shared.so src-tauri/cuda-libs/ &&
-                cp -L ${SHERPA_LIB_PATH}/lib/libonnxruntime_providers_cuda.so src-tauri/cuda-libs/ &&
-                npm ci &&
-                export LD_LIBRARY_PATH=$(pwd)/src-tauri/cuda-libs:$(pwd)/src-tauri/target/release:$LD_LIBRARY_PATH &&
-                npx tauri build --config src-tauri/tauri.cuda.conf.json --bundles appimage -- --no-default-features --features cuda &&
-                sh /project/hermeneia/scripts/fix-appimage-cuda.sh /project/hermeneia/src-tauri/target/release/bundle/appimage
-              '
-            then
-              exit 0
-            fi
-
-            if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "CUDA AppImage build failed after ${max_attempts} attempts."
-              exit 1
-            fi
-
-            echo "CUDA AppImage build failed. Clearing bundle output before retry..."
-            rm -rf src-tauri/target/release/bundle/appimage
-
-            attempt=$((attempt + 1))
-            sleep 5
-          done
 
       - name: Rename CUDA artifacts
         run: |
