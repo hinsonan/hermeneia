@@ -1,6 +1,6 @@
 [package]
 name = "hermeneia"
-version = "2026.4.1"
+version = "2026.4.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
