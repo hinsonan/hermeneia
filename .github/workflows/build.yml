@@ -1079,7 +1079,6 @@ jobs:
           scripts/fix-macos-dylibs.sh src-tauri/target/release/bundle/macos/hermeneia.app
 
       - name: Verify bundled sherpa dylibs (Intel)
-        continue-on-error: true
         run: |
           set -euo pipefail
           app_path="src-tauri/target/release/bundle/macos/hermeneia.app"
@@ -1201,7 +1200,6 @@ jobs:
           scripts/fix-macos-dylibs.sh src-tauri/target/release/bundle/macos/hermeneia.app
 
       - name: Verify bundled sherpa dylibs (ARM)
-        continue-on-error: true
         run: |
           set -euo pipefail
           app_path="src-tauri/target/release/bundle/macos/hermeneia.app"
