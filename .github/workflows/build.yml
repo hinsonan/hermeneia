@@ -1067,10 +1067,16 @@ jobs:
 
       - run: npm ci
 
-      - name: Build Tauri (Intel)
+      - name: Build Tauri app (Intel)
         run: |
           RUSTFLAGS="-C link-arg=-Wl,-rpath,@executable_path/../Frameworks" \
-          npx tauri build --config src-tauri/tauri.runtime-libs.conf.json --bundles dmg -- --no-default-features
+          npx tauri build --config src-tauri/tauri.runtime-libs.conf.json --bundles app -- --no-default-features
+
+      - name: Fix macOS dylib linkage (Intel)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/fix-macos-dylibs.sh
+          scripts/fix-macos-dylibs.sh src-tauri/target/release/bundle/macos/hermeneia.app
 
       - name: Verify bundled sherpa dylibs (Intel)
         continue-on-error: true
@@ -1088,6 +1094,8 @@ jobs:
           hermeneia_links="$(otool -L "$app_path/Contents/MacOS/hermeneia")"
           printf '%s\n' "$hermeneia_links"
 
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
           if [ -f "$app_path/Contents/MacOS/speaker" ]; then
             speaker_links="$(otool -L "$app_path/Contents/MacOS/speaker")"
             printf '%s\n' "$speaker_links"
@@ -1098,6 +1106,16 @@ jobs:
             speaker_rpaths="$(otool -l "$app_path/Contents/MacOS/speaker")"
             printf '%s\n' "$speaker_rpaths" | grep -q "@executable_path/../Frameworks"
           fi
+
+      - name: Build DMG from fixed app (Intel)
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/target/release/bundle/dmg
+
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+
+          dmg_path="src-tauri/target/release/bundle/dmg/hermeneia_${version}_x64.dmg"
+          hdiutil create -volname "hermeneia" -srcfolder src-tauri/target/release/bundle/macos/hermeneia.app -ov -format UDZO "$dmg_path"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -1171,10 +1189,16 @@ jobs:
 
       - run: npm ci
 
-      - name: Build Tauri (Metal)
+      - name: Build Tauri app (Metal)
         run: |
           RUSTFLAGS="-C link-arg=-Wl,-rpath,@executable_path/../Frameworks" \
-          npx tauri build --config src-tauri/tauri.runtime-libs.conf.json --features metal --bundles dmg -- --no-default-features
+          npx tauri build --config src-tauri/tauri.runtime-libs.conf.json --features metal --bundles app -- --no-default-features
+
+      - name: Fix macOS dylib linkage (ARM)
+        run: |
+          set -euo pipefail
+          chmod +x scripts/fix-macos-dylibs.sh
+          scripts/fix-macos-dylibs.sh src-tauri/target/release/bundle/macos/hermeneia.app
 
       - name: Verify bundled sherpa dylibs (ARM)
         continue-on-error: true
@@ -1192,6 +1216,8 @@ jobs:
           hermeneia_links="$(otool -L "$app_path/Contents/MacOS/hermeneia")"
           printf '%s\n' "$hermeneia_links"
 
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
           if [ -f "$app_path/Contents/MacOS/speaker" ]; then
             speaker_links="$(otool -L "$app_path/Contents/MacOS/speaker")"
             printf '%s\n' "$speaker_links"
@@ -1202,6 +1228,16 @@ jobs:
             speaker_rpaths="$(otool -l "$app_path/Contents/MacOS/speaker")"
             printf '%s\n' "$speaker_rpaths" | grep -q "@executable_path/../Frameworks"
           fi
+
+      - name: Build DMG from fixed app (ARM)
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/target/release/bundle/dmg
+
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+
+          dmg_path="src-tauri/target/release/bundle/dmg/hermeneia_${version}_aarch64.dmg"
+          hdiutil create -volname "hermeneia" -srcfolder src-tauri/target/release/bundle/macos/hermeneia.app -ov -format UDZO "$dmg_path"
 
       - uses: actions/upload-artifact@v4
         with:
