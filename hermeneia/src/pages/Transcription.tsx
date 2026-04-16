@@ -2,10 +2,11 @@ import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup
 import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../utils/theme";
 import { formatTime } from "../utils/timeFormat";
 import FileUploader from "../components/FileUploader";
+import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranscriptionProgressBar from "../components/TranscriptionProgressBar";
 import InfoIcon from "../components/InfoIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -45,6 +46,7 @@ interface JobSettings {
 interface QueueJob {
   id: string;
   batchId: string;
+  createdAt: number;
   filePath: string;
   fileName: string;
   status: JobStatus;
@@ -121,8 +123,9 @@ const Transcription: Component = () => {
   const [selectedJobId, setSelectedJobId] = createSignal<string | null>(null);
   const [schedulerTick, setSchedulerTick] = createSignal(0);
   const [queueError, setQueueError] = createSignal<string | null>(null);
-  const [segmentsExpanded, setSegmentsExpanded] = createSignal(false);
   const [showCancelDialog, setShowCancelDialog] = createSignal(false);
+  const [showDefaults, setShowDefaults] = createSignal(false);
+  const [inspectorTab, setInspectorTab] = createSignal<"output" | "segments" | "speakers" | "export">("output");
 
   const [systemCapabilities, setSystemCapabilities] = createSignal<SystemCapabilities | null>(null);
   const [modelValidation, setModelValidation] = createSignal<ModelValidation | null>(null);
@@ -150,25 +153,14 @@ const Transcription: Component = () => {
   });
 
   const selectedJob = createMemo(() => queueJobs().find((job) => job.id === selectedJobId()) || null);
+  const jobTabs = createMemo(() => queueJobs().slice().sort((a, b) => a.createdAt - b.createdAt));
   const runningJobs = createMemo(() => queueJobs().filter((job) => job.status === "running"));
   const runningCount = createMemo(() => runningJobs().length);
   const queuedCount = createMemo(() => queueJobs().filter((job) => job.status === "queued").length);
   const completedCount = createMemo(() => queueJobs().filter((job) => job.status === "completed").length);
   const failedCount = createMemo(() => queueJobs().filter((job) => job.status === "failed").length);
-
-  const selectedAnnotatedSegmentsWithNames = createMemo(() => {
-    const job = selectedJob();
-    if (!job?.annotatedResult) return [];
-    return job.annotatedResult.segments.map((seg) => ({
-      ...seg,
-      speaker_name: job.speakerNames[String(seg.speaker)] || seg.speaker_name || `Speaker ${seg.speaker}`,
-    }));
-  });
-
-  const selectedSpeakerIds = createMemo(() => {
-    const ids = Array.from(new Set(selectedAnnotatedSegmentsWithNames().map((s) => s.speaker)));
-    return ids.sort((a, b) => a - b);
-  });
+  const cancelledCount = createMemo(() => queueJobs().filter((job) => job.status === "cancelled").length);
+  const totalJobsCount = createMemo(() => queueJobs().length);
 
   const statusLabel = (status: JobStatus): string => {
     if (status === "queued") return "Queued";
@@ -179,11 +171,39 @@ const Transcription: Component = () => {
   };
 
   const queueSummary = createMemo(() => [
+    { key: "total", label: "Total", value: totalJobsCount() },
     { key: "queued", label: "Queued", value: queuedCount() },
     { key: "running", label: "Running", value: runningCount() },
     { key: "completed", label: "Completed", value: completedCount() },
     { key: "failed", label: "Failed", value: failedCount() },
+    { key: "cancelled", label: "Cancelled", value: cancelledCount() },
   ]);
+
+  const getAnnotatedSegmentsWithNames = (job: QueueJob): AnnotatedResult["segments"] => {
+    if (!job.annotatedResult) return [];
+    return job.annotatedResult.segments.map((seg) => ({
+      ...seg,
+      speaker_name: job.speakerNames[String(seg.speaker)] || seg.speaker_name || `Speaker ${seg.speaker}`,
+    }));
+  };
+
+  const getSpeakerIdsForJob = (job: QueueJob): number[] => {
+    const ids = Array.from(new Set(getAnnotatedSegmentsWithNames(job).map((s) => s.speaker)));
+    return ids.sort((a, b) => a - b);
+  };
+
+  const selectedAnnotatedSegmentsWithNames = createMemo(() => {
+    const job = selectedJob();
+    if (!job) return [];
+    return getAnnotatedSegmentsWithNames(job);
+  });
+
+  const canShowSegmentsTab = createMemo(() => {
+    const job = selectedJob();
+    if (!job || job.status !== "completed") return false;
+    if (job.settings.mode === "annotate") return getAnnotatedSegmentsWithNames(job).length > 0;
+    return Boolean(job.settings.includeTimestamps && job.result?.segments.length);
+  });
 
   createEffect(() => {
     if (isEnglishOnlyModel()) {
@@ -209,6 +229,36 @@ const Transcription: Component = () => {
     maxConcurrency();
     schedulerTick();
     void scheduleQueue();
+  });
+
+  createEffect(() => {
+    const jobs = queueJobs();
+    const idSet = new Set(jobs.map((job) => job.id));
+    const activeSelected = selectedJobId();
+    if (activeSelected && !idSet.has(activeSelected)) {
+      setSelectedJobId(jobs[0]?.id || null);
+    }
+  });
+
+  createEffect(() => {
+    const job = selectedJob();
+    const tab = inspectorTab();
+
+    if (!job || job.status !== "completed") {
+      if (tab !== "output") {
+        setInspectorTab("output");
+      }
+      return;
+    }
+
+    if (tab === "segments" && !canShowSegmentsTab()) {
+      setInspectorTab("output");
+      return;
+    }
+
+    if (tab === "speakers" && job.settings.mode !== "annotate") {
+      setInspectorTab("output");
+    }
   });
 
   onMount(async () => {
@@ -244,6 +294,9 @@ const Transcription: Component = () => {
     try {
       const requirements = await invoke<SpeakerModelRequirement[]>("list_speaker_model_requirements");
       setSpeakerModelRequirements(requirements);
+      if (requirements.length > 0 && !requirements.find((r) => r.key === selectedSpeakerModel())) {
+        setSelectedSpeakerModel(requirements[0].key);
+      }
     } catch (err) {
       console.warn("Failed to load speaker model requirements:", err);
     }
@@ -298,9 +351,11 @@ const Transcription: Component = () => {
 
     const batchId = makeId();
     const settings = buildSettings();
-    const newJobs = normalized.map((path) => ({
+    const createdAtBase = Date.now();
+    const newJobs = normalized.map((path, index) => ({
       id: makeId(),
       batchId,
+      createdAt: createdAtBase + index,
       filePath: path,
       fileName: getBaseName(path),
       status: "queued" as JobStatus,
@@ -484,6 +539,29 @@ const Transcription: Component = () => {
     setSchedulerTick((value) => value + 1);
   };
 
+  const removeJob = (jobId: string) => {
+    const target = queueJobs().find((job) => job.id === jobId);
+    if (!target || target.status === "running") return;
+    const next = queueJobs().filter((job) => job.id !== jobId);
+    setQueueJobs(next);
+    if (selectedJobId() === jobId) {
+      setSelectedJobId(next[0]?.id || null);
+    }
+    setSchedulerTick((value) => value + 1);
+  };
+
+  const setJobToQueued = (jobId: string) => {
+    updateJob(jobId, (current) => ({
+      ...current,
+      status: "queued",
+      error: null,
+      progress: null,
+      result: null,
+      annotatedResult: null,
+    }));
+    setSchedulerTick((value) => value + 1);
+  };
+
   const formatTimestamp = (seconds: number | null): string => {
     if (seconds === null) return "--:--";
     const mins = Math.floor(seconds / 60);
@@ -501,9 +579,16 @@ const Transcription: Component = () => {
     return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")},${ms.toString().padStart(3, "0")}`;
   };
 
+  const getProgressPercent = (progress: JobProgress | null): number | null => {
+    if (!progress || progress.current === null || progress.total === null || progress.total === 0) {
+      return null;
+    }
+    return Math.min(100, Math.round((progress.current / progress.total) * 100));
+  };
+
   const getPlainTextContent = (job: QueueJob): string => {
     if (job.settings.mode === "annotate") {
-      return selectedAnnotatedSegmentsWithNames()
+      return getAnnotatedSegmentsWithNames(job)
         .map((seg) => {
           const startMin = Math.floor(seg.start / 60).toString().padStart(2, "0");
           const startSec = Math.floor(seg.start % 60).toString().padStart(2, "0");
@@ -516,7 +601,7 @@ const Transcription: Component = () => {
 
   const getSrtContent = (job: QueueJob): string => {
     if (job.settings.mode === "annotate") {
-      const segments = selectedAnnotatedSegmentsWithNames();
+      const segments = getAnnotatedSegmentsWithNames(job);
       if (segments.length === 0) return "";
       return segments
         .map((seg, index) => {
@@ -572,6 +657,50 @@ const Transcription: Component = () => {
     }));
   };
 
+  const openAddFilesDialog = async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        filters: [{
+          name: "Audio Files",
+          extensions: ["mp3", "wav", "flac", "m4a", "ogg"],
+        }],
+      });
+
+      if (!selected) return;
+      if (Array.isArray(selected)) {
+        enqueueFiles(selected);
+        return;
+      }
+
+      enqueueFiles([selected]);
+    } catch (err) {
+      console.error("Failed to add files:", err);
+      setQueueError("Could not open file picker. Please try again.");
+    }
+  };
+
+  const exportCompletedJobsBundle = async () => {
+    const completed = queueJobs().filter((job) => job.status === "completed");
+    if (completed.length === 0) return;
+
+    const lines: string[] = [];
+    completed.forEach((job, index) => {
+      const divider = "=".repeat(80);
+      lines.push(divider);
+      lines.push(`${index + 1}. ${job.fileName}`);
+      lines.push(`Mode: ${job.settings.mode === "annotate" ? "Annotate" : "Transcribe"}`);
+      lines.push(`Model: ${job.settings.model}`);
+      lines.push("");
+      lines.push(getPlainTextContent(job).trim());
+      lines.push("");
+    });
+
+    const bundleContent = lines.join("\n");
+    const defaultPath = `hermeneia_batch_${new Date().toISOString().slice(0, 10)}.txt`;
+    await exportToFile(defaultPath, ["txt"], bundleContent);
+  };
+
   const handleBack = () => {
     if (runningCount() > 0) {
       setShowCancelDialog(true);
@@ -605,9 +734,10 @@ const Transcription: Component = () => {
         </svg>
       </button>
 
-      <div class="scroll-container">
+      <div class="scroll-container transcription-scroll-container">
         <div class="scroll-rod"></div>
-        <main class="parchment">
+
+        <main class="parchment transcription-workbench parchment-batch-layout">
           <header class="page-header">
             <button class="back-button" onClick={handleBack}>
               <svg viewBox="0 0 24 24" width="20" height="20">
@@ -615,11 +745,99 @@ const Transcription: Component = () => {
               </svg>
               <span>Home</span>
             </button>
-            <h1>Transcription Queue</h1>
+
+            <div class="page-heading-group">
+              <h1>Transcription</h1>
+              <p class="page-subtitle">Single-page flow with batch tabs. Keep context, switch jobs instantly.</p>
+            </div>
           </header>
 
-          <section class="upload-section">
-            <FileUploader multiple onFilesSelected={enqueueFiles} />
+          <section class="batch-command-bar job-tabs-panel">
+            <div class="job-tabs-header">
+              <div class="command-title-block">
+                <span class="command-kicker">Batch Controls</span>
+                <h2>Job Tabs</h2>
+              </div>
+
+              <div class="command-field narrow compact-inline">
+                <label for="quick-concurrency">Workers</label>
+                <div class="select-wrapper compact">
+                  <select
+                    id="quick-concurrency"
+                    value={String(maxConcurrency())}
+                    onChange={(e) => setMaxConcurrency(Math.max(1, Math.min(4, parseInt(e.currentTarget.value, 10) || 1)))}
+                  >
+                    <For each={[1, 2, 3, 4]}>{(value) => <option value={value}>{value}</option>}</For>
+                  </select>
+                  <svg class="select-arrow" viewBox="0 0 24 24">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </div>
+              </div>
+
+              <div class="command-actions-cluster">
+                <button class="primary-command-btn" onClick={() => void openAddFilesDialog()}>Add Files</button>
+                <button class="change-file-btn" onClick={() => setShowDefaults(!showDefaults())}>{showDefaults() ? "Hide Defaults" : "Show Defaults"}</button>
+                <button class="change-file-btn" onClick={() => void cancelRunningJobs()} disabled={runningCount() === 0}>Cancel Running</button>
+                <button class="change-file-btn" onClick={retryFailedJobs} disabled={failedCount() === 0}>Retry Failed</button>
+                <button class="change-file-btn" onClick={clearCompleted} disabled={completedCount() === 0}>Clear Completed</button>
+                <button class="change-file-btn" onClick={() => void exportCompletedJobsBundle()} disabled={completedCount() === 0}>Export Completed</button>
+              </div>
+            </div>
+
+            <div class="queue-summary queue-summary-refined">
+              <For each={queueSummary()}>
+                {(chip) => (
+                  <span class={`summary-chip ${chip.key}`}>
+                    <span class="summary-label">{chip.label}</span>
+                    <span class="summary-value">{chip.value}</span>
+                  </span>
+                )}
+              </For>
+            </div>
+
+            <Show when={jobTabs().length > 0} fallback={<p class="queue-empty">Add audio files to create your first job tab.</p>}>
+              <div class="job-tabs-strip">
+                <For each={jobTabs()}>
+                  {(job) => (
+                    <div class={`job-tab ${selectedJobId() === job.id ? "active" : ""} ${job.status}`}>
+                      <button class="job-tab-main" onClick={() => setSelectedJobId(job.id)}>
+                        <span class="job-tab-name" title={job.fileName}>{job.fileName}</span>
+                        <span class={`status-badge ${job.status}`}>{statusLabel(job.status)}</span>
+                        <Show when={job.status === "running"}>
+                          <span class="job-tab-progress">
+                            {getProgressPercent(job.progress) === null ? "..." : `${getProgressPercent(job.progress)}%`}
+                          </span>
+                        </Show>
+                      </button>
+
+                      <button
+                        class="job-tab-remove"
+                        onClick={() => removeJob(job.id)}
+                        disabled={job.status === "running"}
+                        aria-label={`Remove ${job.fileName}`}
+                        title={job.status === "running" ? "Cancel this job before removing" : "Remove from queue"}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </section>
+
+          <section class="upload-section compact-upload-section">
+            <div class="quick-add-card">
+              <div class="quick-add-copy">
+                <span class="section-eyebrow">Ingress</span>
+                <h2>Add More Audio</h2>
+                <p>Drop recordings anytime; they appear as tabs and process in queue order.</p>
+              </div>
+              <div class="quick-add-uploader-shell">
+                <FileUploader multiple onFilesSelected={enqueueFiles} />
+              </div>
+            </div>
           </section>
 
           <Show when={queueError()}>
@@ -631,440 +849,456 @@ const Transcription: Component = () => {
             </div>
           </Show>
 
-          <section class="settings-panel queue-settings">
-            <div class="setting-group">
-              <label class="label-with-info">
-                Mode
-                <InfoIcon
-                  content="Transcription returns transcript text output. Annotate runs speaker diarization + transcription and outputs speaker-labeled views."
-                  position="right"
-                />
-              </label>
-              <div class="task-toggle">
-                <button class={`task-btn ${!isAnnotateMode() ? "active" : ""}`} onClick={() => setMode("transcribe")}>Transcribe</button>
-                <button class={`task-btn ${isAnnotateMode() ? "active" : ""}`} onClick={() => setMode("annotate")}>Annotate</button>
-              </div>
-            </div>
-
-            <div class="setting-group">
-              <label for="model-select" class="label-with-info">
-                Model
-                <InfoIcon
-                  content="Smaller models are faster with lower memory use. Larger models are more accurate but require more resources."
-                  position="right"
-                />
-              </label>
-              <div class="select-wrapper">
-                <select id="model-select" value={selectedModel()} onChange={(e) => setSelectedModel(e.currentTarget.value as WhisperModel)}>
-                  <For each={MODEL_OPTIONS}>{(option) => <option value={option.value}>{option.label}</option>}</For>
-                </select>
-                <svg class="select-arrow" viewBox="0 0 24 24">
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              </div>
-              <span class="setting-hint">{MODEL_OPTIONS.find((m) => m.value === selectedModel())?.description}</span>
-              <Show when={modelValidation() && modelValidation()!.status === "warning"}>
-                <div class="model-warning">
-                  <svg viewBox="0 0 24 24" width="14" height="14">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor" />
-                  </svg>
-                  <For each={modelValidation()!.messages}>{(message) => <span class="warning-text">{message}</span>}</For>
+          <Show when={showDefaults()}>
+            <section class="settings-panel queue-settings defaults-panel">
+              <div class="defaults-header">
+                <div>
+                  <span class="section-eyebrow">Defaults</span>
+                  <h2>Settings For Newly Added Jobs</h2>
                 </div>
-              </Show>
-            </div>
-
-            <div class="setting-group">
-              <label class="label-with-info">Task</label>
-              <div class="task-toggle">
-                <button class={`task-btn ${selectedTask() === "transcribe" ? "active" : ""}`} onClick={() => setSelectedTask("transcribe")}>Transcribe</button>
-                <button class={`task-btn ${selectedTask() === "translate" ? "active" : ""}`} onClick={() => setSelectedTask("translate")}>Translate to English</button>
+                <span class="setting-hint">Existing queued items keep the settings they were created with.</span>
               </div>
-            </div>
 
-            <div class="setting-group">
-              <label for="language-select">Source Language</label>
-              <div class="select-wrapper">
-                <select
-                  id="language-select"
-                  value={selectedLanguage() || ""}
-                  onChange={(e) => setSelectedLanguage(e.currentTarget.value || null)}
-                  disabled={isEnglishOnlyModel()}
-                >
-                  <For each={availableLanguages()}>{(option) => <option value={option.value || ""}>{option.label}</option>}</For>
-                </select>
-                <svg class="select-arrow" viewBox="0 0 24 24">
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              </div>
-            </div>
-
-            <Show when={isAnnotateMode()}>
-              <>
-                <div class="setting-group">
-                  <label for="speaker-model-select">Speaker Model</label>
-                  <div class="select-wrapper">
-                    <select
-                      id="speaker-model-select"
-                      value={selectedSpeakerModel()}
-                      onChange={(e) => setSelectedSpeakerModel(e.currentTarget.value as SpeakerModelKey)}
-                    >
-                      <For each={speakerModelRequirements()}>
-                        {(m) => (
-                          <option value={m.key}>
-                            {m.display_name} ({m.approx_size_mb.toFixed(1)} MB)
-                          </option>
-                        )}
-                      </For>
-                    </select>
-                    <svg class="select-arrow" viewBox="0 0 24 24">
-                      <path d="M6 9l6 6 6-6" />
-                    </svg>
-                  </div>
-                </div>
-
-                <div class="setting-group">
-                  <label for="speaker-device-select">Speaker Device</label>
-                  <div class="select-wrapper">
-                    <select
-                      id="speaker-device-select"
-                      value={selectedSpeakerDevice()}
-                      onChange={(e) => setSelectedSpeakerDevice(e.currentTarget.value as SpeakerDevice)}
-                    >
-                      <For each={availableSpeakerDevices()}>{(d) => <option value={d}>{d.toUpperCase()}</option>}</For>
-                    </select>
-                    <svg class="select-arrow" viewBox="0 0 24 24">
-                      <path d="M6 9l6 6 6-6" />
-                    </svg>
-                  </div>
-                </div>
-
-                <div class="setting-group">
-                  <label for="num-speakers-input">Expected Speakers</label>
-                  <input
-                    id="num-speakers-input"
-                    type="number"
-                    min="1"
-                    max="20"
-                    placeholder="Auto-detect"
-                    value={numSpeakers() ?? ""}
-                    onInput={(e) => {
-                      const value = e.currentTarget.value;
-                      setNumSpeakers(value === "" ? null : parseInt(value, 10));
-                    }}
-                    class="number-input"
-                  />
-                </div>
-
-                <div class="setting-group">
-                  <label for="diarize-threshold-input">
-                    Clustering Threshold <span class="threshold-value">({diarizeThreshold().toFixed(2)})</span>
+              <div class="defaults-grid refined-defaults-grid">
+                <div class="setting-group feature-setting-group feature-setting-group-wide">
+                  <label class="label-with-info">
+                    Mode
+                    <InfoIcon
+                      content="Transcription returns transcript text output. Annotate runs speaker diarization + transcription and outputs speaker-labeled views."
+                      position="right"
+                    />
                   </label>
-                  <input
-                    id="diarize-threshold-input"
-                    type="range"
-                    min="0.1"
-                    max="0.9"
-                    step="0.05"
-                    value={diarizeThreshold()}
-                    onInput={(e) => setDiarizeThreshold(parseFloat(e.currentTarget.value))}
-                    class="range-slider"
-                  />
+                  <div class="task-toggle">
+                    <button class={`task-btn ${!isAnnotateMode() ? "active" : ""}`} onClick={() => setMode("transcribe")}>Transcribe</button>
+                    <button class={`task-btn ${isAnnotateMode() ? "active" : ""}`} onClick={() => setMode("annotate")}>Annotate</button>
+                  </div>
                 </div>
-              </>
-            </Show>
 
-            <div class="setting-group inline">
-              <label class="toggle-label">
-                <span class="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={includeTimestamps()}
-                    onChange={(e) => setIncludeTimestamps(e.currentTarget.checked)}
-                    disabled={isAnnotateMode()}
-                  />
-                  <span class="toggle-slider"></span>
-                </span>
-                <span>Include timestamps</span>
-              </label>
-            </div>
+                <div class="setting-group feature-setting-group">
+                  <label for="model-select" class="label-with-info">
+                    Model
+                    <InfoIcon
+                      content="Smaller models are faster with lower memory use. Larger models are more accurate but require more resources."
+                      position="right"
+                    />
+                  </label>
+                  <div class="select-wrapper">
+                    <select id="model-select" value={selectedModel()} onChange={(e) => setSelectedModel(e.currentTarget.value as WhisperModel)}>
+                      <For each={MODEL_OPTIONS}>{(option) => <option value={option.value}>{option.label}</option>}</For>
+                    </select>
+                    <svg class="select-arrow" viewBox="0 0 24 24">
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </div>
+                  <span class="setting-hint">{MODEL_OPTIONS.find((m) => m.value === selectedModel())?.description}</span>
+                  <Show when={modelValidation() && modelValidation()!.status === "warning"}>
+                    <div class="model-warning">
+                      <svg viewBox="0 0 24 24" width="14" height="14">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor" />
+                      </svg>
+                      <For each={modelValidation()!.messages}>{(message) => <span class="warning-text">{message}</span>}</For>
+                    </div>
+                  </Show>
+                </div>
 
-            <div class="setting-group">
-              <label for="concurrency-select" class="label-with-info">
-                Max Concurrency
-                <InfoIcon content="Controls how many queued files run in parallel." position="right" />
-              </label>
-              <div class="select-wrapper">
-                <select
-                  id="concurrency-select"
-                  value={String(maxConcurrency())}
-                  onChange={(e) => setMaxConcurrency(Math.max(1, Math.min(4, parseInt(e.currentTarget.value, 10) || 1)))}
-                >
-                  <For each={[1, 2, 3, 4]}>{(value) => <option value={value}>{value}</option>}</For>
-                </select>
-                <svg class="select-arrow" viewBox="0 0 24 24">
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              </div>
-            </div>
-          </section>
+                <div class="setting-group feature-setting-group">
+                  <label class="label-with-info">Task</label>
+                  <div class="task-toggle">
+                    <button class={`task-btn ${selectedTask() === "transcribe" ? "active" : ""}`} onClick={() => setSelectedTask("transcribe")}>Transcribe</button>
+                    <button class={`task-btn ${selectedTask() === "translate" ? "active" : ""}`} onClick={() => setSelectedTask("translate")}>Translate to English</button>
+                  </div>
+                </div>
 
-          <section class="queue-card">
-            <div class="queue-header">
-              <h2>Queue</h2>
-              <div class="queue-summary">
-                <For each={queueSummary()}>
-                  {(chip) => (
-                    <span class={`summary-chip ${chip.key}`}>
-                      {chip.label}: {chip.value}
+                <div class="setting-group feature-setting-group">
+                  <label for="language-select">Source Language</label>
+                  <div class="select-wrapper">
+                    <select
+                      id="language-select"
+                      value={selectedLanguage() || ""}
+                      onChange={(e) => setSelectedLanguage(e.currentTarget.value || null)}
+                      disabled={isEnglishOnlyModel()}
+                    >
+                      <For each={availableLanguages()}>{(option) => <option value={option.value || ""}>{option.label}</option>}</For>
+                    </select>
+                    <svg class="select-arrow" viewBox="0 0 24 24">
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </div>
+                </div>
+
+                <div class="setting-group inline feature-setting-group toggle-setting-group">
+                  <label class="toggle-label">
+                    <span class="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={includeTimestamps()}
+                        onChange={(e) => setIncludeTimestamps(e.currentTarget.checked)}
+                        disabled={isAnnotateMode()}
+                      />
+                      <span class="toggle-slider"></span>
                     </span>
-                  )}
-                </For>
-              </div>
-            </div>
+                    <span>Include timestamps</span>
+                  </label>
+                </div>
 
-            <div class="queue-actions">
-              <button class="change-file-btn" onClick={() => void cancelRunningJobs()} disabled={runningCount() === 0}>Cancel Running</button>
-              <button class="change-file-btn" onClick={retryFailedJobs} disabled={failedCount() === 0}>Retry Failed</button>
-              <button class="change-file-btn" onClick={clearCompleted} disabled={completedCount() === 0}>Clear Completed</button>
-            </div>
-
-            <Show when={queueJobs().length > 0} fallback={<p class="queue-empty">Add one or more audio files to begin.</p>}>
-              <div class="queue-rows">
-                <For each={queueJobs()}>
-                  {(job) => (
-                    <div class={`queue-row ${selectedJobId() === job.id ? "selected" : ""}`} onClick={() => setSelectedJobId(job.id)}>
-                      <div class="queue-main">
-                        <div class="queue-name">{job.fileName}</div>
-                        <div class="queue-meta">
-                          <span>{job.settings.mode === "annotate" ? "Annotate" : "Transcribe"}</span>
-                          <span>{job.settings.model}</span>
-                          <span class={`status-badge ${job.status}`}>{statusLabel(job.status)}</span>
-                        </div>
-                        <Show when={job.status === "running" && job.progress}>
-                          <TranscriptionProgressBar progress={job.progress} />
-                        </Show>
-                        <Show when={job.status === "failed" && job.error}>
-                          <div class="row-error">{job.error}</div>
-                        </Show>
-                      </div>
-
-                      <div class="queue-controls" onClick={(event) => event.stopPropagation()}>
-                        <button class="change-file-btn" onClick={() => setSelectedJobId(job.id)}>View</button>
-                        <Show when={job.status === "running"}>
-                          <button class="change-file-btn" onClick={() => void cancelJob(job.id)}>Cancel</button>
-                        </Show>
-                        <Show when={job.status === "failed" || job.status === "cancelled"}>
-                          <button
-                            class="change-file-btn"
-                            onClick={() => {
-                              updateJob(job.id, (current) => ({
-                                ...current,
-                                status: "queued",
-                                error: null,
-                                progress: null,
-                                result: null,
-                                annotatedResult: null,
-                              }));
-                            }}
-                          >
-                            Retry
-                          </button>
-                        </Show>
-                      </div>
-                    </div>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </section>
-
-          <Show when={selectedJob() && selectedJob()!.status === "completed"}>
-            <section class="results-section">
-              <Show
-                when={selectedJob()!.settings.mode === "transcribe" && selectedJob()!.result}
-                fallback={
+                <Show when={isAnnotateMode()}>
                   <>
-                    <div class="result-meta">
-                      <div class="meta-item">
-                        <span class="meta-label">Language</span>
-                        <span class="meta-value">{selectedJob()!.annotatedResult?.language || "Unknown"}</span>
-                      </div>
-                      <div class="meta-item">
-                        <span class="meta-label">Speakers</span>
-                        <span class="meta-value">{selectedJob()!.annotatedResult?.num_speakers ?? 0}</span>
-                      </div>
-                      <div class="meta-item">
-                        <span class="meta-label">Duration</span>
-                        <span class="meta-value">{formatTime(selectedJob()!.annotatedResult?.audio_duration || 0, false)}</span>
-                      </div>
-                      <div class="meta-item">
-                        <span class="meta-label">Processing</span>
-                        <span class="meta-value">{(selectedJob()!.annotatedResult?.total_inference_time || 0).toFixed(1)}s</span>
+                    <div class="setting-group feature-setting-group">
+                      <label for="speaker-model-select">Speaker Model</label>
+                      <div class="select-wrapper">
+                        <select
+                          id="speaker-model-select"
+                          value={selectedSpeakerModel()}
+                          onChange={(e) => setSelectedSpeakerModel(e.currentTarget.value as SpeakerModelKey)}
+                        >
+                          <For each={speakerModelRequirements()}>
+                            {(m) => (
+                              <option value={m.key}>
+                                {m.display_name} ({m.approx_size_mb.toFixed(1)} MB)
+                              </option>
+                            )}
+                          </For>
+                        </select>
+                        <svg class="select-arrow" viewBox="0 0 24 24">
+                          <path d="M6 9l6 6 6-6" />
+                        </svg>
                       </div>
                     </div>
 
-                    <div class="speaker-editor-box">
+                    <div class="setting-group feature-setting-group">
+                      <label for="speaker-device-select">Speaker Device</label>
+                      <div class="select-wrapper">
+                        <select
+                          id="speaker-device-select"
+                          value={selectedSpeakerDevice()}
+                          onChange={(e) => setSelectedSpeakerDevice(e.currentTarget.value as SpeakerDevice)}
+                        >
+                          <For each={availableSpeakerDevices()}>{(d) => <option value={d}>{d.toUpperCase()}</option>}</For>
+                        </select>
+                        <svg class="select-arrow" viewBox="0 0 24 24">
+                          <path d="M6 9l6 6 6-6" />
+                        </svg>
+                      </div>
+                    </div>
+
+                    <div class="setting-group feature-setting-group">
+                      <label for="num-speakers-input">Expected Speakers</label>
+                      <input
+                        id="num-speakers-input"
+                        type="number"
+                        min="1"
+                        max="20"
+                        placeholder="Auto-detect"
+                        value={numSpeakers() ?? ""}
+                        onInput={(e) => {
+                          const value = e.currentTarget.value;
+                          setNumSpeakers(value === "" ? null : parseInt(value, 10));
+                        }}
+                        class="number-input"
+                      />
+                    </div>
+
+                    <div class="setting-group feature-setting-group">
+                      <label for="diarize-threshold-input">
+                        Clustering Threshold <span class="threshold-value">({diarizeThreshold().toFixed(2)})</span>
+                      </label>
+                      <input
+                        id="diarize-threshold-input"
+                        type="range"
+                        min="0.1"
+                        max="0.9"
+                        step="0.05"
+                        value={diarizeThreshold()}
+                        onInput={(e) => setDiarizeThreshold(parseFloat(e.currentTarget.value))}
+                        class="range-slider"
+                      />
+                    </div>
+                  </>
+                </Show>
+              </div>
+            </section>
+          </Show>
+
+          <Show
+            when={selectedJob()}
+            fallback={
+              <section class="queue-card inspector-pane single-job-panel">
+                <div class="inspector-empty-state">
+                  <span class="section-eyebrow">Ready</span>
+                  <h2>Select Or Add A Job</h2>
+                  <p>Add audio files above. Each one appears as a tab so you can switch context without losing the single-job workflow.</p>
+                </div>
+              </section>
+            }
+          >
+            {(job) => (
+              <section class="queue-card inspector-pane single-job-panel">
+                <div class="single-job-header">
+                  <div>
+                    <span class="section-eyebrow">Current Job</span>
+                    <h2 class="inspector-title">{job().fileName}</h2>
+                    <div class="queue-meta refined-inspector-meta">
+                      <span>{job().settings.mode === "annotate" ? "Annotate" : "Transcribe"}</span>
+                      <span>{job().settings.model}</span>
+                      <Show when={job().settings.language}>
+                        <span>{job().settings.language}</span>
+                      </Show>
+                      <span class={`status-badge ${job().status}`}>{statusLabel(job().status)}</span>
+                    </div>
+                  </div>
+
+                  <div class="single-job-actions">
+                    <Show when={job().status === "running"}>
+                      <button class="change-file-btn" onClick={() => void cancelJob(job().id)}>Cancel</button>
+                    </Show>
+                    <Show when={job().status === "failed" || job().status === "cancelled"}>
+                      <button class="change-file-btn" onClick={() => setJobToQueued(job().id)}>Retry</button>
+                    </Show>
+                    <button class="change-file-btn" onClick={() => removeJob(job().id)} disabled={job().status === "running"}>Remove</button>
+                  </div>
+                </div>
+
+                <Show when={job().status === "running"}>
+                  <section class="processing-section transcription-processing">
+                    <GreekScrollLoader />
+                    <h2>{job().settings.mode === "annotate" ? "Annotating..." : "Transcribing..."}</h2>
+                    <p>{job().progress?.message || "Preparing audio"}</p>
+                    <TranscriptionProgressBar progress={job().progress} />
+                    <div class="processing-details">
+                      <span>Mode: {job().settings.mode === "annotate" ? "Annotate" : "Transcribe"}</span>
+                      <span>Model: {job().settings.model}</span>
+                    </div>
+                  </section>
+                </Show>
+
+                <Show when={job().status === "queued"}>
+                  <div class="queue-idle-state">
+                    <h3>Queued</h3>
+                    <p>This job is waiting for an available worker. Keep this tab open or switch to another job.</p>
+                  </div>
+                </Show>
+
+                <Show when={job().status === "failed" && job().error}>
+                  <div class="row-error inspector-error">{job().error}</div>
+                </Show>
+
+                <Show when={job().status === "cancelled"}>
+                  <div class="queue-idle-state">
+                    <h3>Cancelled</h3>
+                    <p>This job was cancelled before completion. Use Retry to queue it again.</p>
+                  </div>
+                </Show>
+
+                <Show when={job().status === "completed"}>
+                  <div class="result-meta refined-result-meta">
+                    <Show
+                      when={job().settings.mode === "transcribe" && job().result}
+                      fallback={
+                        <>
+                          <div class="meta-item">
+                            <span class="meta-label">Language</span>
+                            <span class="meta-value">{job().annotatedResult?.language || "Unknown"}</span>
+                          </div>
+                          <div class="meta-item">
+                            <span class="meta-label">Speakers</span>
+                            <span class="meta-value">{job().annotatedResult?.num_speakers ?? 0}</span>
+                          </div>
+                          <div class="meta-item">
+                            <span class="meta-label">Duration</span>
+                            <span class="meta-value">{formatTime(job().annotatedResult?.audio_duration || 0, false)}</span>
+                          </div>
+                          <div class="meta-item">
+                            <span class="meta-label">Processing</span>
+                            <span class="meta-value">{(job().annotatedResult?.total_inference_time || 0).toFixed(1)}s</span>
+                          </div>
+                        </>
+                      }
+                    >
+                      {(res) => (
+                        <>
+                          <div class="meta-item">
+                            <span class="meta-label">Language</span>
+                            <span class="meta-value">{res().language || "Unknown"}</span>
+                          </div>
+                          <div class="meta-item">
+                            <span class="meta-label">Duration</span>
+                            <span class="meta-value">{formatTime(res().duration, false)}</span>
+                          </div>
+                          <div class="meta-item">
+                            <span class="meta-label">Processing</span>
+                            <span class="meta-value">{res().inference_time.toFixed(1)}s</span>
+                          </div>
+                          <div class="meta-item">
+                            <span class="meta-label">Model</span>
+                            <span class="meta-value">{res().model}</span>
+                          </div>
+                        </>
+                      )}
+                    </Show>
+                  </div>
+
+                  <div class="inspector-tabs refined-inspector-tabs">
+                    <button class={`task-btn ${inspectorTab() === "output" ? "active" : ""}`} onClick={() => setInspectorTab("output")}>Output</button>
+                    <Show when={canShowSegmentsTab()}>
+                      <button class={`task-btn ${inspectorTab() === "segments" ? "active" : ""}`} onClick={() => setInspectorTab("segments")}>Segments</button>
+                    </Show>
+                    <Show when={job().settings.mode === "annotate"}>
+                      <button class={`task-btn ${inspectorTab() === "speakers" ? "active" : ""}`} onClick={() => setInspectorTab("speakers")}>Speakers</button>
+                    </Show>
+                    <button class={`task-btn ${inspectorTab() === "export" ? "active" : ""}`} onClick={() => setInspectorTab("export")}>Export</button>
+                  </div>
+
+                  <Show when={inspectorTab() === "output"}>
+                    <Show
+                      when={job().settings.mode === "transcribe" && job().result}
+                      fallback={
+                        <div class="transcript-box refined-transcript-box">
+                          <div class="transcript-header">
+                            <h3>Annotated Preview</h3>
+                          </div>
+                          <div class="segments-content speaker-segments-content refined-segments-content">
+                            <For each={selectedAnnotatedSegmentsWithNames()}>
+                              {(segment) => (
+                                <div class="segment-row refined-segment-row">
+                                  <span class="segment-time">{formatTimestamp(segment.start)}</span>
+                                  <span class="segment-speaker">[{segment.speaker_name}]</span>
+                                  <span class="segment-text">{segment.text}</span>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </div>
+                      }
+                    >
+                      {(res) => (
+                        <div class="transcript-box refined-transcript-box">
+                          <div class="transcript-header">
+                            <h3>Transcript</h3>
+                          </div>
+                          <div class="transcript-content refined-transcript-content">{res().text}</div>
+                        </div>
+                      )}
+                    </Show>
+                  </Show>
+
+                  <Show when={inspectorTab() === "segments" && canShowSegmentsTab()}>
+                    <div class="segments-box refined-segments-box">
+                      <div class="transcript-header">
+                        <h3>
+                          {job().settings.mode === "annotate"
+                            ? `Annotated Segments (${selectedAnnotatedSegmentsWithNames().length})`
+                            : `Timestamps (${job().result?.segments.length || 0} segments)`}
+                        </h3>
+                      </div>
+                      <div class="segments-content refined-segments-content">
+                        <Show
+                          when={job().settings.mode === "annotate"}
+                          fallback={
+                            <For each={job().result?.segments || []}>
+                              {(segment) => (
+                                <div class="segment-row refined-segment-row">
+                                  <span class="segment-time">{formatTimestamp(segment.start)}</span>
+                                  <span class="segment-text">{segment.text}</span>
+                                </div>
+                              )}
+                            </For>
+                          }
+                        >
+                          <For each={selectedAnnotatedSegmentsWithNames()}>
+                            {(segment) => (
+                              <div class="segment-row refined-segment-row">
+                                <span class="segment-time">{formatTimestamp(segment.start)}</span>
+                                <span class="segment-speaker">[{segment.speaker_name}]</span>
+                                <span class="segment-text">{segment.text}</span>
+                              </div>
+                            )}
+                          </For>
+                        </Show>
+                      </div>
+                    </div>
+                  </Show>
+
+                  <Show when={inspectorTab() === "speakers" && job().settings.mode === "annotate"}>
+                    <div class="speaker-editor-box refined-speaker-editor-box">
                       <h3>Speaker Names</h3>
-                      <For each={selectedSpeakerIds()}>
+                      <p class="speaker-editor-note">Rename diarization labels before exporting or copying the annotated transcript.</p>
+                      <For each={getSpeakerIdsForJob(job())}>
                         {(id) => (
                           <label class="speaker-name-row">
                             <span>Speaker {id}</span>
                             <input
-                              value={selectedJob()!.speakerNames[String(id)] || `Speaker ${id}`}
+                              value={job().speakerNames[String(id)] || `Speaker ${id}`}
                               onInput={(e) => updateSelectedSpeakerName(id, e.currentTarget.value)}
                             />
                           </label>
                         )}
                       </For>
                     </div>
+                  </Show>
 
-                    <div class="transcript-box">
-                      <div class="transcript-header">
-                        <h3>Annotated Preview</h3>
-                      </div>
-                      <div class="segments-content speaker-segments-content">
-                        <For each={selectedAnnotatedSegmentsWithNames()}>
-                          {(segment) => (
-                            <div class="segment-row">
-                              <span class="segment-time">{formatTimestamp(segment.start)}</span>
-                              <span class="segment-speaker">[{segment.speaker_name}]</span>
-                              <span class="segment-text">{segment.text}</span>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                      <div class="transcript-actions">
-                        <div class="action-group">
-                          <span class="action-label">Copy:</span>
-                          <button class="action-btn" onClick={() => void copyToClipboard(getPlainTextContent(selectedJob()!))}>Text</button>
-                          <button class="action-btn" onClick={() => void copyToClipboard(getSrtContent(selectedJob()!))}>SRT</button>
+                  <Show when={inspectorTab() === "export"}>
+                    <div class="export-grid">
+                      <div class="transcript-box refined-transcript-box">
+                        <div class="transcript-header">
+                          <h3>Export This Job</h3>
                         </div>
-                        <div class="action-group">
-                          <span class="action-label">Download:</span>
-                          <button
-                            class="action-btn"
-                            onClick={() =>
-                              void exportToFile(
-                                `${selectedJob()!.fileName.replace(/\.[^/.]+$/, "")}_annotated.txt`,
-                                ["txt"],
-                                getPlainTextContent(selectedJob()!)
-                              )
-                            }
-                          >
-                            .txt
-                          </button>
-                          <button
-                            class="action-btn"
-                            onClick={() =>
-                              void exportToFile(
-                                `${selectedJob()!.fileName.replace(/\.[^/.]+$/, "")}_annotated.srt`,
-                                ["srt"],
-                                getSrtContent(selectedJob()!)
-                              )
-                            }
-                          >
-                            .srt
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                }
-              >
-                {(res) => (
-                  <>
-                    <div class="result-meta">
-                      <div class="meta-item">
-                        <span class="meta-label">Language</span>
-                        <span class="meta-value">{res().language || "Unknown"}</span>
-                      </div>
-                      <div class="meta-item">
-                        <span class="meta-label">Duration</span>
-                        <span class="meta-value">{formatTime(res().duration, false)}</span>
-                      </div>
-                      <div class="meta-item">
-                        <span class="meta-label">Processing</span>
-                        <span class="meta-value">{res().inference_time.toFixed(1)}s</span>
-                      </div>
-                      <div class="meta-item">
-                        <span class="meta-label">Model</span>
-                        <span class="meta-value">{res().model}</span>
-                      </div>
-                    </div>
-
-                    <div class="transcript-box">
-                      <div class="transcript-header">
-                        <h3>Transcript</h3>
-                      </div>
-                      <div class="transcript-content">{res().text}</div>
-                      <div class="transcript-actions">
-                        <div class="action-group">
-                          <span class="action-label">Copy:</span>
-                          <button class="action-btn" onClick={() => void copyToClipboard(getPlainTextContent(selectedJob()!))}>Text</button>
-                          <Show when={selectedJob()!.settings.includeTimestamps && res().segments.length > 0}>
-                            <button class="action-btn" onClick={() => void copyToClipboard(getSrtContent(selectedJob()!))}>SRT</button>
-                          </Show>
-                        </div>
-                        <div class="action-group">
-                          <span class="action-label">Download:</span>
-                          <button
-                            class="action-btn"
-                            onClick={() =>
-                              void exportToFile(
-                                `${selectedJob()!.fileName.replace(/\.[^/.]+$/, "")}_transcript.txt`,
-                                ["txt"],
-                                getPlainTextContent(selectedJob()!)
-                              )
-                            }
-                          >
-                            .txt
-                          </button>
-                          <Show when={selectedJob()!.settings.includeTimestamps && res().segments.length > 0}>
+                        <div class="transcript-actions">
+                          <div class="action-group">
+                            <span class="action-label">Copy</span>
+                            <button class="action-btn" onClick={() => void copyToClipboard(getPlainTextContent(job()))}>Text</button>
+                            <button class="action-btn" onClick={() => void copyToClipboard(getSrtContent(job()))}>SRT</button>
+                          </div>
+                          <div class="action-group">
+                            <span class="action-label">Download</span>
                             <button
                               class="action-btn"
                               onClick={() =>
                                 void exportToFile(
-                                  `${selectedJob()!.fileName.replace(/\.[^/.]+$/, "")}.srt`,
+                                  `${job().fileName.replace(/\.[^/.]+$/, "")}.txt`,
+                                  ["txt"],
+                                  getPlainTextContent(job())
+                                )
+                              }
+                            >
+                              .txt
+                            </button>
+                            <button
+                              class="action-btn"
+                              onClick={() =>
+                                void exportToFile(
+                                  `${job().fileName.replace(/\.[^/.]+$/, "")}.srt`,
                                   ["srt"],
-                                  getSrtContent(selectedJob()!)
+                                  getSrtContent(job())
                                 )
                               }
                             >
                               .srt
                             </button>
-                          </Show>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="transcript-box refined-transcript-box batch-export-box">
+                        <div class="transcript-header">
+                          <h3>Export Batch</h3>
+                        </div>
+                        <div class="batch-export-body">
+                          <div class="batch-export-row">
+                            <span>Completed queue</span>
+                            <button class="action-btn" onClick={() => void exportCompletedJobsBundle()} disabled={completedCount() === 0}>
+                              Export All ({completedCount()})
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
-
-                    <Show when={selectedJob()!.settings.includeTimestamps && res().segments.length > 0}>
-                      <div class="segments-box">
-                        <button class="segments-header" onClick={() => setSegmentsExpanded(!segmentsExpanded())}>
-                          <span>Timestamps ({res().segments.length} segments)</span>
-                          <svg class={`expand-icon ${segmentsExpanded() ? "expanded" : ""}`} viewBox="0 0 24 24" width="18" height="18">
-                            <path d="M6 9l6 6 6-6" />
-                          </svg>
-                        </button>
-                        <Show when={segmentsExpanded()}>
-                          <div class="segments-content">
-                            <For each={res().segments}>
-                              {(segment) => (
-                                <div class="segment-row">
-                                  <span class="segment-time">{formatTimestamp(segment.start)}</span>
-                                  <span class="segment-text">{segment.text}</span>
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                      </div>
-                    </Show>
-                  </>
-                )}
-              </Show>
-            </section>
+                  </Show>
+                </Show>
+              </section>
+            )}
           </Show>
         </main>
+
         <div class="scroll-rod"></div>
       </div>
 
