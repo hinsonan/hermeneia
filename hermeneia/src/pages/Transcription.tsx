@@ -8,6 +8,7 @@ import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranscriptionProgressBar from "../components/TranscriptionProgressBar";
 import InfoIcon from "../components/InfoIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
+import FileUploader from "../components/FileUploader";
 import type {
   AnnotatedResult,
   LanguageOption,
@@ -421,18 +422,8 @@ const Transcription: Component = () => {
             <Show
               when={totalJobs() > 0}
               fallback={
-                <section class="tx-inspector tx-inspector-main">
-                  <div class="tx-inspector-empty">
-                    <div class="tx-inspector-empty-art">
-                      <svg viewBox="0 0 64 64" width="72" height="72">
-                        <circle cx="32" cy="32" r="28" />
-                        <path d="M22 26h20M22 32h20M22 38h14" />
-                      </svg>
-                    </div>
-                    <h2>Add your first job</h2>
-                    <p>Choose audio files to start transcribing. Progress and exports will appear here.</p>
-                    <button class="tx-btn tx-btn-primary" onClick={() => void openAddFilesDialog()}>Add Files</button>
-                  </div>
+                <section class="tx-uploader-panel">
+                  <FileUploader multiple onFilesSelected={enqueueFiles} />
                 </section>
               }
             >
