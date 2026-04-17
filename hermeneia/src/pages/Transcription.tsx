@@ -187,6 +187,12 @@ const exportToFile = async (defaultPath: string, extensions: string[], content: 
   }
 };
 
+const sanitizeExportBaseName = (fileName: string): string => {
+  const base = fileName.replace(/\.[^/.]+$/, "").trim();
+  const sanitized = base.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim();
+  return sanitized || "transcript";
+};
+
 const Transcription: Component = () => {
   const navigate = useNavigate();
   const { toggleTheme } = useTheme();
@@ -252,21 +258,37 @@ const Transcription: Component = () => {
     const completed = queueState.jobs.filter((job) => job.status === "completed");
     if (completed.length === 0) return;
 
-    const lines: string[] = [];
-    completed.forEach((job, index) => {
-      const divider = "=".repeat(80);
-      lines.push(divider);
-      lines.push(`${index + 1}. ${job.fileName}`);
-      lines.push(`Mode: ${job.settings.mode === "annotate" ? "Annotate" : "Transcribe"}`);
-      lines.push(`Model: ${job.settings.model}`);
-      lines.push("");
-      lines.push(getPlainTextContent(job).trim());
-      lines.push("");
+    const nameCounts = new Map<string, number>();
+    const entries: { path: string; content: string }[] = [];
+
+    completed.forEach((job) => {
+      const baseName = sanitizeExportBaseName(job.fileName);
+      const seen = nameCounts.get(baseName) || 0;
+      nameCounts.set(baseName, seen + 1);
+      const uniqueBaseName = seen === 0 ? baseName : `${baseName}_${seen + 1}`;
+
+      entries.push({
+        path: `${uniqueBaseName}.txt`,
+        content: getPlainTextContent(job),
+      });
+      entries.push({
+        path: `${uniqueBaseName}.srt`,
+        content: getSrtContent(job),
+      });
     });
 
-    const bundleContent = lines.join("\n");
-    const defaultPath = `hermeneia_batch_${new Date().toISOString().slice(0, 10)}.txt`;
-    await exportToFile(defaultPath, ["txt"], bundleContent);
+    try {
+      const defaultPath = `hermeneia_batch_${new Date().toISOString().slice(0, 10)}.zip`;
+      const outputPath = await save({
+        filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+        defaultPath,
+      });
+      if (!outputPath) return;
+
+      await invoke("write_zip_archive", { path: outputPath, entries });
+    } catch (err) {
+      console.error("Failed to export zip archive:", err);
+    }
   };
 
   const handleBack = () => {

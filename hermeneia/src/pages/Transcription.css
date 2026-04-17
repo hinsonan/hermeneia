@@ -417,41 +417,33 @@
 }
 
 .tx-count-running {
-  background: color-mix(in srgb, #3b7dd8 15%, transparent);
-  color: #2a5ca8;
-  border-color: color-mix(in srgb, #3b7dd8 40%, transparent);
-}
-
-[data-theme="dark"] .tx-count-running {
-  color: #8ab4f0;
+  background: color-mix(in srgb, var(--tx-status-running) 15%, transparent);
+  color: var(--tx-status-running);
+  border-color: color-mix(in srgb, var(--tx-status-running) 40%, transparent);
 }
 
 .tx-count-queued {
-  background: color-mix(in srgb, var(--ink-medium) 15%, transparent);
-  color: var(--ink-medium);
-  border-color: color-mix(in srgb, var(--ink-medium) 30%, transparent);
+  background: color-mix(in srgb, var(--tx-status-queued) 15%, transparent);
+  color: var(--tx-status-queued);
+  border-color: color-mix(in srgb, var(--tx-status-queued) 30%, transparent);
 }
 
 .tx-count-completed {
-  background: color-mix(in srgb, #4a7c4a 18%, transparent);
-  color: #2f5a2f;
-  border-color: color-mix(in srgb, #4a7c4a 40%, transparent);
-}
-
-[data-theme="dark"] .tx-count-completed {
-  color: #8fbf8f;
+  background: color-mix(in srgb, var(--tx-status-completed) 18%, transparent);
+  color: var(--tx-status-completed);
+  border-color: color-mix(in srgb, var(--tx-status-completed) 40%, transparent);
 }
 
 .tx-count-failed {
-  background: color-mix(in srgb, var(--burgundy) 15%, transparent);
-  color: var(--burgundy);
-  border-color: color-mix(in srgb, var(--burgundy) 45%, transparent);
+  background: color-mix(in srgb, var(--tx-status-failed) 15%, transparent);
+  color: var(--tx-status-failed);
+  border-color: color-mix(in srgb, var(--tx-status-failed) 45%, transparent);
 }
 
 .tx-count-cancelled {
-  background: color-mix(in srgb, var(--ink-medium) 10%, transparent);
-  color: var(--ink-medium);
-  border-color: color-mix(in srgb, var(--ink-medium) 25%, transparent);
+  background: color-mix(in srgb, var(--tx-status-cancelled) 10%, transparent);
+  color: var(--tx-status-cancelled);
+  border-color: color-mix(in srgb, var(--tx-status-cancelled) 25%, transparent);
 }
 
 .tx-batch-bar {
@@ -469,14 +461,14 @@
   transition: width 0.3s ease;
 }
 
-.tx-seg-completed { background: #4a7c4a; }
+.tx-seg-completed { background: var(--tx-status-completed); }
 .tx-seg-running {
-  background: linear-gradient(90deg, #3b7dd8 0%, #5b9df8 50%, #3b7dd8 100%);
+  background: linear-gradient(90deg, var(--tx-status-running) 0%, var(--tx-status-running-glow) 50%, var(--tx-status-running) 100%);
   background-size: 200% 100%;
   animation: tx-shimmer 2s linear infinite;
 }
-.tx-seg-failed { background: var(--burgundy); }
-.tx-seg-cancelled { background: color-mix(in srgb, var(--ink-medium) 60%, transparent); }
+.tx-seg-failed { background: var(--tx-status-failed); }
+.tx-seg-cancelled { background: color-mix(in srgb, var(--tx-status-cancelled) 75%, transparent); }
 
 @keyframes tx-shimmer {
   0% { background-position: 200% 0; }
@@ -646,13 +638,11 @@
   font-weight: 600;
 }
 
-.tx-job-tab-state.queued { color: var(--ink-medium); }
-.tx-job-tab-state.running { color: #2a5ca8; }
-[data-theme="dark"] .tx-job-tab-state.running { color: #8ab4f0; }
-.tx-job-tab-state.completed { color: #2f5a2f; }
-[data-theme="dark"] .tx-job-tab-state.completed { color: #8fbf8f; }
-.tx-job-tab-state.failed { color: var(--burgundy); }
-.tx-job-tab-state.cancelled { color: var(--ink-medium); opacity: 0.7; }
+.tx-job-tab-state.queued { color: var(--tx-status-queued); }
+.tx-job-tab-state.running { color: var(--tx-status-running); }
+.tx-job-tab-state.completed { color: var(--tx-status-completed); }
+.tx-job-tab-state.failed { color: var(--tx-status-failed); }
+.tx-job-tab-state.cancelled { color: var(--tx-status-cancelled); opacity: 0.85; }
 
 .tx-job-tab-progress {
   margin-left: 0.35rem;
@@ -661,11 +651,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.7rem;
-  color: #2a5ca8;
-}
-
-[data-theme="dark"] .tx-job-tab-progress {
-  color: #8ab4f0;
+  color: var(--tx-status-running);
 }
 
 .tx-status-dot {
@@ -674,23 +660,23 @@
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: var(--ink-medium);
+  background: var(--tx-status-queued);
 }
 
-.tx-status-dot.queued { background: var(--ink-medium); opacity: 0.5; }
+.tx-status-dot.queued { background: var(--tx-status-queued); opacity: 0.6; }
 .tx-status-dot.running {
-  background: #3b7dd8;
-  box-shadow: 0 0 0 0 color-mix(in srgb, #3b7dd8 60%, transparent);
+  background: var(--tx-status-running);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--tx-status-running) 55%, transparent);
   animation: tx-pulse 1.5s infinite;
 }
-.tx-status-dot.completed { background: #4a7c4a; }
-.tx-status-dot.failed { background: var(--burgundy); }
-.tx-status-dot.cancelled { background: color-mix(in srgb, var(--ink-medium) 60%, transparent); }
+.tx-status-dot.completed { background: var(--tx-status-completed); }
+.tx-status-dot.failed { background: var(--tx-status-failed); }
+.tx-status-dot.cancelled { background: color-mix(in srgb, var(--tx-status-cancelled) 75%, transparent); }
 
 @keyframes tx-pulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, #3b7dd8 60%, transparent); }
-  70% { box-shadow: 0 0 0 6px color-mix(in srgb, #3b7dd8 0%, transparent); }
-  100% { box-shadow: 0 0 0 0 color-mix(in srgb, #3b7dd8 0%, transparent); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--tx-status-running) 55%, transparent); }
+  70% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--tx-status-running) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--tx-status-running) 0%, transparent); }
 }
 
 .tx-chip {
@@ -822,13 +808,11 @@
   letter-spacing: 0.06em;
 }
 
-.tx-status-badge.queued { background: color-mix(in srgb, var(--ink-medium) 15%, transparent); color: var(--ink-medium); }
-.tx-status-badge.running { background: color-mix(in srgb, #3b7dd8 20%, transparent); color: #2a5ca8; }
-[data-theme="dark"] .tx-status-badge.running { color: #8ab4f0; }
-.tx-status-badge.completed { background: color-mix(in srgb, #4a7c4a 20%, transparent); color: #2f5a2f; }
-[data-theme="dark"] .tx-status-badge.completed { color: #8fbf8f; }
-.tx-status-badge.failed { background: color-mix(in srgb, var(--burgundy) 18%, transparent); color: var(--burgundy); }
-.tx-status-badge.cancelled { background: color-mix(in srgb, var(--ink-medium) 12%, transparent); color: var(--ink-medium); }
+.tx-status-badge.queued { background: color-mix(in srgb, var(--tx-status-queued) 15%, transparent); color: var(--tx-status-queued); }
+.tx-status-badge.running { background: color-mix(in srgb, var(--tx-status-running) 18%, transparent); color: var(--tx-status-running); }
+.tx-status-badge.completed { background: color-mix(in srgb, var(--tx-status-completed) 20%, transparent); color: var(--tx-status-completed); }
+.tx-status-badge.failed { background: color-mix(in srgb, var(--tx-status-failed) 18%, transparent); color: var(--tx-status-failed); }
+.tx-status-badge.cancelled { background: color-mix(in srgb, var(--tx-status-cancelled) 14%, transparent); color: var(--tx-status-cancelled); }
 
 /* Status panels */
 .tx-status-panel {

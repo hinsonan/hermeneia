@@ -425,11 +425,112 @@ fn parse_whisper_model(s: &str) -> Option<WhisperModel> {
     }
 }
 
+fn decode_percent_encoded(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h1 = bytes[i + 1] as char;
+            let h2 = bytes[i + 2] as char;
+            let hex = format!("{}{}", h1, h2);
+            if let Ok(value) = u8::from_str_radix(&hex, 16) {
+                out.push(value);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn normalize_output_path(raw_path: &str) -> std::path::PathBuf {
+    let trimmed = raw_path.trim();
+    let without_scheme = trimmed.strip_prefix("file://").unwrap_or(trimmed);
+
+    #[cfg(target_os = "windows")]
+    let without_scheme = {
+        if without_scheme.len() > 3
+            && without_scheme.as_bytes()[0] == b'/'
+            && without_scheme.as_bytes()[2] == b':'
+        {
+            &without_scheme[1..]
+        } else {
+            without_scheme
+        }
+    };
+
+    std::path::PathBuf::from(decode_percent_encoded(without_scheme))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ZipArchiveEntry {
+    path: String,
+    content: String,
+}
+
 /// Write text content to a file
 #[tauri::command]
 async fn write_text_file(path: String, content: String) -> std::result::Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+        let output_path = normalize_output_path(&path);
+        if let Some(parent) = output_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+        }
+        std::fs::write(&output_path, content).map_err(|e| format!("Failed to write file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Write a zip archive composed of multiple text entries
+#[tauri::command]
+async fn write_zip_archive(
+    path: String,
+    entries: Vec<ZipArchiveEntry>,
+) -> std::result::Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        use std::fs::File;
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        let mut output_path = normalize_output_path(&path);
+        if output_path.extension().is_none() {
+            output_path.set_extension("zip");
+        }
+        if let Some(parent) = output_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create export directory: {}", e))?;
+        }
+
+        let file = File::create(&output_path)
+            .map_err(|e| format!("Failed to create zip file: {}", e))?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+
+        for entry in entries {
+            let normalized = entry.path.trim().replace('\\', "/");
+            if normalized.is_empty() {
+                return Err("Archive entry path cannot be empty".to_string());
+            }
+            if normalized.starts_with('/') || normalized.split('/').any(|part| part == "..") {
+                return Err(format!("Invalid archive entry path: {}", entry.path));
+            }
+
+            zip.start_file(&normalized, options)
+                .map_err(|e| format!("Failed to add '{}' to zip: {}", normalized, e))?;
+            zip.write_all(entry.content.as_bytes())
+                .map_err(|e| format!("Failed to write '{}' in zip: {}", normalized, e))?;
+        }
+
+        zip.finish()
+            .map_err(|e| format!("Failed to finalize zip archive: {}", e))?;
+        Ok(())
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -1000,6 +1101,7 @@ pub fn run() {
             transcribe_audio_file,
             annotate_audio_file,
             write_text_file,
+            write_zip_archive,
             get_system_capabilities,
             validate_model_selection,
             list_speaker_model_requirements,
