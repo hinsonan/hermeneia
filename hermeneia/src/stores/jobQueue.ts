@@ -19,14 +19,13 @@ import type {
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type JobMode = "transcribe" | "annotate";
 export type JobProgress = TranscriptionProgress | AnnotationProgress;
-export type InspectorTab = "output" | "segments" | "export";
+export type InspectorTab = "srt" | "text";
 
 export interface JobSettings {
   mode: JobMode;
   model: WhisperModel;
   task: TranscriptionTask;
   language: string | null;
-  includeTimestamps: boolean;
   speakerModel: SpeakerModelKey;
   speakerDevice: SpeakerDevice;
   numSpeakers: number | null;
@@ -69,7 +68,6 @@ const DEFAULT_SETTINGS: JobSettings = {
   model: "tiny",
   task: "transcribe",
   language: null,
-  includeTimestamps: true,
   speakerModel: "english",
   speakerDevice: "cpu",
   numSpeakers: null,
@@ -87,6 +85,12 @@ function getBaseName(path: string): string {
   return path.split("/").pop() || path.split("\\").pop() || path;
 }
 
+function normalizeInspectorTab(tab: unknown): InspectorTab {
+  if (tab === "srt" || tab === "segments" || tab === "export") return "srt";
+  if (tab === "text" || tab === "output") return "text";
+  return "srt";
+}
+
 function loadPersistedState(): Partial<QueueState> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -101,8 +105,17 @@ function loadPersistedState(): Partial<QueueState> {
     // job promise resolved into nothing. Mark them cancelled so the user can retry.
     const jobs = (parsed.jobs || []).map((job) =>
       job.status === "running"
-        ? { ...job, status: "cancelled" as JobStatus, progress: null, error: null }
-        : job
+        ? {
+            ...job,
+            status: "cancelled" as JobStatus,
+            progress: null,
+            error: null,
+            inspectorTab: normalizeInspectorTab(job.inspectorTab),
+          }
+        : {
+            ...job,
+            inspectorTab: normalizeInspectorTab(job.inspectorTab),
+          }
     );
     return {
       jobs,
@@ -240,7 +253,7 @@ export function setDefault<K extends keyof JobSettings>(key: K, value: JobSettin
 }
 
 export function setMaxConcurrency(n: number) {
-  const clamped = Math.max(1, Math.min(4, n | 0));
+  const clamped = Math.max(1, Math.min(10, n | 0));
   setState("maxConcurrency", clamped);
   schedulePersist();
   runScheduler();
@@ -283,7 +296,7 @@ export function enqueueFiles(paths: string[]): void {
     annotatedResult: null,
     speakerNames: {},
     error: null,
-    inspectorTab: "output",
+    inspectorTab: "srt",
   }));
 
   setState(
@@ -488,7 +501,7 @@ async function runJob(jobId: string): Promise<void> {
         model: job.settings.model,
         task: job.settings.task,
         language: job.settings.language,
-        timestamps: job.settings.includeTimestamps,
+        timestamps: true,
         jobId: job.id,
         batchId: job.batchId,
       });

@@ -1,4 +1,4 @@
-import { Component, For, Show, createMemo, createSignal } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -92,6 +92,67 @@ const statusLabel = (status: JobStatus): string => {
   return "Cancelled";
 };
 
+interface QueueStatusIconProps {
+  status: JobStatus;
+}
+
+const QueueStatusIcon: Component<QueueStatusIconProps> = (props) => {
+  const icon = () => {
+    if (props.status === "running") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3l6 6-6 12L6 9z" />
+          <path d="M12 7v10" />
+          <path d="M10 13h4" />
+        </svg>
+      );
+    }
+
+    if (props.status === "completed") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M8.5 12.2l2.2 2.4 4.8-4.9" />
+        </svg>
+      );
+    }
+
+    if (props.status === "failed") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M9.4 9.4l5.2 5.2" />
+          <path d="M14.6 9.4l-5.2 5.2" />
+        </svg>
+      );
+    }
+
+    if (props.status === "cancelled") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M8.8 15.2l6.4-6.4" />
+        </svg>
+      );
+    }
+
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4.5L19.5 12 12 19.5 4.5 12z" />
+      </svg>
+    );
+  };
+
+  return (
+    <span class={`tx-status-icon ${props.status}`} aria-label={statusLabel(props.status)}>
+      <Show when={props.status === "running"}>
+        <span class="tx-status-icon-halo" aria-hidden="true" />
+      </Show>
+      {icon()}
+    </span>
+  );
+};
+
 const formatTimestamp = (seconds: number | null): string => {
   if (seconds === null) return "--:--";
   const mins = Math.floor(seconds / 60);
@@ -164,15 +225,6 @@ const getSrtContent = (job: QueueJob): string => {
     .join("\n");
 };
 
-const copyToClipboard = async (text: string) => {
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (err) {
-    console.error("Failed to copy to clipboard:", err);
-  }
-};
-
 const exportToFile = async (defaultPath: string, extensions: string[], content: string) => {
   if (!content) return;
   try {
@@ -187,6 +239,19 @@ const exportToFile = async (defaultPath: string, extensions: string[], content: 
   }
 };
 
+const QUEUE_EXPANDED_STORAGE_KEY = "hermeneia-transcription-queue-expanded";
+
+const loadQueueExpandedPreference = (): boolean => {
+  if (typeof window === "undefined") return true;
+  try {
+    const value = window.localStorage.getItem(QUEUE_EXPANDED_STORAGE_KEY);
+    if (value === null) return true;
+    return value === "1";
+  } catch {
+    return true;
+  }
+};
+
 const sanitizeExportBaseName = (fileName: string): string => {
   const base = fileName.replace(/\.[^/.]+$/, "").trim();
   const sanitized = base.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim();
@@ -198,6 +263,7 @@ const Transcription: Component = () => {
   const { toggleTheme } = useTheme();
 
   const [showClearDialog, setShowClearDialog] = createSignal(false);
+  const [queueExpanded, setQueueExpanded] = createSignal(loadQueueExpandedPreference());
 
   const defaults = () => queueState.defaults;
   const isAnnotateMode = createMemo(() => defaults().mode === "annotate");
@@ -218,6 +284,21 @@ const Transcription: Component = () => {
   });
 
   const totalJobs = createMemo(() => queueState.jobs.length);
+
+  createEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(QUEUE_EXPANDED_STORAGE_KEY, queueExpanded() ? "1" : "0");
+    } catch {
+      // best-effort preference persistence
+    }
+  });
+
+  createEffect(() => {
+    if (totalJobs() > 0 && !queueState.selectedJobId) {
+      setQueueExpanded(true);
+    }
+  });
 
   const progressSegments = createMemo(() => {
     const total = totalJobs();
@@ -248,6 +329,7 @@ const Transcription: Component = () => {
         filters: [{ name: "Audio Files", extensions: ["mp3", "wav", "flac", "m4a", "ogg"] }],
       });
       if (!selected) return;
+      setQueueExpanded(true);
       enqueueFiles(Array.isArray(selected) ? selected : [selected]);
     } catch (err) {
       console.error("Failed to add files:", err);
@@ -328,19 +410,6 @@ const Transcription: Component = () => {
       <div class="scroll-container tx-scroll-container">
         <div class="scroll-rod"></div>
         <main class="parchment tx-parchment">
-          <span class="flourish flourish-tl" aria-hidden="true">
-            <svg viewBox="0 0 80 80"><path d="M10 10 Q 30 10 30 30 M 10 10 Q 10 30 30 30" stroke="var(--gold-accent)" stroke-width="1.5" fill="none" stroke-linecap="round" /></svg>
-          </span>
-          <span class="flourish flourish-tr" aria-hidden="true">
-            <svg viewBox="0 0 80 80"><path d="M10 10 Q 30 10 30 30 M 10 10 Q 10 30 30 30" stroke="var(--gold-accent)" stroke-width="1.5" fill="none" stroke-linecap="round" /></svg>
-          </span>
-          <span class="flourish flourish-bl" aria-hidden="true">
-            <svg viewBox="0 0 80 80"><path d="M10 10 Q 30 10 30 30 M 10 10 Q 10 30 30 30" stroke="var(--gold-accent)" stroke-width="1.5" fill="none" stroke-linecap="round" /></svg>
-          </span>
-          <span class="flourish flourish-br" aria-hidden="true">
-            <svg viewBox="0 0 80 80"><path d="M10 10 Q 30 10 30 30 M 10 10 Q 10 30 30 30" stroke="var(--gold-accent)" stroke-width="1.5" fill="none" stroke-linecap="round" /></svg>
-          </span>
-
         <div class="tx-shell">
         <header class="tx-header">
           <button class="tx-back" onClick={handleBack}>
@@ -357,14 +426,14 @@ const Transcription: Component = () => {
 
           <div class="tx-header-actions">
             <div class="tx-worker-select">
-              <label for="worker-select">Workers</label>
+              <label for="worker-select">Jobs at once</label>
               <div class="tx-select">
                 <select
                   id="worker-select"
                   value={String(queueState.maxConcurrency)}
                   onChange={(e) => setMaxConcurrency(parseInt(e.currentTarget.value, 10))}
                 >
-                  <For each={[1, 2, 3, 4]}>{(value) => <option value={value}>{value}</option>}</For>
+                  <For each={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}>{(value) => <option value={value}>{value}</option>}</For>
                 </select>
                 <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
               </div>
@@ -450,37 +519,66 @@ const Transcription: Component = () => {
               }
             >
               <>
-                <nav class="tx-job-tabs" role="tablist" aria-label="Queued jobs">
-                  <For each={sortedJobs()}>
-                    {(job) => (
-                      <button
-                        class={`tx-job-tab ${queueState.selectedJobId === job.id ? "active" : ""}`}
-                        role="tab"
-                        aria-selected={queueState.selectedJobId === job.id}
-                        onClick={() => setSelectedJob(job.id)}
-                      >
-                        <span class={`tx-status-dot ${job.status}`} aria-label={statusLabel(job.status)} />
-                        <span class="tx-job-tab-name" title={job.fileName}>{job.fileName}</span>
-                        <span class={`tx-job-tab-state ${job.status}`}>{statusLabel(job.status)}</span>
-                        <Show when={job.status === "running"}>
-                          <span class="tx-job-tab-progress">
-                            {getProgressPercent(job.progress) === null
-                              ? (job.progress?.message || "Preparing...")
-                              : `${getProgressPercent(job.progress)}%`}
-                          </span>
-                        </Show>
-                      </button>
-                    )}
-                  </For>
-                </nav>
+                <section class="tx-queue-panel">
+                  <header class="tx-queue-head">
+                    <div class="tx-queue-head-title-wrap">
+                      <h2>Queue</h2>
+                      <span class="tx-queue-head-total">{totalJobs()} {totalJobs() === 1 ? "job" : "jobs"}</span>
+                    </div>
+                    <button
+                      class="tx-queue-toggle"
+                      aria-expanded={queueExpanded()}
+                      aria-controls="tx-queue-list"
+                      onClick={() => setQueueExpanded(!queueExpanded())}
+                    >
+                      <span>{queueExpanded() ? "Hide queue" : "Show queue"}</span>
+                      <svg viewBox="0 0 24 24" width="14" height="14" classList={{ expanded: queueExpanded() }}>
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </button>
+                  </header>
+
+                  <Show when={queueExpanded()}>
+                    <ul id="tx-queue-list" class="tx-queue-list" role="list">
+                      <For each={sortedJobs()}>
+                        {(job) => (
+                          <li>
+                            <button
+                              class={`tx-queue-row ${queueState.selectedJobId === job.id ? "selected" : ""}`}
+                              onClick={() => setSelectedJob(job.id)}
+                            >
+                              <div class="tx-queue-row-head">
+                                <QueueStatusIcon status={job.status} />
+                                <span class="tx-queue-row-name" title={job.fileName}>{job.fileName}</span>
+                                <span class={`tx-queue-row-state ${job.status}`}>{statusLabel(job.status)}</span>
+                              </div>
+
+                              <div class="tx-queue-row-meta">
+                                <span class="tx-chip">{job.settings.mode === "annotate" ? "Annotate" : "Transcribe"}</span>
+                                <span class="tx-chip tx-chip-muted">{job.settings.model}</span>
+                                <Show when={job.status === "running"}>
+                                  <span class="tx-queue-row-progress">
+                                    {getProgressPercent(job.progress) === null
+                                      ? (job.progress?.message || "Preparing...")
+                                      : `${getProgressPercent(job.progress)}%`}
+                                  </span>
+                                </Show>
+                              </div>
+                            </button>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                </section>
 
                 <section class="tx-inspector tx-inspector-main">
                   <Show
                     when={selectedJob()}
                     fallback={
                       <div class="tx-inspector-empty">
-                        <h2>Select a job tab</h2>
-                        <p>Pick any tab above to open its progress and transcript details.</p>
+                        <h2>Select a job</h2>
+                        <p>Choose a queue item to open its progress and transcript details.</p>
                       </div>
                     }
                   >
@@ -527,20 +625,33 @@ const JobInspector: Component<JobInspectorProps> = (props) => {
 
   const annotatedSegments = createMemo(() => getAnnotatedSegmentsWithNames(job()));
   const speakerIds = createMemo(() => getSpeakerIdsForJob(job()));
-
-  const canShowSegmentsTab = createMemo(() => {
-    const j = job();
-    if (j.status !== "completed") return false;
-    if (j.settings.mode === "annotate") return annotatedSegments().length > 0;
-    return Boolean(j.settings.includeTimestamps && j.result?.segments.length);
-  });
+  const srtContent = createMemo(() => getSrtContent(job()));
+  const textContent = createMemo(() => getPlainTextContent(job()));
+  const exportBaseName = createMemo(() => sanitizeExportBaseName(job().fileName));
 
   const activeTab = () => {
     const j = job();
-    if (j.status !== "completed") return "output" as const;
-    if (j.inspectorTab === "segments" && !canShowSegmentsTab()) return "output" as const;
+    if (j.status !== "completed") return "srt" as const;
     return j.inspectorTab;
   };
+
+  const renderSpeakerEditor = () => (
+    <aside class="tx-speaker-rail">
+      <h4>Speakers</h4>
+      <p class="tx-speaker-hint">Rename before exporting.</p>
+      <For each={speakerIds()}>
+        {(id) => (
+          <label class="tx-speaker-row">
+            <span>Speaker {id}</span>
+            <input
+              value={job().speakerNames[String(id)] || `Speaker ${id}`}
+              onInput={(e) => updateSpeakerName(job().id, id, e.currentTarget.value)}
+            />
+          </label>
+        )}
+      </For>
+    </aside>
+  );
 
   return (
     <>
@@ -625,15 +736,78 @@ const JobInspector: Component<JobInspectorProps> = (props) => {
           </Show>
         </div>
 
-        <nav class="tx-tabs">
-          <button class={`tx-tab ${activeTab() === "output" ? "active" : ""}`} onClick={() => setInspectorTab(job().id, "output")}>Output</button>
-          <Show when={canShowSegmentsTab()}>
-            <button class={`tx-tab ${activeTab() === "segments" ? "active" : ""}`} onClick={() => setInspectorTab(job().id, "segments")}>Segments</button>
-          </Show>
-          <button class={`tx-tab ${activeTab() === "export" ? "active" : ""}`} onClick={() => setInspectorTab(job().id, "export")}>Export</button>
+        <nav class="tx-tabs" aria-label="Result formats">
+          <div class="tx-tab-item">
+            <button class={`tx-tab ${activeTab() === "srt" ? "active" : ""}`} onClick={() => setInspectorTab(job().id, "srt")}>SRT</button>
+            <button
+              class="tx-tab-download"
+              onClick={() => void exportToFile(`${exportBaseName()}.srt`, ["srt"], srtContent())}
+              disabled={!srtContent().trim()}
+              title="Download .srt"
+              aria-label="Download SRT"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M5 20h14" />
+              </svg>
+              <span>.srt</span>
+            </button>
+          </div>
+          <div class="tx-tab-item">
+            <button class={`tx-tab ${activeTab() === "text" ? "active" : ""}`} onClick={() => setInspectorTab(job().id, "text")}>Text</button>
+            <button
+              class="tx-tab-download"
+              onClick={() => void exportToFile(`${exportBaseName()}.txt`, ["txt"], textContent())}
+              disabled={!textContent().trim()}
+              title="Download .txt"
+              aria-label="Download text"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M5 20h14" />
+              </svg>
+              <span>.txt</span>
+            </button>
+          </div>
         </nav>
 
-        <Show when={activeTab() === "output"}>
+        <Show when={activeTab() === "srt"}>
+          <Show
+            when={job().settings.mode === "annotate"}
+            fallback={
+              <div class="tx-panel">
+                <div class="tx-panel-head">
+                  <h3>SRT</h3>
+                </div>
+                <Show
+                  when={srtContent().trim()}
+                  fallback={<p class="tx-panel-empty">No SRT output is available for this job.</p>}
+                >
+                  <pre class="tx-transcript tx-srt-output">{srtContent()}</pre>
+                </Show>
+              </div>
+            }
+          >
+            <div class="tx-panel tx-annotated-layout">
+              <div class="tx-annotated-main">
+                <div class="tx-panel-head">
+                  <h3>SRT</h3>
+                </div>
+                <Show
+                  when={srtContent().trim()}
+                  fallback={<p class="tx-panel-empty">No SRT output is available for this job.</p>}
+                >
+                  <pre class="tx-transcript tx-srt-output">{srtContent()}</pre>
+                </Show>
+              </div>
+              {renderSpeakerEditor()}
+            </div>
+          </Show>
+        </Show>
+
+        <Show when={activeTab() === "text"}>
           <Show
             when={job().settings.mode === "transcribe" && job().result}
             fallback={
@@ -654,116 +828,19 @@ const JobInspector: Component<JobInspectorProps> = (props) => {
                     </For>
                   </div>
                 </div>
-                <aside class="tx-speaker-rail">
-                  <h4>Speakers</h4>
-                  <p class="tx-speaker-hint">Rename before exporting.</p>
-                  <For each={speakerIds()}>
-                    {(id) => (
-                      <label class="tx-speaker-row">
-                        <span>Speaker {id}</span>
-                        <input
-                          value={job().speakerNames[String(id)] || `Speaker ${id}`}
-                          onInput={(e) => updateSpeakerName(job().id, id, e.currentTarget.value)}
-                        />
-                      </label>
-                    )}
-                  </For>
-                </aside>
+                {renderSpeakerEditor()}
               </div>
             }
           >
             {(res) => (
               <div class="tx-panel">
                 <div class="tx-panel-head">
-                  <h3>Transcript</h3>
+                  <h3>Text</h3>
                 </div>
-                <div class="tx-transcript">{res().text}</div>
+                <div class="tx-transcript">{res().text || textContent()}</div>
               </div>
             )}
           </Show>
-        </Show>
-
-        <Show when={activeTab() === "segments" && canShowSegmentsTab()}>
-          <div class="tx-panel">
-            <div class="tx-panel-head">
-              <h3>
-                {job().settings.mode === "annotate"
-                  ? `Segments (${annotatedSegments().length})`
-                  : `Segments (${job().result?.segments.length || 0})`}
-              </h3>
-            </div>
-            <div class="tx-segments">
-              <Show
-                when={job().settings.mode === "annotate"}
-                fallback={
-                  <For each={job().result?.segments || []}>
-                    {(segment) => (
-                      <div class="tx-segment">
-                        <span class="tx-segment-time">{formatTimestamp(segment.start)}</span>
-                        <span class="tx-segment-text">{segment.text}</span>
-                      </div>
-                    )}
-                  </For>
-                }
-              >
-                <For each={annotatedSegments()}>
-                  {(segment) => (
-                    <div class="tx-segment">
-                      <span class="tx-segment-time">{formatTimestamp(segment.start)}</span>
-                      <span class="tx-segment-speaker">{segment.speaker_name}</span>
-                      <span class="tx-segment-text">{segment.text}</span>
-                    </div>
-                  )}
-                </For>
-              </Show>
-            </div>
-          </div>
-        </Show>
-
-        <Show when={activeTab() === "export"}>
-          <div class="tx-panel">
-            <div class="tx-panel-head">
-              <h3>Export</h3>
-            </div>
-            <div class="tx-export-grid">
-              <div class="tx-export-card">
-                <span class="tx-export-label">Copy to clipboard</span>
-                <div class="tx-export-actions">
-                  <button class="tx-btn" onClick={() => void copyToClipboard(getPlainTextContent(job()))}>Text</button>
-                  <button class="tx-btn" onClick={() => void copyToClipboard(getSrtContent(job()))}>SRT</button>
-                </div>
-              </div>
-              <div class="tx-export-card">
-                <span class="tx-export-label">Save to file</span>
-                <div class="tx-export-actions">
-                  <button
-                    class="tx-btn"
-                    onClick={() =>
-                      void exportToFile(
-                        `${job().fileName.replace(/\.[^/.]+$/, "")}.txt`,
-                        ["txt"],
-                        getPlainTextContent(job())
-                      )
-                    }
-                  >
-                    .txt
-                  </button>
-                  <button
-                    class="tx-btn"
-                    onClick={() =>
-                      void exportToFile(
-                        `${job().fileName.replace(/\.[^/.]+$/, "")}.srt`,
-                        ["srt"],
-                        getSrtContent(job())
-                      )
-                    }
-                  >
-                    .srt
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
         </Show>
       </Show>
     </>
@@ -859,19 +936,6 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
             </select>
             <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
           </div>
-        </div>
-
-        <div class="tx-field tx-field-inline">
-          <label class="tx-switch">
-            <input
-              type="checkbox"
-              checked={defaults().includeTimestamps}
-              onChange={(e) => setDefault("includeTimestamps", e.currentTarget.checked)}
-              disabled={props.isAnnotateMode}
-            />
-            <span class="tx-switch-track" />
-            <span>Include timestamps</span>
-          </label>
         </div>
 
         <Show when={props.isAnnotateMode}>
