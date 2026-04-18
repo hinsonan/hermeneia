@@ -1,10 +1,13 @@
 pub mod annotate;
 pub mod audio;
+pub mod cancel_registry;
 pub mod download;
 pub mod error;
 pub mod gpu;
 pub mod gpu_cleanup;
+pub mod hf_cache;
 pub mod runtime_cache;
+pub mod runtime_pool;
 pub mod speaker;
 pub mod system_info;
 pub mod transcribe;
@@ -12,6 +15,9 @@ pub mod translate;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use cancel_registry::CancelRegistry;
 
 // Re-export for convenience
 pub use audio::*;
@@ -31,11 +37,14 @@ const ANNOTATION_PROGRESS_EVENT: &str = "annotation-progress";
 
 struct TauriAnnotationProgressReporter {
     app_handle: tauri::AppHandle,
+    job_id: String,
 }
 
 impl annotate::AnnotationProgressReporter for TauriAnnotationProgressReporter {
-    fn report(&self, progress: annotate::AnnotationProgress) {
+    fn report(&self, mut progress: annotate::AnnotationProgress) {
         use tauri::Emitter;
+
+        progress.job_id = self.job_id.clone();
 
         if let Err(e) = self.app_handle.emit(ANNOTATION_PROGRESS_EVENT, progress) {
             tracing::warn!("Failed to emit annotation progress event: {}", e);
@@ -59,9 +68,22 @@ pub struct SpeakerModelRequirement {
 pub struct AppState {
     pub player: Mutex<AudioPlayer>,
     pub cancel_inference: Mutex<Arc<AtomicBool>>,
+    pub inference_cancel_registry: Arc<CancelRegistry>,
     pub cancel_download: Mutex<Arc<AtomicBool>>,
     pub is_downloading: Arc<AtomicBool>,
     pub runtime_cache: Arc<runtime_cache::RuntimeCacheManager>,
+}
+
+fn generate_job_id(prefix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, AtomicOrdering::SeqCst);
+    format!("{}-{}-{}", prefix, ts, seq)
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -73,9 +95,15 @@ fn greet(name: &str) -> String {
 /// Cancel a running inference operation (transcription or translation)
 #[tauri::command]
 fn cancel_inference(state: tauri::State<AppState>) {
+    state.inference_cancel_registry.cancel_all();
     let flag = state.cancel_inference.lock().unwrap();
     flag.store(true, Ordering::SeqCst);
     tracing::info!("Inference cancellation requested");
+}
+
+#[tauri::command]
+fn cancel_job(state: tauri::State<AppState>, job_id: String) -> bool {
+    state.inference_cancel_registry.cancel_job(&job_id)
 }
 
 /// Extract waveform peaks from an audio file for visualization
@@ -154,18 +182,18 @@ async fn transcribe_audio_file(
     task: String,
     language: Option<String>,
     timestamps: bool,
+    job_id: Option<String>,
+    batch_id: Option<String>,
 ) -> std::result::Result<TranscriptResult, String> {
-    // Swap in a fresh cancel flag so any previous job's flag stays true
-    let cancel_flag = {
-        let mut guard = state.cancel_inference.lock().unwrap();
-        let new_flag = Arc::new(AtomicBool::new(false));
-        *guard = new_flag.clone();
-        new_flag
-    };
-
+    let job_id = job_id.unwrap_or_else(|| generate_job_id("transcribe"));
     let runtime_cache = state.runtime_cache.clone();
+    let cancel_registry = state.inference_cancel_registry.clone();
 
     tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        let registration = cancel_registry.register_job(job_id.clone(), batch_id);
+        let cancel_flag = registration.cancel_flag();
+
         let model_enum =
             parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
 
@@ -185,7 +213,7 @@ async fn transcribe_audio_file(
         };
 
         // Create progress reporter
-        let reporter = Arc::new(TauriProgressReporter::new(app_handle));
+        let reporter = Arc::new(TauriProgressReporter::new(app_handle, job_id));
 
         // Stage 1: decode audio (with explicit decode progress events)
         reporter.emit_decoding_audio();
@@ -215,14 +243,23 @@ async fn transcribe_audio_file(
 
         // Stage 3+: load model + transcribe
         reporter.start();
-        transcribe::transcribe_prepared_audio_with_reporter_cached(
+        let result = transcribe::transcribe_prepared_audio_with_reporter_cached(
             &speech_audio,
             params,
             &*reporter,
-            Some(cancel_flag),
+            Some(cancel_flag.clone()),
             Some(runtime_cache),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+
+        drop(registration);
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            active_jobs = cancel_registry.active_jobs(),
+            "Transcription job finished"
+        );
+
+        result
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -243,18 +280,18 @@ async fn annotate_audio_file(
     threshold: f32,
     device: String,
     speaker_names: Option<std::collections::HashMap<i32, String>>,
+    job_id: Option<String>,
+    batch_id: Option<String>,
 ) -> std::result::Result<annotate::AnnotatedResult, String> {
-    // Swap in a fresh cancel flag so any previous job's flag stays true
-    let cancel_flag = {
-        let mut guard = state.cancel_inference.lock().unwrap();
-        let new_flag = Arc::new(AtomicBool::new(false));
-        *guard = new_flag.clone();
-        new_flag
-    };
-
+    let job_id = job_id.unwrap_or_else(|| generate_job_id("annotate"));
     let runtime_cache = state.runtime_cache.clone();
+    let cancel_registry = state.inference_cancel_registry.clone();
 
     tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        let registration = cancel_registry.register_job(job_id.clone(), batch_id);
+        let cancel_flag = registration.cancel_flag();
+
         let transcribe_model_enum =
             annotate::parse_whisper_model(&transcribe_model).map_err(|e| e.to_string())?;
         let speaker_model_enum =
@@ -280,15 +317,28 @@ async fn annotate_audio_file(
             speaker_names: speaker_names.unwrap_or_default(),
         };
 
-        let reporter = Arc::new(TauriAnnotationProgressReporter { app_handle });
-        annotate::annotate_audio_with_reporter_cached(
+        let reporter = Arc::new(TauriAnnotationProgressReporter {
+            app_handle,
+            job_id: job_id.clone(),
+        });
+        let result = annotate::annotate_audio_with_reporter_cached(
             &file_path,
             annotate_params,
             reporter,
-            Some(cancel_flag),
+            &job_id,
+            Some(cancel_flag.clone()),
             Some(runtime_cache),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+
+        drop(registration);
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            active_jobs = cancel_registry.active_jobs(),
+            "Annotation job finished"
+        );
+
+        result
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -375,11 +425,112 @@ fn parse_whisper_model(s: &str) -> Option<WhisperModel> {
     }
 }
 
+fn decode_percent_encoded(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h1 = bytes[i + 1] as char;
+            let h2 = bytes[i + 2] as char;
+            let hex = format!("{}{}", h1, h2);
+            if let Ok(value) = u8::from_str_radix(&hex, 16) {
+                out.push(value);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn normalize_output_path(raw_path: &str) -> std::path::PathBuf {
+    let trimmed = raw_path.trim();
+    let without_scheme = trimmed.strip_prefix("file://").unwrap_or(trimmed);
+
+    #[cfg(target_os = "windows")]
+    let without_scheme = {
+        if without_scheme.len() > 3
+            && without_scheme.as_bytes()[0] == b'/'
+            && without_scheme.as_bytes()[2] == b':'
+        {
+            &without_scheme[1..]
+        } else {
+            without_scheme
+        }
+    };
+
+    std::path::PathBuf::from(decode_percent_encoded(without_scheme))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ZipArchiveEntry {
+    path: String,
+    content: String,
+}
+
 /// Write text content to a file
 #[tauri::command]
 async fn write_text_file(path: String, content: String) -> std::result::Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+        let output_path = normalize_output_path(&path);
+        if let Some(parent) = output_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+        }
+        std::fs::write(&output_path, content).map_err(|e| format!("Failed to write file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Write a zip archive composed of multiple text entries
+#[tauri::command]
+async fn write_zip_archive(
+    path: String,
+    entries: Vec<ZipArchiveEntry>,
+) -> std::result::Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        use std::fs::File;
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        let mut output_path = normalize_output_path(&path);
+        if output_path.extension().is_none() {
+            output_path.set_extension("zip");
+        }
+        if let Some(parent) = output_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create export directory: {}", e))?;
+        }
+
+        let file = File::create(&output_path)
+            .map_err(|e| format!("Failed to create zip file: {}", e))?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+
+        for entry in entries {
+            let normalized = entry.path.trim().replace('\\', "/");
+            if normalized.is_empty() {
+                return Err("Archive entry path cannot be empty".to_string());
+            }
+            if normalized.starts_with('/') || normalized.split('/').any(|part| part == "..") {
+                return Err(format!("Invalid archive entry path: {}", entry.path));
+            }
+
+            zip.start_file(&normalized, options)
+                .map_err(|e| format!("Failed to add '{}' to zip: {}", normalized, e))?;
+            zip.write_all(entry.content.as_bytes())
+                .map_err(|e| format!("Failed to write '{}' in zip: {}", normalized, e))?;
+        }
+
+        zip.finish()
+            .map_err(|e| format!("Failed to finalize zip archive: {}", e))?;
+        Ok(())
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -938,6 +1089,7 @@ pub fn run() {
         .manage(AppState {
             player: Mutex::new(AudioPlayer::new()),
             cancel_inference: Mutex::new(Arc::new(AtomicBool::new(false))),
+            inference_cancel_registry: Arc::new(CancelRegistry::new()),
             cancel_download: Mutex::new(Arc::new(AtomicBool::new(false))),
             is_downloading: Arc::new(AtomicBool::new(false)),
             runtime_cache: runtime_cache::global_runtime_cache(),
@@ -949,6 +1101,7 @@ pub fn run() {
             transcribe_audio_file,
             annotate_audio_file,
             write_text_file,
+            write_zip_archive,
             get_system_capabilities,
             validate_model_selection,
             list_speaker_model_requirements,
@@ -959,6 +1112,7 @@ pub fn run() {
             check_marian_pair_supported,
             resolve_translation_model,
             cancel_inference,
+            cancel_job,
             list_models,
             download_model,
             cancel_download,

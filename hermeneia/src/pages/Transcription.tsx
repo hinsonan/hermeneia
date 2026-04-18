@@ -1,35 +1,51 @@
-import { Component, createSignal, For, Show, onCleanup, onMount, createEffect, createMemo } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../utils/theme";
 import { formatTime } from "../utils/timeFormat";
-import FileUploader from "../components/FileUploader";
 import GreekScrollLoader from "../components/GreekScrollLoader";
 import TranscriptionProgressBar from "../components/TranscriptionProgressBar";
 import InfoIcon from "../components/InfoIcon";
 import ConfirmDialog from "../components/ConfirmDialog";
-import DownloadProgressBar from "../components/DownloadProgressBar";
+import FileUploader from "../components/FileUploader";
 import type {
-  WhisperModel,
-  TranscriptionTask,
-  TranscriptResult,
-  TranscriptionProgress,
-  ModelOption,
-  LanguageOption,
-  SystemCapabilities,
-  ModelValidation,
-  AnnotationProgress,
   AnnotatedResult,
+  LanguageOption,
+  ModelOption,
   SpeakerDevice,
   SpeakerModelKey,
-  SpeakerModelRequirement,
+  TranscriptionTask,
+  WhisperModel,
 } from "../types/transcription";
-import type { DownloadProgress } from "../types/models";
+import {
+  JobProgress,
+  JobStatus,
+  QueueJob,
+  cancelAllRunning,
+  cancelJob,
+  cancelledCount,
+  clearAll,
+  clearCompleted,
+  completedCount,
+  dismissQueueError,
+  enqueueFiles,
+  failedCount,
+  queueState,
+  queuedCount,
+  removeJob,
+  retryFailedJobs,
+  retryJob,
+  runningCount,
+  selectedJob,
+  setDefault,
+  setInspectorTab,
+  setMaxConcurrency,
+  setSelectedJob,
+  sortedJobs,
+  updateSpeakerName,
+} from "../stores/jobQueue";
 import "./Transcription.css";
-
-type JobProgress = TranscriptionProgress | AnnotationProgress;
 
 const MODEL_OPTIONS: ModelOption[] = [
   { value: "tiny", label: "Tiny", description: "Fastest, least accurate (~1GB VRAM)" },
@@ -68,83 +84,198 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "th", label: "Thai" },
 ];
 
+const statusLabel = (status: JobStatus): string => {
+  if (status === "queued") return "Queued";
+  if (status === "running") return "Running";
+  if (status === "completed") return "Done";
+  if (status === "failed") return "Failed";
+  return "Cancelled";
+};
+
+interface QueueStatusIconProps {
+  status: JobStatus;
+}
+
+const QueueStatusIcon: Component<QueueStatusIconProps> = (props) => {
+  const icon = () => {
+    if (props.status === "running") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3l6 6-6 12L6 9z" />
+          <path d="M12 7v10" />
+          <path d="M10 13h4" />
+        </svg>
+      );
+    }
+
+    if (props.status === "completed") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M8.5 12.2l2.2 2.4 4.8-4.9" />
+        </svg>
+      );
+    }
+
+    if (props.status === "failed") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M9.4 9.4l5.2 5.2" />
+          <path d="M14.6 9.4l-5.2 5.2" />
+        </svg>
+      );
+    }
+
+    if (props.status === "cancelled") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M8.8 15.2l6.4-6.4" />
+        </svg>
+      );
+    }
+
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 4.5L19.5 12 12 19.5 4.5 12z" />
+      </svg>
+    );
+  };
+
+  return (
+    <span class={`tx-status-icon ${props.status}`} aria-label={statusLabel(props.status)}>
+      <Show when={props.status === "running"}>
+        <span class="tx-status-icon-halo" aria-hidden="true" />
+      </Show>
+      {icon()}
+    </span>
+  );
+};
+
+const formatTimestamp = (seconds: number | null): string => {
+  if (seconds === null) return "--:--";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 100);
+  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
+};
+
+const formatSrtTimestamp = (seconds: number | null): string => {
+  if (seconds === null) return "00:00:00,000";
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 1000);
+  return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")},${ms.toString().padStart(3, "0")}`;
+};
+
+const getProgressPercent = (progress: JobProgress | null): number | null => {
+  if (!progress || progress.current === null || progress.total === null || progress.total === 0) {
+    return null;
+  }
+  return Math.min(100, Math.round((progress.current / progress.total) * 100));
+};
+
+const getAnnotatedSegmentsWithNames = (job: QueueJob): AnnotatedResult["segments"] => {
+  if (!job.annotatedResult) return [];
+  return job.annotatedResult.segments.map((seg) => ({
+    ...seg,
+    speaker_name: job.speakerNames[String(seg.speaker)] || seg.speaker_name || `Speaker ${seg.speaker}`,
+  }));
+};
+
+const getSpeakerIdsForJob = (job: QueueJob): number[] => {
+  const ids = Array.from(new Set(getAnnotatedSegmentsWithNames(job).map((s) => s.speaker)));
+  return ids.sort((a, b) => a - b);
+};
+
+const getPlainTextContent = (job: QueueJob): string => {
+  if (job.settings.mode === "annotate") {
+    return getAnnotatedSegmentsWithNames(job)
+      .map((seg) => {
+        const startMin = Math.floor(seg.start / 60).toString().padStart(2, "0");
+        const startSec = Math.floor(seg.start % 60).toString().padStart(2, "0");
+        return `[${startMin}:${startSec}] ${seg.speaker_name}: ${seg.text}`;
+      })
+      .join("\n");
+  }
+  return job.result?.text || "";
+};
+
+const getSrtContent = (job: QueueJob): string => {
+  if (job.settings.mode === "annotate") {
+    const segments = getAnnotatedSegmentsWithNames(job);
+    if (segments.length === 0) return "";
+    return segments
+      .map((seg, index) => {
+        const startTime = formatSrtTimestamp(seg.start);
+        const endTime = formatSrtTimestamp(seg.end);
+        return `${index + 1}\n${startTime} --> ${endTime}\n[${seg.speaker_name}] ${seg.text.trim()}\n`;
+      })
+      .join("\n");
+  }
+  if (!job.result?.segments.length) return "";
+  return job.result.segments
+    .map((seg, index) => {
+      const startTime = formatSrtTimestamp(seg.start);
+      const endTime = formatSrtTimestamp(seg.end);
+      return `${index + 1}\n${startTime} --> ${endTime}\n${seg.text.trim()}\n`;
+    })
+    .join("\n");
+};
+
+const exportToFile = async (defaultPath: string, extensions: string[], content: string) => {
+  if (!content) return;
+  try {
+    const outputPath = await save({
+      filters: [{ name: "Export", extensions }],
+      defaultPath,
+    });
+    if (!outputPath) return;
+    await invoke("write_text_file", { path: outputPath, content });
+  } catch (err) {
+    console.error("Failed to export file:", err);
+  }
+};
+
+const QUEUE_EXPANDED_STORAGE_KEY = "hermeneia-transcription-queue-expanded";
+
+const loadQueueExpandedPreference = (): boolean => {
+  if (typeof window === "undefined") return true;
+  try {
+    const value = window.localStorage.getItem(QUEUE_EXPANDED_STORAGE_KEY);
+    if (value === null) return true;
+    return value === "1";
+  } catch {
+    return true;
+  }
+};
+
+const sanitizeExportBaseName = (fileName: string): string => {
+  const base = fileName.replace(/\.[^/.]+$/, "").trim();
+  const sanitized = base.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim();
+  return sanitized || "transcript";
+};
+
 const Transcription: Component = () => {
   const navigate = useNavigate();
   const { toggleTheme } = useTheme();
 
-  // File state
-  const [filePath, setFilePath] = createSignal<string>("");
-  const [fileName, setFileName] = createSignal<string>("");
+  const [showClearDialog, setShowClearDialog] = createSignal(false);
+  const [queueExpanded, setQueueExpanded] = createSignal(loadQueueExpandedPreference());
 
-  // Settings
-  const [mode, setMode] = createSignal<"transcribe" | "annotate">("transcribe");
-  const [selectedModel, setSelectedModel] = createSignal<WhisperModel>("tiny");
-  const [selectedTask, setSelectedTask] = createSignal<TranscriptionTask>("transcribe");
-  const [selectedLanguage, setSelectedLanguage] = createSignal<string | null>(null);
-  const [includeTimestamps, setIncludeTimestamps] = createSignal(true);
-  const [selectedSpeakerModel, setSelectedSpeakerModel] = createSignal<SpeakerModelKey>("english");
-  const [selectedSpeakerDevice, setSelectedSpeakerDevice] = createSignal<SpeakerDevice>("cpu");
-  const [numSpeakers, setNumSpeakers] = createSignal<number | null>(null);
-  const [diarizeThreshold, setDiarizeThreshold] = createSignal<number>(0.5);
-
-  // Processing state
-  const [isTranscribing, setIsTranscribing] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
-  const [result, setResult] = createSignal<TranscriptResult | null>(null);
-  const [annotatedResult, setAnnotatedResult] = createSignal<AnnotatedResult | null>(null);
-  const [speakerNames, setSpeakerNames] = createSignal<Record<string, string>>({});
-  const [transcriptionProgress, setTranscriptionProgress] = createSignal<JobProgress | null>(null);
-
-  // Cancel dialog
-  const [showCancelDialog, setShowCancelDialog] = createSignal(false);
-
-  // Model download state
-  const [isDownloading, setIsDownloading] = createSignal(false);
-  const [modelDownloadProgress, setModelDownloadProgress] = createSignal<DownloadProgress | null>(null);
-  const [isPreparingSpeaker, setIsPreparingSpeaker] = createSignal(false);
-
-  // System capability detection
-  const [systemCapabilities, setSystemCapabilities] = createSignal<SystemCapabilities | null>(null);
-  const [modelValidation, setModelValidation] = createSignal<ModelValidation | null>(null);
-  const [speakerModelRequirements, setSpeakerModelRequirements] = createSignal<SpeakerModelRequirement[]>([]);
-
-  // Track unlisten functions for cleanup
-  let progressUnlisten: UnlistenFn | null = null;
-  let downloadUnlisten: UnlistenFn | null = null;
-
-  const isAnnotateMode = createMemo(() => mode() === "annotate");
-
-  // Check if selected model is English-only
-  const isEnglishOnlyModel = createMemo(() => {
-    return selectedModel().endsWith(".en");
-  });
+  const defaults = () => queueState.defaults;
+  const isAnnotateMode = createMemo(() => defaults().mode === "annotate");
+  const isEnglishOnlyModel = createMemo(() => defaults().model.endsWith(".en"));
 
   const availableSpeakerDevices = createMemo(() => {
-    const deviceType = systemCapabilities()?.gpu_info?.device_type;
+    const deviceType = queueState.systemCapabilities?.gpu_info?.device_type;
     if (deviceType === "NvidiaCuda") return ["cuda", "cpu"] as SpeakerDevice[];
     if (deviceType === "AppleMetal") return ["coreml", "cpu"] as SpeakerDevice[];
     return ["cpu"] as SpeakerDevice[];
   });
 
-  const activeSpeakerRequirement = createMemo(() =>
-    speakerModelRequirements().find((m) => m.key === selectedSpeakerModel())
-  );
-
-  const annotatedSegmentsWithNames = createMemo(() => {
-    const res = annotatedResult();
-    if (!res) return [];
-    return res.segments.map((seg) => ({
-      ...seg,
-      speaker_name: speakerNames()[String(seg.speaker)] || seg.speaker_name || `Speaker ${seg.speaker}`,
-    }));
-  });
-
-  const speakerIds = createMemo(() => {
-    const ids = Array.from(new Set(annotatedSegmentsWithNames().map((s) => s.speaker)));
-    return ids.sort((a, b) => a - b);
-  });
-
-  // Filter language options based on model selection
   const availableLanguages = createMemo(() => {
     if (isEnglishOnlyModel()) {
       return LANGUAGE_OPTIONS.filter((lang) => lang.value === "en");
@@ -152,471 +283,113 @@ const Transcription: Component = () => {
     return LANGUAGE_OPTIONS;
   });
 
-  // Auto-select English when English-only model is selected
+  const totalJobs = createMemo(() => queueState.jobs.length);
+
   createEffect(() => {
-    if (isEnglishOnlyModel()) {
-      setSelectedLanguage("en");
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(QUEUE_EXPANDED_STORAGE_KEY, queueExpanded() ? "1" : "0");
+    } catch {
+      // best-effort preference persistence
     }
   });
 
-  // Force timestamps for annotate mode
   createEffect(() => {
-    if (isAnnotateMode()) {
-      setIncludeTimestamps(true);
+    if (totalJobs() > 0 && !queueState.selectedJobId) {
+      setQueueExpanded(true);
     }
   });
 
-  // Cleanup on component unmount
-  onCleanup(() => {
-    if (progressUnlisten) {
-      progressUnlisten();
-      progressUnlisten = null;
-    }
-    if (downloadUnlisten) {
-      downloadUnlisten();
-      downloadUnlisten = null;
-    }
+  const progressSegments = createMemo(() => {
+    const total = totalJobs();
+    if (total === 0) return null;
+    return {
+      completed: (completedCount() / total) * 100,
+      running: (runningCount() / total) * 100,
+      failed: (failedCount() / total) * 100,
+      cancelled: (cancelledCount() / total) * 100,
+    };
   });
 
-  // Fetch system capabilities + speaker requirements on mount
-  onMount(async () => {
-    try {
-      const caps = await invoke<SystemCapabilities>("get_system_capabilities");
-      setSystemCapabilities(caps);
-      const deviceType = caps.gpu_info?.device_type;
-      if (deviceType === "NvidiaCuda") {
-        setSelectedSpeakerDevice("cuda");
-      } else if (deviceType === "AppleMetal") {
-        setSelectedSpeakerDevice("coreml");
-      } else {
-        setSelectedSpeakerDevice("cpu");
-      }
-    } catch (err) {
-      console.warn("Failed to get system capabilities:", err);
+  const handleLanguageChange = (value: string) => {
+    setDefault("language", value || null);
+  };
+
+  const handleModelChange = (value: WhisperModel) => {
+    setDefault("model", value);
+    if (value.endsWith(".en")) {
+      setDefault("language", "en");
     }
+  };
 
+  const openAddFilesDialog = async () => {
     try {
-      const requirements = await invoke<SpeakerModelRequirement[]>("list_speaker_model_requirements");
-      setSpeakerModelRequirements(requirements);
-    } catch (err) {
-      console.warn("Failed to load speaker model requirements:", err);
-    }
-  });
-
-  // Validate model selection whenever model changes
-  createEffect(() => {
-    const model = selectedModel();
-    const caps = systemCapabilities();
-
-    if (caps) {
-      validateModel(model);
-    }
-  });
-
-  const validateModel = async (model: WhisperModel) => {
-    try {
-      const validation = await invoke<ModelValidation>("validate_model_selection", {
-        model,
-        forceCpu: false,
+      const selected = await open({
+        multiple: true,
+        filters: [{ name: "Audio Files", extensions: ["mp3", "wav", "flac", "m4a", "ogg"] }],
       });
-      setModelValidation(validation);
+      if (!selected) return;
+      setQueueExpanded(true);
+      enqueueFiles(Array.isArray(selected) ? selected : [selected]);
     } catch (err) {
-      console.error("Validation failed:", err);
+      console.error("Failed to add files:", err);
     }
   };
 
-  // Segments expanded state
-  const [segmentsExpanded, setSegmentsExpanded] = createSignal(false);
+  const exportCompletedBundle = async () => {
+    const completed = queueState.jobs.filter((job) => job.status === "completed");
+    if (completed.length === 0) return;
 
-  // Handle file selection
-  const handleFileSelected = (path: string) => {
-    setFilePath(path);
-    setFileName(path.split("/").pop() || path.split("\\").pop() || "Unknown");
-    setResult(null);
-    setAnnotatedResult(null);
-    setError(null);
-  };
+    const nameCounts = new Map<string, number>();
+    const entries: { path: string; content: string }[] = [];
 
-  // Format timestamp for display (MM:SS.ms)
-  const formatTimestamp = (seconds: number | null): string => {
-    if (seconds === null) return "--:--";
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 100);
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${ms
-      .toString()
-      .padStart(2, "0")}`;
-  };
+    completed.forEach((job) => {
+      const baseName = sanitizeExportBaseName(job.fileName);
+      const seen = nameCounts.get(baseName) || 0;
+      nameCounts.set(baseName, seen + 1);
+      const uniqueBaseName = seen === 0 ? baseName : `${baseName}_${seen + 1}`;
 
-  // Format timestamp for SRT format (HH:MM:SS,mmm)
-  const formatSrtTimestamp = (seconds: number | null): string => {
-    if (seconds === null) return "00:00:00,000";
-    const hours = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 1000);
-    return `${hours.toString().padStart(2, "0")}:${mins
-      .toString()
-      .padStart(2, "0")}:${secs.toString().padStart(2, "0")},${ms.toString().padStart(3, "0")}`;
-  };
-
-  // Generate plain text content
-  const getPlainTextContent = (): string => {
-    const transcript = result();
-    if (!transcript) return "";
-    return transcript.text;
-  };
-
-  // Generate SRT content (transcription or annotate mode)
-  const getSrtContent = (): string => {
-    if (isAnnotateMode()) {
-      const segments = annotatedSegmentsWithNames();
-      if (segments.length === 0) return "";
-
-      return segments
-        .map((seg, index) => {
-          const startTime = formatSrtTimestamp(seg.start);
-          const endTime = formatSrtTimestamp(seg.end);
-          return `${index + 1}\n${startTime} --> ${endTime}\n[${seg.speaker_name}] ${seg.text.trim()}\n`;
-        })
-        .join("\n");
-    }
-
-    const transcript = result();
-    if (!transcript || transcript.segments.length === 0) return "";
-
-    return transcript.segments
-      .map((seg, index) => {
-        const startTime = formatSrtTimestamp(seg.start);
-        const endTime = formatSrtTimestamp(seg.end);
-        return `${index + 1}\n${startTime} --> ${endTime}\n${seg.text.trim()}\n`;
-      })
-      .join("\n");
-  };
-
-  // Check if error is OOM-related
-  const isOOMError = (err: string): boolean => {
-    return (
-      err.toLowerCase().includes("out of memory") ||
-      err.toLowerCase().includes("oom") ||
-      err.includes("OutOfMemory")
-    );
-  };
-
-  // Map whisper model key to HuggingFace model ID for cache checks
-  const whisperModelId = (model: string): string => `openai/whisper-${model}`;
-
-  // Download a model before transcription if not cached
-  const ensureModelDownloaded = async (): Promise<boolean> => {
-    const hfId = whisperModelId(selectedModel());
-    const cached = await invoke<boolean>("is_model_cached", { modelId: hfId });
-    if (cached) return true;
-
-    setIsDownloading(true);
-    setModelDownloadProgress(null);
-
-    try {
-      downloadUnlisten = await listen<DownloadProgress>("download-progress", (event) => {
-        setModelDownloadProgress(event.payload);
-        if (event.payload.phase === "complete" || event.payload.phase === "cancelled") {
-          setModelDownloadProgress(null);
-        }
+      entries.push({
+        path: `${uniqueBaseName}.txt`,
+        content: getPlainTextContent(job),
       });
-    } catch (err) {
-      console.warn("Failed to set up download listener:", err);
-    }
-
-    try {
-      const modelLabel = MODEL_OPTIONS.find((m) => m.value === selectedModel())?.label || selectedModel();
-      await invoke("download_model", {
-        modelId: hfId,
-        modelName: `Whisper ${modelLabel}`,
+      entries.push({
+        path: `${uniqueBaseName}.srt`,
+        content: getSrtContent(job),
       });
-      return true;
-    } catch (err) {
-      const errStr = String(err);
-      if (errStr.includes("cancelled") || errStr.includes("Download cancelled")) {
-        return false;
-      }
-      setError(`Model download failed: ${errStr}`);
-      return false;
-    } finally {
-      setIsDownloading(false);
-      setModelDownloadProgress(null);
-      if (downloadUnlisten) {
-        downloadUnlisten();
-        downloadUnlisten = null;
-      }
-    }
-  };
-
-  const ensureSpeakerModelDownloaded = async (): Promise<boolean> => {
-    const requirement = activeSpeakerRequirement();
-    if (requirement?.is_cached) {
-      return true;
-    }
-
-    setIsPreparingSpeaker(true);
-    try {
-      await invoke("ensure_speaker_model_downloaded", {
-        model: selectedSpeakerModel(),
-      });
-      const requirements = await invoke<SpeakerModelRequirement[]>("list_speaker_model_requirements");
-      setSpeakerModelRequirements(requirements);
-      return true;
-    } catch (err) {
-      setError(`Speaker model download failed: ${String(err)}`);
-      return false;
-    } finally {
-      setIsPreparingSpeaker(false);
-    }
-  };
-
-  // Start transcription/annotation
-  const handleTranscribe = async () => {
-    if (!filePath()) return;
-
-    setError(null);
-
-    const modelReady = await ensureModelDownloaded();
-    if (!modelReady) return;
-
-    if (isAnnotateMode()) {
-      const speakerReady = await ensureSpeakerModelDownloaded();
-      if (!speakerReady) return;
-    }
-
-    setIsTranscribing(true);
-    if (isAnnotateMode()) {
-      setTranscriptionProgress({
-        phase: "starting",
-        current: null,
-        total: null,
-        message: "Starting annotation...",
-        indeterminate: true,
-      } as AnnotationProgress);
-    } else {
-      setTranscriptionProgress(null);
-    }
+    });
 
     try {
-      const eventName = isAnnotateMode() ? "annotation-progress" : "transcription-progress";
-
-      progressUnlisten = await listen(eventName, (event) => {
-        const payload = event.payload as AnnotationProgress | TranscriptionProgress;
-        if (isAnnotateMode()) {
-          setTranscriptionProgress(payload as AnnotationProgress);
-        } else {
-          setTranscriptionProgress(payload as TranscriptionProgress);
-        }
-      });
-    } catch (err) {
-      console.warn("Failed to set up progress listener:", err);
-    }
-
-    try {
-      if (isAnnotateMode()) {
-        const annotated = await invoke<AnnotatedResult>("annotate_audio_file", {
-          filePath: filePath(),
-          transcribeModel: selectedModel(),
-          speakerModel: selectedSpeakerModel(),
-          task: selectedTask(),
-          language: selectedLanguage(),
-          timestamps: true,
-          numSpeakers: numSpeakers(),
-          threshold: diarizeThreshold(),
-          device: selectedSpeakerDevice(),
-          speakerNames: speakerNames(),
-        });
-
-        setResult(null);
-        setAnnotatedResult(annotated);
-        setSpeakerNames(annotated.speaker_names || {});
-      } else {
-        const transcriptResult = await invoke<TranscriptResult>("transcribe_audio_file", {
-          filePath: filePath(),
-          model: selectedModel(),
-          task: selectedTask(),
-          language: selectedLanguage(),
-          timestamps: includeTimestamps(),
-        });
-
-        setAnnotatedResult(null);
-        setResult(transcriptResult);
-      }
-    } catch (err) {
-      const errStr = String(err);
-      if (errStr.includes("Operation cancelled")) {
-        navigate("/");
-        return;
-      }
-      setError(errStr);
-    } finally {
-      if (progressUnlisten) {
-        progressUnlisten();
-        progressUnlisten = null;
-      }
-      setIsTranscribing(false);
-      setTranscriptionProgress(null);
-    }
-  };
-
-  // Generate plain text for annotated result: "[MM:SS] Speaker: text"
-  const getAnnotatedPlainTextContent = (): string => {
-    return annotatedSegmentsWithNames()
-      .map((seg) => {
-        const startMin = Math.floor(seg.start / 60).toString().padStart(2, "0");
-        const startSec = Math.floor(seg.start % 60).toString().padStart(2, "0");
-        return `[${startMin}:${startSec}] ${seg.speaker_name}: ${seg.text}`;
-      })
-      .join("\n");
-  };
-
-  const handleCopyAnnotatedText = async () => {
-    const text = getAnnotatedPlainTextContent();
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (err) {
-      console.error("Failed to copy annotated text:", err);
-    }
-  };
-
-  const handleExportAnnotatedText = async () => {
-    if (annotatedSegmentsWithNames().length === 0) return;
-    try {
+      const defaultPath = `hermeneia_batch_${new Date().toISOString().slice(0, 10)}.zip`;
       const outputPath = await save({
-        filters: [{ name: "Text Files", extensions: ["txt"] }],
-        defaultPath: `${fileName().replace(/\.[^/.]+$/, "")}_annotated.txt`,
+        filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+        defaultPath,
       });
       if (!outputPath) return;
-      await invoke("write_text_file", {
-        path: outputPath,
-        content: getAnnotatedPlainTextContent(),
-      });
+
+      await invoke("write_zip_archive", { path: outputPath, entries });
     } catch (err) {
-      console.error("Failed to export annotated text:", err);
+      console.error("Failed to export zip archive:", err);
     }
   };
 
-  // Copy plain text to clipboard
-  const handleCopyPlainText = async () => {
-    const text = getPlainTextContent();
-    if (!text) return;
-
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
-    }
-  };
-
-  // Copy SRT to clipboard
-  const handleCopySrt = async () => {
-    const srt = getSrtContent();
-    if (!srt) return;
-
-    try {
-      await navigator.clipboard.writeText(srt);
-    } catch (err) {
-      console.error("Failed to copy SRT to clipboard:", err);
-    }
-  };
-
-  // Export transcript as plain text file
-  const handleExportPlainText = async () => {
-    const transcript = result();
-    if (!transcript) return;
-
-    try {
-      const outputPath = await save({
-        filters: [
-          {
-            name: "Text Files",
-            extensions: ["txt"],
-          },
-        ],
-        defaultPath: `${fileName().replace(/\.[^/.]+$/, "")}_transcript.txt`,
-      });
-
-      if (!outputPath) return;
-
-      await invoke("write_text_file", {
-        path: outputPath,
-        content: transcript.text,
-      });
-    } catch (err) {
-      console.error("Failed to export transcript:", err);
-    }
-  };
-
-  // Export transcript as SRT file
-  const handleExportSrt = async () => {
-    const hasSegments = isAnnotateMode()
-      ? annotatedSegmentsWithNames().length > 0
-      : !!result() && result()!.segments.length > 0;
-
-    if (!hasSegments) return;
-
-    try {
-      const outputPath = await save({
-        filters: [
-          {
-            name: "SRT Subtitle Files",
-            extensions: ["srt"],
-          },
-        ],
-        defaultPath: `${fileName().replace(/\.[^/.]+$/, "")}${isAnnotateMode() ? "_annotated" : ""}.srt`,
-      });
-
-      if (!outputPath) return;
-
-      const content = getSrtContent();
-
-      await invoke("write_text_file", {
-        path: outputPath,
-        content,
-      });
-    } catch (err) {
-      console.error("Failed to export SRT:", err);
-    }
-  };
-
-  const updateSpeakerName = (speakerId: number, value: string) => {
-    setSpeakerNames((prev) => ({ ...prev, [String(speakerId)]: value }));
-  };
-
-  // Handle back button - show confirm dialog if transcribing
   const handleBack = () => {
-    if (isTranscribing()) {
-      setShowCancelDialog(true);
-    } else {
-      navigate("/");
-    }
-  };
-
-  // Confirm cancellation and navigate home immediately
-  const handleConfirmCancel = () => {
-    setShowCancelDialog(false);
-    invoke("cancel_inference").catch(() => {});
     navigate("/");
   };
 
-  // Reset for new file
-  const handleNewFile = () => {
-    setFilePath("");
-    setFileName("");
-    setResult(null);
-    setAnnotatedResult(null);
-    setSpeakerNames({});
-    setError(null);
-    setNumSpeakers(null);
-    setDiarizeThreshold(0.5);
+  const requestClearAll = () => {
+    if (totalJobs() === 0) return;
+    setShowClearDialog(true);
+  };
+
+  const confirmClearAll = async () => {
+    setShowClearDialog(false);
+    await cancelAllRunning();
+    clearAll();
   };
 
   return (
     <>
-      {/* Theme Toggle */}
       <button class="theme-toggle" onClick={toggleTheme} aria-label="Toggle dark mode">
         <svg class="sun-icon" viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="5" />
@@ -634,573 +407,613 @@ const Transcription: Component = () => {
         </svg>
       </button>
 
-      <div class="scroll-container">
+      <div class="scroll-container tx-scroll-container">
         <div class="scroll-rod"></div>
+        <main class="parchment tx-parchment">
+        <div class="tx-shell">
+        <header class="tx-header">
+          <button class="tx-back" onClick={handleBack}>
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path d="M19 12H5M12 19l-7-7 7-7" />
+            </svg>
+            <span>Home</span>
+          </button>
 
-        <main class="parchment">
-          <header class="page-header">
-            <button class="back-button" onClick={handleBack}>
-              <svg viewBox="0 0 24 24" width="20" height="20">
-                <path d="M19 12H5M12 19l-7-7 7-7" />
-              </svg>
-              <span>Home</span>
-            </button>
-            <h1>{isAnnotateMode() ? "Transcription + Annotation" : "Transcription"}</h1>
-          </header>
+          <div class="tx-title">
+            <h1>Transcription</h1>
+            <p>Queue batches, switch freely — jobs keep running in the background.</p>
+          </div>
 
-          <Show when={!filePath()}>
-            <section class="upload-section">
-              <FileUploader onFileSelected={handleFileSelected} />
-            </section>
-          </Show>
-
-          <Show when={filePath()}>
-            <div class="file-bar">
-              <div class="file-info">
-                <svg viewBox="0 0 24 24" width="20" height="20">
-                  <path d="M9 18V5l12-2v13" />
-                  <circle cx="6" cy="18" r="3" />
-                  <circle cx="18" cy="16" r="3" />
-                </svg>
-                <span class="file-name">{fileName()}</span>
+          <div class="tx-header-actions">
+            <div class="tx-worker-select">
+              <label for="worker-select">Jobs at once</label>
+              <div class="tx-select">
+                <select
+                  id="worker-select"
+                  value={String(queueState.maxConcurrency)}
+                  onChange={(e) => setMaxConcurrency(parseInt(e.currentTarget.value, 10))}
+                >
+                  <For each={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}>{(value) => <option value={value}>{value}</option>}</For>
+                </select>
+                <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
               </div>
-              <button class="change-file-btn" onClick={handleNewFile} disabled={isTranscribing()}>
-                Change
-              </button>
             </div>
 
-            <Show when={error()}>
-              <div class="error-banner">
-                <div class="error-content">
-                  <span>{error()}</span>
-                  <Show when={isOOMError(error()!)}>
-                    <div class="error-suggestion">
-                      <svg viewBox="0 0 24 24" width="16" height="16">
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="12" y1="8" x2="12" y2="12" />
-                        <line x1="12" y1="16" x2="12.01" y2="16" />
+            <button class="tx-btn tx-btn-primary" onClick={() => void openAddFilesDialog()}>
+              <svg viewBox="0 0 24 24" width="16" height="16">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              <span>Add Files</span>
+            </button>
+          </div>
+        </header>
+
+        <Show when={totalJobs() > 0}>
+          <div class="tx-batch-status">
+            <div class="tx-batch-counts">
+              <span class="tx-count-pill tx-count-total">{totalJobs()} total</span>
+              <Show when={runningCount() > 0}>
+                <span class="tx-count-pill tx-count-running">{runningCount()} running</span>
+              </Show>
+              <Show when={queuedCount() > 0}>
+                <span class="tx-count-pill tx-count-queued">{queuedCount()} queued</span>
+              </Show>
+              <Show when={completedCount() > 0}>
+                <span class="tx-count-pill tx-count-completed">{completedCount()} done</span>
+              </Show>
+              <Show when={failedCount() > 0}>
+                <span class="tx-count-pill tx-count-failed">{failedCount()} failed</span>
+              </Show>
+              <Show when={cancelledCount() > 0}>
+                <span class="tx-count-pill tx-count-cancelled">{cancelledCount()} cancelled</span>
+              </Show>
+            </div>
+
+            <Show when={progressSegments()}>
+              {(seg) => (
+                <div class="tx-batch-bar" role="progressbar" aria-valuenow={completedCount()} aria-valuemax={totalJobs()}>
+                  <div class="tx-batch-bar-seg tx-seg-completed" style={{ width: `${seg().completed}%` }} />
+                  <div class="tx-batch-bar-seg tx-seg-running" style={{ width: `${seg().running}%` }} />
+                  <div class="tx-batch-bar-seg tx-seg-failed" style={{ width: `${seg().failed}%` }} />
+                  <div class="tx-batch-bar-seg tx-seg-cancelled" style={{ width: `${seg().cancelled}%` }} />
+                </div>
+              )}
+            </Show>
+
+            <div class="tx-batch-actions">
+              <button class="tx-link-btn" onClick={() => void cancelAllRunning()} disabled={runningCount() === 0}>
+                Cancel running
+              </button>
+              <button class="tx-link-btn" onClick={retryFailedJobs} disabled={failedCount() === 0}>
+                Retry failed
+              </button>
+              <button class="tx-link-btn" onClick={clearCompleted} disabled={completedCount() === 0}>
+                Clear completed
+              </button>
+              <button class="tx-link-btn" onClick={() => void exportCompletedBundle()} disabled={completedCount() === 0}>
+                Export all ({completedCount()})
+              </button>
+              <button class="tx-link-btn tx-link-btn-danger" onClick={requestClearAll} disabled={totalJobs() === 0}>
+                Clear all
+              </button>
+            </div>
+          </div>
+        </Show>
+
+        <Show when={queueState.queueError}>
+          <div class="tx-banner tx-banner-error">
+            <span>{queueState.queueError}</span>
+            <button onClick={dismissQueueError}>Dismiss</button>
+          </div>
+        </Show>
+
+        <div class="tx-main-layout">
+          <section class="tx-workbench">
+            <Show
+              when={totalJobs() > 0}
+              fallback={
+                <section class="tx-uploader-panel">
+                  <FileUploader multiple onFilesSelected={enqueueFiles} />
+                </section>
+              }
+            >
+              <>
+                <section class="tx-queue-panel">
+                  <header class="tx-queue-head">
+                    <div class="tx-queue-head-title-wrap">
+                      <h2>Queue</h2>
+                      <span class="tx-queue-head-total">{totalJobs()} {totalJobs() === 1 ? "job" : "jobs"}</span>
+                    </div>
+                    <button
+                      class="tx-queue-toggle"
+                      aria-expanded={queueExpanded()}
+                      aria-controls="tx-queue-list"
+                      onClick={() => setQueueExpanded(!queueExpanded())}
+                    >
+                      <span>{queueExpanded() ? "Hide queue" : "Show queue"}</span>
+                      <svg viewBox="0 0 24 24" width="14" height="14" classList={{ expanded: queueExpanded() }}>
+                        <path d="M6 9l6 6 6-6" />
                       </svg>
-                      <span>Try selecting 'tiny' or 'base' model for your system</span>
-                    </div>
-                  </Show>
-                </div>
-                <button onClick={() => setError(null)}>Dismiss</button>
-              </div>
-            </Show>
-
-            <Show when={!isTranscribing() && !isDownloading() && !isPreparingSpeaker() && !result() && !annotatedResult()}>
-              <section class="settings-panel">
-                <div class="setting-group">
-                  <label class="label-with-info">
-                    Mode
-                    <InfoIcon
-                      content="Transcription returns plain transcript output. Annotate runs speaker diarization + transcription and forces speaker-labeled SRT output."
-                      position="right"
-                    />
-                  </label>
-                  <div class="task-toggle">
-                    <button
-                      class={`task-btn ${!isAnnotateMode() ? "active" : ""}`}
-                      onClick={() => setMode("transcribe")}
-                    >
-                      Transcribe
                     </button>
-                    <button
-                      class={`task-btn ${isAnnotateMode() ? "active" : ""}`}
-                      onClick={() => setMode("annotate")}
-                    >
-                      Annotate
-                    </button>
-                  </div>
-                </div>
+                  </header>
 
-                <div class="setting-group">
-                  <label for="model-select" class="label-with-info">
-                    Model
-                    <InfoIcon
-                      content="Smaller models (tiny, base) are faster but less accurate. Larger models provide better accuracy but need more VRAM. Models ending in '.en' are English-only and faster."
-                      position="right"
-                    />
-                  </label>
-                  <div class="select-wrapper">
-                    <select
-                      id="model-select"
-                      value={selectedModel()}
-                      onChange={(e) => setSelectedModel(e.currentTarget.value as WhisperModel)}
-                    >
-                      <For each={MODEL_OPTIONS}>{(option) => <option value={option.value}>{option.label}</option>}</For>
-                    </select>
-                    <svg class="select-arrow" viewBox="0 0 24 24">
-                      <path d="M6 9l6 6 6-6" />
-                    </svg>
-                  </div>
-                  <span class="setting-hint">{MODEL_OPTIONS.find((m) => m.value === selectedModel())?.description}</span>
-                  <Show when={modelValidation() && modelValidation()!.status === "warning"}>
-                    <div class="model-warning">
-                      <svg viewBox="0 0 24 24" width="14" height="14">
-                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor" />
-                      </svg>
-                      <For each={modelValidation()!.messages}>{(message) => <span class="warning-text">{message}</span>}</For>
-                    </div>
-                  </Show>
-                </div>
-
-                <div class="setting-group">
-                  <label class="label-with-info">
-                    Task
-                    <InfoIcon
-                      content="Transcribe keeps original language text. Translate converts speech to English text."
-                      position="right"
-                    />
-                  </label>
-                  <div class="task-toggle">
-                    <button
-                      class={`task-btn ${selectedTask() === "transcribe" ? "active" : ""}`}
-                      onClick={() => setSelectedTask("transcribe")}
-                    >
-                      Transcribe
-                    </button>
-                    <button
-                      class={`task-btn ${selectedTask() === "translate" ? "active" : ""}`}
-                      onClick={() => setSelectedTask("translate")}
-                    >
-                      Translate to English
-                    </button>
-                  </div>
-                </div>
-
-                <div class="setting-group">
-                  <label for="language-select" class="label-with-info">
-                    Source Language
-                    <InfoIcon
-                      content={
-                        isEnglishOnlyModel()
-                          ? "English-only models can only transcribe English audio."
-                          : "Auto-detect identifies the language automatically (recommended). Manually selecting a language can improve accuracy if you're certain of the source."
-                      }
-                      position="right"
-                    />
-                  </label>
-                  <div class="select-wrapper">
-                    <select
-                      id="language-select"
-                      value={selectedLanguage() || ""}
-                      onChange={(e) => setSelectedLanguage(e.currentTarget.value || null)}
-                      disabled={isEnglishOnlyModel()}
-                    >
-                      <For each={availableLanguages()}>
-                        {(option) => <option value={option.value || ""}>{option.label}</option>}
-                      </For>
-                    </select>
-                    <svg class="select-arrow" viewBox="0 0 24 24">
-                      <path d="M6 9l6 6 6-6" />
-                    </svg>
-                  </div>
-                </div>
-
-                <Show when={isAnnotateMode()}>
-                  <>
-                    <div class="setting-group">
-                      <label for="speaker-model-select">Speaker Model</label>
-                      <div class="select-wrapper">
-                        <select
-                          id="speaker-model-select"
-                          value={selectedSpeakerModel()}
-                          onChange={(e) => setSelectedSpeakerModel(e.currentTarget.value as SpeakerModelKey)}
-                        >
-                          <For each={speakerModelRequirements()}>
-                            {(m) => <option value={m.key}>{m.key.charAt(0).toUpperCase() + m.key.slice(1)} ({m.approx_size_mb.toFixed(1)} MB)</option>}
-                          </For>
-                        </select>
-                        <svg class="select-arrow" viewBox="0 0 24 24">
-                          <path d="M6 9l6 6 6-6" />
-                        </svg>
-                      </div>
-                    </div>
-
-                    <div class="setting-group">
-                      <label for="speaker-device-select">Speaker Device</label>
-                      <div class="select-wrapper">
-                        <select
-                          id="speaker-device-select"
-                          value={selectedSpeakerDevice()}
-                          onChange={(e) => setSelectedSpeakerDevice(e.currentTarget.value as SpeakerDevice)}
-                        >
-                          <For each={availableSpeakerDevices()}>{(d) => <option value={d}>{d.toUpperCase()}</option>}</For>
-                        </select>
-                        <svg class="select-arrow" viewBox="0 0 24 24">
-                          <path d="M6 9l6 6 6-6" />
-                        </svg>
-                      </div>
-                      <span class="setting-hint">
-                        Annotate mode forces SRT output with speaker labels (ID or edited names).
-                      </span>
-                    </div>
-
-                    <div class="setting-group">
-                      <label for="num-speakers-input">Expected Speakers</label>
-                      <input
-                        id="num-speakers-input"
-                        type="number"
-                        min="1"
-                        max="20"
-                        placeholder="Auto-detect"
-                        value={numSpeakers() ?? ""}
-                        onInput={(e) => {
-                          const v = e.currentTarget.value;
-                          setNumSpeakers(v === "" ? null : parseInt(v, 10));
-                        }}
-                        class="number-input"
-                      />
-                    </div>
-
-                    <div class="setting-group">
-                      <label for="diarize-threshold-input">
-                        Clustering Threshold
-                        <span class="threshold-value"> ({diarizeThreshold().toFixed(2)})</span>
-                      </label>
-                      <input
-                        id="diarize-threshold-input"
-                        type="range"
-                        min="0.1"
-                        max="0.9"
-                        step="0.05"
-                        value={diarizeThreshold()}
-                        onInput={(e) => setDiarizeThreshold(parseFloat(e.currentTarget.value))}
-                        class="range-slider"
-                      />
-                      <span class="setting-hint">Lower = more speakers detected</span>
-                    </div>
-                  </>
-                </Show>
-
-                <div class="setting-group inline">
-                  <label class="toggle-label">
-                    <span class="toggle-switch">
-                      <input
-                        type="checkbox"
-                        checked={includeTimestamps()}
-                        onChange={(e) => setIncludeTimestamps(e.currentTarget.checked)}
-                        disabled={isAnnotateMode()}
-                      />
-                      <span class="toggle-slider"></span>
-                    </span>
-                    <span class="label-with-info">
-                      Include timestamps
-                      <InfoIcon
-                        content={
-                          isAnnotateMode()
-                            ? "Annotate mode always requires timestamps and SRT output."
-                            : "Generates time-coded segments. Enables SRT subtitle export for video subtitles and precise navigation."
-                        }
-                        position="right"
-                      />
-                    </span>
-                  </label>
-                </div>
-
-                <button
-                  class="start-btn"
-                  onClick={handleTranscribe}
-                  disabled={modelValidation()?.status === "error"}
-                  title={modelValidation()?.status === "error" ? "Cannot run: insufficient system resources" : ""}
-                >
-                  <svg viewBox="0 0 24 24" width="20" height="20">
-                    <polygon points="5 3 19 12 5 21 5 3" />
-                  </svg>
-                  {isAnnotateMode() ? "Begin Annotation" : "Begin Transcription"}
-                </button>
-              </section>
-            </Show>
-
-            <Show when={isDownloading()}>
-              <section class="processing-section">
-                <h2>Downloading Model...</h2>
-                <p>Downloading the {selectedModel()} model before processing</p>
-                <DownloadProgressBar
-                  progress={modelDownloadProgress()}
-                  onCancel={() => invoke("cancel_download").catch(() => {})}
-                />
-              </section>
-            </Show>
-
-            <Show when={isPreparingSpeaker()}>
-              <section class="processing-section">
-                <GreekScrollLoader />
-                <h2>Preparing Speaker Model...</h2>
-                <p>Downloading and caching speaker diarization model bundle</p>
-              </section>
-            </Show>
-
-            <Show when={isTranscribing()}>
-              <section class="processing-section">
-                <GreekScrollLoader />
-                <h2>
-                  {transcriptionProgress()?.phase === "loading_model"
-                    || transcriptionProgress()?.phase === "starting"
-                    || transcriptionProgress()?.phase === "decoding_audio"
-                    || transcriptionProgress()?.phase === "preparing_audio"
-                    || transcriptionProgress()?.phase === "loading_speaker_model"
-                    || transcriptionProgress()?.phase === "ensuring_speaker_models"
-                    || transcriptionProgress()?.phase === "initializing_speaker_runtime"
-                    || transcriptionProgress()?.phase === "loading_transcription_model"
-                    ? "Loading / Preparing..."
-                    : isAnnotateMode()
-                    ? transcriptionProgress()?.message?.startsWith("Diarizing")
-                      ? "Diarizing..."
-                      : transcriptionProgress()?.message?.startsWith("Transcribing")
-                      ? "Transcribing..."
-                      : "Annotating..."
-                    : "Transcribing..."}
-                </h2>
-                <p>
-                  Processing your audio with the {selectedModel()} model
-                  {isAnnotateMode() ? " + speaker diarization" : ""}
-                </p>
-
-                <TranscriptionProgressBar progress={transcriptionProgress()} />
-
-                <div class="processing-details">
-                  <span>File: {fileName()}</span>
-                  <span>Task: {isAnnotateMode() ? "Annotation" : selectedTask() === "transcribe" ? "Transcription" : "Translation"}</span>
-                </div>
-              </section>
-            </Show>
-
-            <Show when={result()} keyed>
-              {(res) => (
-                <section class="results-section">
-                  <div class="result-meta">
-                    <div class="meta-item">
-                      <span class="meta-label">Language</span>
-                      <span class="meta-value">{res.language || "Unknown"}</span>
-                    </div>
-                    <div class="meta-item">
-                      <span class="meta-label">Duration</span>
-                      <span class="meta-value">{formatTime(res.duration, false)}</span>
-                    </div>
-                    <div class="meta-item">
-                      <span class="meta-label">Processing</span>
-                      <span class="meta-value">{res.inference_time.toFixed(1)}s</span>
-                    </div>
-                    <div class="meta-item">
-                      <span class="meta-label">Model</span>
-                      <span class="meta-value">{res.model}</span>
-                    </div>
-                  </div>
-
-                  <div class="transcript-box">
-                    <div class="transcript-header">
-                      <h3>Transcript</h3>
-                    </div>
-                    <div class="transcript-content">{res.text}</div>
-                    <div class="transcript-actions">
-                      <div class="action-group">
-                        <span class="action-label">Copy:</span>
-                        <button class="action-btn" onClick={handleCopyPlainText} title="Copy plain text">
-                          <svg viewBox="0 0 24 24" width="16" height="16">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                          </svg>
-                          <span>Text</span>
-                        </button>
-                        <Show when={includeTimestamps() && res.segments.length > 0}>
-                          <button class="action-btn" onClick={handleCopySrt} title="Copy SRT format">
-                            <svg viewBox="0 0 24 24" width="16" height="16">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                            <span>SRT</span>
-                          </button>
-                        </Show>
-                      </div>
-                      <div class="action-group">
-                        <span class="action-label">Download:</span>
-                        <button class="action-btn" onClick={handleExportPlainText} title="Download as .txt file">
-                          <svg viewBox="0 0 24 24" width="16" height="16">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                            <polyline points="7 10 12 15 17 10" />
-                            <line x1="12" y1="15" x2="12" y2="3" />
-                          </svg>
-                          <span>.txt</span>
-                        </button>
-                        <Show when={includeTimestamps() && res.segments.length > 0}>
-                          <button class="action-btn" onClick={handleExportSrt} title="Download as .srt file">
-                            <svg viewBox="0 0 24 24" width="16" height="16">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                              <polyline points="7 10 12 15 17 10" />
-                              <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                            <span>.srt</span>
-                          </button>
-                        </Show>
-                      </div>
-                    </div>
-                  </div>
-
-                  <Show when={includeTimestamps() && res.segments.length > 0}>
-                    <div class="segments-box">
-                      <button class="segments-header" onClick={() => setSegmentsExpanded(!segmentsExpanded())}>
-                        <span>Timestamps ({res.segments.length} segments)</span>
-                        <svg
-                          class={`expand-icon ${segmentsExpanded() ? "expanded" : ""}`}
-                          viewBox="0 0 24 24"
-                          width="18"
-                          height="18"
-                        >
-                          <path d="M6 9l6 6 6-6" />
-                        </svg>
-                      </button>
-
-                      <Show when={segmentsExpanded()}>
-                        <div class="segments-content">
-                          <For each={res.segments}>
-                            {(segment) => (
-                              <div class="segment-row">
-                                <span class="segment-time">{formatTimestamp(segment.start)}</span>
-                                <span class="segment-text">{segment.text}</span>
+                  <Show when={queueExpanded()}>
+                    <ul id="tx-queue-list" class="tx-queue-list" role="list">
+                      <For each={sortedJobs()}>
+                        {(job) => (
+                          <li>
+                            <button
+                              class={`tx-queue-row ${queueState.selectedJobId === job.id ? "selected" : ""}`}
+                              onClick={() => setSelectedJob(job.id)}
+                            >
+                              <div class="tx-queue-row-head">
+                                <QueueStatusIcon status={job.status} />
+                                <span class="tx-queue-row-name" title={job.fileName}>{job.fileName}</span>
+                                <span class={`tx-queue-row-state ${job.status}`}>{statusLabel(job.status)}</span>
                               </div>
-                            )}
-                          </For>
-                        </div>
-                      </Show>
-                    </div>
+
+                              <div class="tx-queue-row-meta">
+                                <span class="tx-chip">{job.settings.mode === "annotate" ? "Annotate" : "Transcribe"}</span>
+                                <span class="tx-chip tx-chip-muted">{job.settings.model}</span>
+                                <Show when={job.status === "running"}>
+                                  <span class="tx-queue-row-progress">
+                                    {getProgressPercent(job.progress) === null
+                                      ? (job.progress?.message || "Preparing...")
+                                      : `${getProgressPercent(job.progress)}%`}
+                                  </span>
+                                </Show>
+                              </div>
+                            </button>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
                   </Show>
-
-                  <button class="new-file-btn" onClick={handleNewFile}>
-                    <svg viewBox="0 0 24 24" width="18" height="18">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                    New Transcription
-                  </button>
                 </section>
-              )}
-            </Show>
 
-            <Show when={annotatedResult()} keyed>
-              {(res) => (
-                <section class="results-section">
-                  <div class="result-meta">
-                    <div class="meta-item">
-                      <span class="meta-label">Language</span>
-                      <span class="meta-value">{res.language || "Unknown"}</span>
-                    </div>
-                    <div class="meta-item">
-                      <span class="meta-label">Speakers</span>
-                      <span class="meta-value">{res.num_speakers}</span>
-                    </div>
-                    <div class="meta-item">
-                      <span class="meta-label">Duration</span>
-                      <span class="meta-value">{formatTime(res.audio_duration, false)}</span>
-                    </div>
-                    <div class="meta-item">
-                      <span class="meta-label">Processing</span>
-                      <span class="meta-value">{res.total_inference_time.toFixed(1)}s</span>
-                    </div>
-                  </div>
-
-                  <div class="speaker-editor-box">
-                    <h3>Speaker Names</h3>
-                    <For each={speakerIds()}>
-                      {(id) => (
-                        <label class="speaker-name-row">
-                          <span>Speaker {id}</span>
-                          <input
-                            value={speakerNames()[String(id)] || `Speaker ${id}`}
-                            onInput={(e) => updateSpeakerName(id, e.currentTarget.value)}
-                          />
-                        </label>
-                      )}
-                    </For>
-                  </div>
-
+                <section class="tx-inspector tx-inspector-main">
                   <Show
-                    when={annotatedSegmentsWithNames().length > 0}
-                    fallback={<p class="no-segments-msg">No annotated segments to display.</p>}
+                    when={selectedJob()}
+                    fallback={
+                      <div class="tx-inspector-empty">
+                        <h2>Select a job</h2>
+                        <p>Choose a queue item to open its progress and transcript details.</p>
+                      </div>
+                    }
                   >
-                    <div class="transcript-box">
-                      <div class="transcript-header">
-                        <h3>Annotated Preview</h3>
-                      </div>
-                      <div class="segments-content speaker-segments-content">
-                        <For each={annotatedSegmentsWithNames()}>
-                          {(segment) => (
-                            <div class="segment-row">
-                              <span class="segment-time">{formatTimestamp(segment.start)}</span>
-                              <span class="segment-speaker">[{segment.speaker_name}]</span>
-                              <span class="segment-text">{segment.text}</span>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                      <div class="transcript-actions">
-                        <div class="action-group">
-                          <span class="action-label">Copy:</span>
-                          <button class="action-btn" onClick={handleCopyAnnotatedText} title="Copy annotated text">
-                            <svg viewBox="0 0 24 24" width="16" height="16">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                            <span>Text</span>
-                          </button>
-                          <button class="action-btn" onClick={handleCopySrt} title="Copy speaker-labeled SRT">
-                            <svg viewBox="0 0 24 24" width="16" height="16">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                            <span>SRT</span>
-                          </button>
-                        </div>
-                        <div class="action-group">
-                          <span class="action-label">Download:</span>
-                          <button class="action-btn" onClick={handleExportAnnotatedText} title="Download annotated .txt file">
-                            <svg viewBox="0 0 24 24" width="16" height="16">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                              <polyline points="7 10 12 15 17 10" />
-                              <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                            <span>.txt</span>
-                          </button>
-                          <button class="action-btn" onClick={handleExportSrt} title="Download speaker-labeled .srt file">
-                            <svg viewBox="0 0 24 24" width="16" height="16">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                              <polyline points="7 10 12 15 17 10" />
-                              <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                            <span>.srt</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    {(job) => <JobInspector job={job()} />}
                   </Show>
-
-                  <button class="new-file-btn" onClick={handleNewFile}>
-                    <svg viewBox="0 0 24 24" width="18" height="18">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                    New Annotation
-                  </button>
                 </section>
-              )}
+              </>
             </Show>
-          </Show>
-        </main>
+          </section>
 
+          <SettingsPanel
+            isAnnotateMode={isAnnotateMode()}
+            isEnglishOnlyModel={isEnglishOnlyModel()}
+            availableSpeakerDevices={availableSpeakerDevices()}
+            availableLanguages={availableLanguages()}
+            onModelChange={handleModelChange}
+            onLanguageChange={handleLanguageChange}
+          />
+        </div>
+        </div>
+        </main>
         <div class="scroll-rod"></div>
       </div>
 
       <ConfirmDialog
-        open={showCancelDialog()}
-        title="Stop Processing?"
-        message="An operation is currently in progress. Stopping will discard any partial results."
-        confirmLabel="Stop & Go Back"
-        cancelLabel="Keep Working"
-        onConfirm={handleConfirmCancel}
-        onCancel={() => setShowCancelDialog(false)}
+        open={showClearDialog()}
+        title="Clear queue?"
+        message="This removes every job. Running jobs will be cancelled and any unsaved transcripts will be lost."
+        confirmLabel="Clear All"
+        cancelLabel="Keep Jobs"
+        onConfirm={() => void confirmClearAll()}
+        onCancel={() => setShowClearDialog(false)}
       />
     </>
+  );
+};
+
+interface JobInspectorProps {
+  job: QueueJob;
+}
+
+const JobInspector: Component<JobInspectorProps> = (props) => {
+  const job = () => props.job;
+
+  const annotatedSegments = createMemo(() => getAnnotatedSegmentsWithNames(job()));
+  const speakerIds = createMemo(() => getSpeakerIdsForJob(job()));
+  const srtContent = createMemo(() => getSrtContent(job()));
+  const textContent = createMemo(() => getPlainTextContent(job()));
+  const exportBaseName = createMemo(() => sanitizeExportBaseName(job().fileName));
+
+  const activeTab = () => {
+    const j = job();
+    if (j.status !== "completed") return "srt" as const;
+    return j.inspectorTab;
+  };
+
+  const renderSpeakerEditor = () => (
+    <aside class="tx-speaker-rail">
+      <h4>Speakers</h4>
+      <p class="tx-speaker-hint">Rename before exporting.</p>
+      <For each={speakerIds()}>
+        {(id) => (
+          <label class="tx-speaker-row">
+            <span>Speaker {id}</span>
+            <input
+              value={job().speakerNames[String(id)] || `Speaker ${id}`}
+              onInput={(e) => updateSpeakerName(job().id, id, e.currentTarget.value)}
+            />
+          </label>
+        )}
+      </For>
+    </aside>
+  );
+
+  return (
+    <>
+      <header class="tx-inspector-head">
+        <div class="tx-inspector-title">
+          <span class="tx-inspector-eyebrow">Selected Job</span>
+          <h2 title={job().fileName}>{job().fileName}</h2>
+          <div class="tx-inspector-meta">
+            <span class="tx-chip">{job().settings.mode === "annotate" ? "Annotate" : "Transcribe"}</span>
+            <span class="tx-chip tx-chip-muted">{job().settings.model}</span>
+            <Show when={job().settings.language}>
+              <span class="tx-chip tx-chip-muted">{job().settings.language}</span>
+            </Show>
+            <span class={`tx-status-badge ${job().status}`}>{statusLabel(job().status)}</span>
+          </div>
+        </div>
+
+        <div class="tx-inspector-actions">
+          <Show when={job().status === "running"}>
+            <button class="tx-btn" onClick={() => void cancelJob(job().id)}>Cancel</button>
+          </Show>
+          <Show when={job().status === "failed" || job().status === "cancelled"}>
+            <button class="tx-btn" onClick={() => retryJob(job().id)}>Retry</button>
+          </Show>
+          <button class="tx-btn" onClick={() => removeJob(job().id)} disabled={job().status === "running"}>Remove</button>
+        </div>
+      </header>
+
+      <Show when={job().status === "queued"}>
+        <section class="tx-status-panel tx-status-queued">
+          <h3>Queued</h3>
+          <p>Waiting for an available worker. You can navigate away — this job will keep its place.</p>
+        </section>
+      </Show>
+
+      <Show when={job().status === "running"}>
+        <section class="tx-status-panel tx-status-running">
+          <GreekScrollLoader />
+          <h3>{job().settings.mode === "annotate" ? "Annotating..." : "Transcribing..."}</h3>
+          <p>{job().progress?.message || "Preparing audio"}</p>
+          <div class="tx-progress-wrap">
+            <TranscriptionProgressBar progress={job().progress} />
+          </div>
+        </section>
+      </Show>
+
+      <Show when={job().status === "failed" && job().error}>
+        <section class="tx-status-panel tx-status-failed">
+          <h3>Failed</h3>
+          <pre class="tx-error-text">{job().error}</pre>
+        </section>
+      </Show>
+
+      <Show when={job().status === "cancelled"}>
+        <section class="tx-status-panel tx-status-cancelled">
+          <h3>Cancelled</h3>
+          <p>This job was cancelled before completion. Use Retry to queue it again.</p>
+        </section>
+      </Show>
+
+      <Show when={job().status === "completed"}>
+        <div class="tx-meta-grid">
+          <Show
+            when={job().settings.mode === "transcribe" && job().result}
+            fallback={
+              <>
+                <MetaItem label="Language" value={job().annotatedResult?.language || "Unknown"} />
+                <MetaItem label="Speakers" value={String(job().annotatedResult?.num_speakers ?? 0)} />
+                <MetaItem label="Duration" value={formatTime(job().annotatedResult?.audio_duration || 0, false)} />
+                <MetaItem label="Processing" value={`${(job().annotatedResult?.total_inference_time || 0).toFixed(1)}s`} />
+              </>
+            }
+          >
+            {(res) => (
+              <>
+                <MetaItem label="Language" value={res().language || "Unknown"} />
+                <MetaItem label="Duration" value={formatTime(res().duration, false)} />
+                <MetaItem label="Processing" value={`${res().inference_time.toFixed(1)}s`} />
+                <MetaItem label="Model" value={res().model} />
+              </>
+            )}
+          </Show>
+        </div>
+
+        <nav class="tx-tabs" aria-label="Result formats">
+          <div class="tx-tab-item">
+            <button class={`tx-tab ${activeTab() === "srt" ? "active" : ""}`} onClick={() => setInspectorTab(job().id, "srt")}>SRT</button>
+            <button
+              class="tx-tab-download"
+              onClick={() => void exportToFile(`${exportBaseName()}.srt`, ["srt"], srtContent())}
+              disabled={!srtContent().trim()}
+              title="Download .srt"
+              aria-label="Download SRT"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M5 20h14" />
+              </svg>
+              <span>.srt</span>
+            </button>
+          </div>
+          <div class="tx-tab-item">
+            <button class={`tx-tab ${activeTab() === "text" ? "active" : ""}`} onClick={() => setInspectorTab(job().id, "text")}>Text</button>
+            <button
+              class="tx-tab-download"
+              onClick={() => void exportToFile(`${exportBaseName()}.txt`, ["txt"], textContent())}
+              disabled={!textContent().trim()}
+              title="Download .txt"
+              aria-label="Download text"
+            >
+              <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M5 20h14" />
+              </svg>
+              <span>.txt</span>
+            </button>
+          </div>
+        </nav>
+
+        <Show when={activeTab() === "srt"}>
+          <Show
+            when={job().settings.mode === "annotate"}
+            fallback={
+              <div class="tx-panel">
+                <div class="tx-panel-head">
+                  <h3>SRT</h3>
+                </div>
+                <Show
+                  when={srtContent().trim()}
+                  fallback={<p class="tx-panel-empty">No SRT output is available for this job.</p>}
+                >
+                  <pre class="tx-transcript tx-srt-output">{srtContent()}</pre>
+                </Show>
+              </div>
+            }
+          >
+            <div class="tx-panel tx-annotated-layout">
+              <div class="tx-annotated-main">
+                <div class="tx-panel-head">
+                  <h3>SRT</h3>
+                </div>
+                <Show
+                  when={srtContent().trim()}
+                  fallback={<p class="tx-panel-empty">No SRT output is available for this job.</p>}
+                >
+                  <pre class="tx-transcript tx-srt-output">{srtContent()}</pre>
+                </Show>
+              </div>
+              {renderSpeakerEditor()}
+            </div>
+          </Show>
+        </Show>
+
+        <Show when={activeTab() === "text"}>
+          <Show
+            when={job().settings.mode === "transcribe" && job().result}
+            fallback={
+              <div class="tx-panel tx-annotated-layout">
+                <div class="tx-annotated-main">
+                  <div class="tx-panel-head">
+                    <h3>Annotated Transcript</h3>
+                  </div>
+                  <div class="tx-segments">
+                    <For each={annotatedSegments()}>
+                      {(segment) => (
+                        <div class="tx-segment">
+                          <span class="tx-segment-time">{formatTimestamp(segment.start)}</span>
+                          <span class="tx-segment-speaker">{segment.speaker_name}</span>
+                          <span class="tx-segment-text">{segment.text}</span>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </div>
+                {renderSpeakerEditor()}
+              </div>
+            }
+          >
+            {(res) => (
+              <div class="tx-panel">
+                <div class="tx-panel-head">
+                  <h3>Text</h3>
+                </div>
+                <div class="tx-transcript">{res().text || textContent()}</div>
+              </div>
+            )}
+          </Show>
+        </Show>
+      </Show>
+    </>
+  );
+};
+
+const MetaItem: Component<{ label: string; value: string }> = (props) => (
+  <div class="tx-meta-item">
+    <span class="tx-meta-label">{props.label}</span>
+    <span class="tx-meta-value">{props.value}</span>
+  </div>
+);
+
+interface SettingsPanelProps {
+  isAnnotateMode: boolean;
+  isEnglishOnlyModel: boolean;
+  availableSpeakerDevices: SpeakerDevice[];
+  availableLanguages: LanguageOption[];
+  onModelChange: (value: WhisperModel) => void;
+  onLanguageChange: (value: string) => void;
+}
+
+const SettingsPanel: Component<SettingsPanelProps> = (props) => {
+  const defaults = () => queueState.defaults;
+
+  return (
+    <section class="tx-settings-panel" role="complementary" aria-label="Default job settings">
+      <header class="tx-settings-head">
+        <div>
+          <span class="tx-settings-eyebrow">Defaults for new jobs</span>
+          <h2>Settings</h2>
+        </div>
+      </header>
+
+      <div class="tx-settings-body">
+        <div class="tx-field">
+          <label class="tx-field-label">
+            Mode
+            <InfoIcon
+              content="Transcription returns plain text. Annotate adds speaker diarization for multi-speaker audio."
+              position="right"
+            />
+          </label>
+          <div class="tx-toggle">
+            <button class={`tx-toggle-btn ${!props.isAnnotateMode ? "active" : ""}`} onClick={() => setDefault("mode", "transcribe")}>Transcribe</button>
+            <button class={`tx-toggle-btn ${props.isAnnotateMode ? "active" : ""}`} onClick={() => setDefault("mode", "annotate")}>Annotate</button>
+          </div>
+        </div>
+
+        <div class="tx-field">
+          <label class="tx-field-label" for="model-select">
+            Model
+            <InfoIcon
+              content="Smaller models run faster with less memory. Larger models are more accurate."
+              position="right"
+            />
+          </label>
+          <div class="tx-select">
+            <select id="model-select" value={defaults().model} onChange={(e) => props.onModelChange(e.currentTarget.value as WhisperModel)}>
+              <For each={MODEL_OPTIONS}>{(o) => <option value={o.value}>{o.label}</option>}</For>
+            </select>
+            <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+          </div>
+          <span class="tx-field-hint">{MODEL_OPTIONS.find((m) => m.value === defaults().model)?.description}</span>
+          <Show when={queueState.modelValidation && queueState.modelValidation.status === "warning"}>
+            <div class="tx-field-warning">
+              <svg viewBox="0 0 24 24" width="14" height="14">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor" />
+              </svg>
+              <For each={queueState.modelValidation!.messages}>{(message) => <span>{message}</span>}</For>
+            </div>
+          </Show>
+        </div>
+
+        <div class="tx-field">
+          <label class="tx-field-label">Task</label>
+          <div class="tx-toggle">
+            <button class={`tx-toggle-btn ${defaults().task === "transcribe" ? "active" : ""}`} onClick={() => setDefault("task", "transcribe")}>Transcribe</button>
+            <button class={`tx-toggle-btn ${defaults().task === "translate" ? "active" : ""}`} onClick={() => setDefault("task", "translate" as TranscriptionTask)}>Translate → English</button>
+          </div>
+        </div>
+
+        <div class="tx-field">
+          <label class="tx-field-label" for="language-select">Source Language</label>
+          <div class="tx-select">
+            <select
+              id="language-select"
+              value={defaults().language || ""}
+              onChange={(e) => props.onLanguageChange(e.currentTarget.value)}
+              disabled={props.isEnglishOnlyModel}
+            >
+              <For each={props.availableLanguages}>{(o) => <option value={o.value || ""}>{o.label}</option>}</For>
+            </select>
+            <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+          </div>
+        </div>
+
+        <Show when={props.isAnnotateMode}>
+          <div class="tx-settings-group">
+            <span class="tx-settings-group-label">Diarization</span>
+
+            <div class="tx-field">
+              <label class="tx-field-label" for="speaker-model-select">Speaker Model</label>
+              <div class="tx-select">
+                <select
+                  id="speaker-model-select"
+                  value={defaults().speakerModel}
+                  onChange={(e) => setDefault("speakerModel", e.currentTarget.value as SpeakerModelKey)}
+                >
+                  <For each={queueState.speakerModelRequirements}>
+                    {(m) => <option value={m.key}>{m.display_name} ({m.approx_size_mb.toFixed(1)} MB)</option>}
+                  </For>
+                </select>
+                <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+              </div>
+            </div>
+
+            <div class="tx-field">
+              <label class="tx-field-label" for="speaker-device-select">Device</label>
+              <div class="tx-select">
+                <select
+                  id="speaker-device-select"
+                  value={defaults().speakerDevice}
+                  onChange={(e) => setDefault("speakerDevice", e.currentTarget.value as SpeakerDevice)}
+                >
+                  <For each={props.availableSpeakerDevices}>{(d) => <option value={d}>{d.toUpperCase()}</option>}</For>
+                </select>
+                <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+              </div>
+            </div>
+
+            <div class="tx-field">
+              <label class="tx-field-label" for="num-speakers-input">Expected speakers</label>
+              <input
+                id="num-speakers-input"
+                type="number"
+                min="1"
+                max="20"
+                placeholder="Auto-detect"
+                value={defaults().numSpeakers ?? ""}
+                onInput={(e) => {
+                  const value = e.currentTarget.value;
+                  setDefault("numSpeakers", value === "" ? null : parseInt(value, 10));
+                }}
+                class="tx-input"
+              />
+            </div>
+
+            <div class="tx-field">
+              <label class="tx-field-label" for="diarize-threshold-input">
+                Clustering threshold <span class="tx-field-value">{defaults().diarizeThreshold.toFixed(2)}</span>
+              </label>
+              <input
+                id="diarize-threshold-input"
+                type="range"
+                min="0.1"
+                max="0.9"
+                step="0.05"
+                value={defaults().diarizeThreshold}
+                onInput={(e) => setDefault("diarizeThreshold", parseFloat(e.currentTarget.value))}
+                class="tx-range"
+              />
+            </div>
+          </div>
+        </Show>
+      </div>
+
+      <footer class="tx-settings-foot">
+        <p class="tx-settings-foot-hint">
+          Existing queued jobs keep the settings they were enqueued with.
+        </p>
+      </footer>
+    </section>
   );
 };
 

@@ -4,12 +4,14 @@
 //! them with progress events, cancelling downloads, and managing the cache.
 
 use crate::error::{AudioError, Result};
+use crate::hf_cache::hf_hub_cache_dir;
 use crate::transcribe::WhisperModel;
 use crate::translate::catalog::{load_model_catalog, CatalogModel, ModelFamily};
+use hf_hub::api::Progress;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 
@@ -49,10 +51,7 @@ pub struct ModelInfo {
 
 /// Get the HuggingFace hub cache directory (cross-platform).
 fn hf_cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("huggingface")
-        .join("hub")
+    hf_hub_cache_dir()
 }
 
 /// Convert a HuggingFace model id (e.g. "openai/whisper-tiny") to its cache
@@ -292,6 +291,7 @@ pub fn download_model(
     };
 
     let total_files = files_to_download.len();
+    let mut cumulative_downloaded = 0u64;
 
     for (idx, file_name) in files_to_download.iter().enumerate() {
         // Check cancellation before each file
@@ -304,8 +304,8 @@ pub fn download_model(
                     file_name: file_name.to_string(),
                     file_index: idx,
                     total_files,
-                    bytes_downloaded: 0,
-                    bytes_total: None,
+                    bytes_downloaded: cumulative_downloaded,
+                    bytes_total: total_bytes,
                     phase: "cancelled".to_string(),
                 },
             );
@@ -321,8 +321,8 @@ pub fn download_model(
                 file_name: file_name.to_string(),
                 file_index: idx,
                 total_files,
-                bytes_downloaded: 0,
-                bytes_total: None,
+                bytes_downloaded: cumulative_downloaded,
+                bytes_total: total_bytes,
                 phase: "downloading".to_string(),
             },
         );
@@ -333,17 +333,20 @@ pub fn download_model(
             || file_name.ends_with(".gguf");
 
         if is_large_file {
-            download_with_progress(
+            let downloaded_for_file = download_with_progress(
                 model_id,
                 revision.as_deref(),
                 file_name,
                 model_name,
                 idx,
                 total_files,
+                cumulative_downloaded,
                 total_bytes,
                 app_handle,
                 cancel_flag,
             )?;
+
+            cumulative_downloaded = cumulative_downloaded.saturating_add(downloaded_for_file);
         } else {
             // Small files: download directly
             repo.get(file_name).map_err(|e| AudioError::ModelDownload {
@@ -362,8 +365,8 @@ pub fn download_model(
             file_name: String::new(),
             file_index: total_files,
             total_files,
-            bytes_downloaded: 0,
-            bytes_total: None,
+            bytes_downloaded: total_bytes.unwrap_or(cumulative_downloaded),
+            bytes_total: total_bytes,
             phase: "complete".to_string(),
         },
     );
@@ -371,7 +374,136 @@ pub fn download_model(
     Ok(())
 }
 
-/// Download a large file with blob-size monitoring for progress.
+/// Progress reporter used by hf-hub download callback.
+#[derive(Debug)]
+struct TauriDownloadProgressReporter {
+    app_handle: tauri::AppHandle,
+    model_id: String,
+    model_name: String,
+    file_name: String,
+    file_index: usize,
+    total_files: usize,
+    cumulative_before_file: u64,
+    total_bytes: Option<u64>,
+    file_downloaded: Arc<AtomicU64>,
+    file_total: Arc<AtomicU64>,
+    cancel_flag: Arc<AtomicBool>,
+    last_emit: std::time::Instant,
+}
+
+impl TauriDownloadProgressReporter {
+    fn new(
+        app_handle: tauri::AppHandle,
+        model_id: &str,
+        model_name: &str,
+        file_name: &str,
+        file_index: usize,
+        total_files: usize,
+        cumulative_before_file: u64,
+        total_bytes: Option<u64>,
+        file_downloaded: Arc<AtomicU64>,
+        file_total: Arc<AtomicU64>,
+        cancel_flag: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            app_handle,
+            model_id: model_id.to_string(),
+            model_name: model_name.to_string(),
+            file_name: file_name.to_string(),
+            file_index,
+            total_files,
+            cumulative_before_file,
+            total_bytes,
+            file_downloaded,
+            file_total,
+            cancel_flag,
+            last_emit: std::time::Instant::now(),
+        }
+    }
+
+    fn fallback_total_bytes(&self) -> Option<u64> {
+        if let Some(total) = self.total_bytes {
+            return Some(total);
+        }
+
+        let file_total = self.file_total.load(Ordering::Relaxed);
+        if file_total > 0 {
+            return Some(self.cumulative_before_file.saturating_add(file_total));
+        }
+
+        None
+    }
+
+    fn emit_downloading(&self, file_downloaded: u64) {
+        if self.cancel_flag.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let overall_downloaded = self.cumulative_before_file.saturating_add(file_downloaded);
+        let _ = self.app_handle.emit(
+            "download-progress",
+            DownloadProgress {
+                model_id: self.model_id.clone(),
+                model_name: self.model_name.clone(),
+                file_name: self.file_name.clone(),
+                file_index: self.file_index,
+                total_files: self.total_files,
+                bytes_downloaded: overall_downloaded,
+                bytes_total: self.fallback_total_bytes(),
+                phase: "downloading".to_string(),
+            },
+        );
+    }
+}
+
+impl Progress for TauriDownloadProgressReporter {
+    fn init(&mut self, size: usize, _filename: &str) {
+        let total = size as u64;
+        self.file_total.store(total, Ordering::Relaxed);
+        self.file_downloaded.store(0, Ordering::Relaxed);
+        self.last_emit = std::time::Instant::now();
+        self.emit_downloading(0);
+    }
+
+    fn update(&mut self, size: usize) {
+        let size = size as u64;
+        let raw_downloaded = self
+            .file_downloaded
+            .fetch_add(size, Ordering::Relaxed)
+            .saturating_add(size);
+
+        let file_total = self.file_total.load(Ordering::Relaxed);
+        let downloaded = if file_total > 0 {
+            raw_downloaded.min(file_total)
+        } else {
+            raw_downloaded
+        };
+
+        let near_end = file_total > 0 && file_total.saturating_sub(downloaded) <= 64 * 1024;
+        let should_emit = self.last_emit.elapsed() >= std::time::Duration::from_millis(150)
+            || near_end
+            || (file_total > 0 && downloaded == file_total);
+
+        if should_emit {
+            self.last_emit = std::time::Instant::now();
+            self.emit_downloading(downloaded);
+        }
+    }
+
+    fn finish(&mut self) {
+        let file_total = self.file_total.load(Ordering::Relaxed);
+        let downloaded = if file_total > 0 {
+            self.file_downloaded.store(file_total, Ordering::Relaxed);
+            file_total
+        } else {
+            self.file_downloaded.load(Ordering::Relaxed)
+        };
+
+        self.emit_downloading(downloaded);
+    }
+}
+
+/// Download a large file using hf-hub progress callbacks.
 fn download_with_progress(
     model_id: &str,
     revision: Option<&str>,
@@ -379,20 +511,23 @@ fn download_with_progress(
     model_name: &str,
     file_index: usize,
     total_files: usize,
+    cumulative_before_file: u64,
     total_bytes: Option<u64>,
     app_handle: &tauri::AppHandle,
     cancel_flag: &Arc<AtomicBool>,
-) -> Result<()> {
-    // Get the blobs directory to monitor size growth
-    let blobs_dir = model_cache_path(model_id).join("blobs");
-
-    // Measure starting size of blobs dir
-    let start_size = dir_size(&blobs_dir);
+) -> Result<u64> {
+    let file_downloaded = Arc::new(AtomicU64::new(0));
+    let file_total = Arc::new(AtomicU64::new(0));
 
     // Create owned values for the download thread
     let file_name_owned = file_name.to_string();
     let model_id_owned = model_id.to_string();
+    let model_name_owned = model_name.to_string();
     let revision_owned = revision.map(|s| s.to_string());
+    let app_handle_owned = app_handle.clone();
+    let file_downloaded_for_thread = file_downloaded.clone();
+    let file_total_for_thread = file_total.clone();
+    let cancel_flag_for_thread = cancel_flag.clone();
 
     // Spawn the actual download in a thread (build a fresh Api+Repo inside to avoid lifetime issues)
     let download_result = Arc::new(std::sync::Mutex::new(
@@ -415,18 +550,41 @@ fn download_with_progress(
             } else {
                 api.repo(Repo::new(model_id_owned.clone(), RepoType::Model))
             };
-            repo.get(&file_name_owned)
+
+            let reporter = TauriDownloadProgressReporter::new(
+                app_handle_owned,
+                &model_id_owned,
+                &model_name_owned,
+                &file_name_owned,
+                file_index,
+                total_files,
+                cumulative_before_file,
+                total_bytes,
+                file_downloaded_for_thread,
+                file_total_for_thread,
+                cancel_flag_for_thread,
+            );
+
+            repo.download_with_progress(&file_name_owned, reporter)
                 .map_err(|e| format!("Failed to download {}: {}", file_name_owned, e))
         })();
         *result_clone.lock().unwrap() = Some(res);
     });
 
-    // Monitor loop: poll blob size growth and emit progress
+    // Monitor loop: keep cancellation responsive while download thread runs.
     loop {
         // Check cancellation
         if cancel_flag.load(Ordering::SeqCst) {
-            // We can't easily kill the download thread, but we signal cancellation
-            // and return error. The thread will finish in background harmlessly.
+            let downloaded = file_downloaded.load(Ordering::Relaxed);
+            let model_total = total_bytes.or_else(|| {
+                let file_total = file_total.load(Ordering::Relaxed);
+                if file_total > 0 {
+                    Some(cumulative_before_file.saturating_add(file_total))
+                } else {
+                    None
+                }
+            });
+
             let _ = app_handle.emit(
                 "download-progress",
                 DownloadProgress {
@@ -435,8 +593,8 @@ fn download_with_progress(
                     file_name: file_name.to_string(),
                     file_index,
                     total_files,
-                    bytes_downloaded: 0,
-                    bytes_total: total_bytes,
+                    bytes_downloaded: cumulative_before_file.saturating_add(downloaded),
+                    bytes_total: model_total,
                     phase: "cancelled".to_string(),
                 },
             );
@@ -448,33 +606,17 @@ fn download_with_progress(
             break;
         }
 
-        // Measure current blob size
-        let current_size = dir_size(&blobs_dir);
-        let downloaded = current_size.saturating_sub(start_size);
-
-        let _ = app_handle.emit(
-            "download-progress",
-            DownloadProgress {
-                model_id: model_id.to_string(),
-                model_name: model_name.to_string(),
-                file_name: file_name.to_string(),
-                file_index,
-                total_files,
-                bytes_downloaded: downloaded,
-                bytes_total: total_bytes,
-                phase: "downloading".to_string(),
-            },
-        );
-
-        // Poll every 2 seconds to reduce I/O overhead from dir_size traversal
-        std::thread::sleep(std::time::Duration::from_millis(2000));
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     // Collect the result
     let _ = handle.join();
     let result = download_result.lock().unwrap().take();
     match result {
-        Some(Ok(_)) => Ok(()),
+        Some(Ok(_)) => {
+            let downloaded = file_downloaded.load(Ordering::Relaxed);
+            Ok(downloaded)
+        }
         Some(Err(e)) => Err(AudioError::ModelDownload {
             model: model_id.to_string(),
             details: e,

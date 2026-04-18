@@ -1,6 +1,6 @@
 [package]
 name = "hermeneia"
-version = "2026.4.0"
+version = "2026.4.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -73,6 +73,7 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 reqwest = { version = "0.12", features = ["json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Audio dependencies
 symphonia = { version = "0.5", features = [
