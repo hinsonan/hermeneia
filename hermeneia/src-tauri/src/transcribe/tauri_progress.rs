@@ -9,15 +9,17 @@ pub const TRANSCRIPTION_PROGRESS_EVENT: &str = "transcription-progress";
 /// Tauri-based progress reporter that emits events to the frontend
 pub struct TauriProgressReporter {
     app_handle: AppHandle,
+    job_id: String,
     first_report: AtomicBool,
     last_logged_pct: AtomicUsize,
 }
 
 impl TauriProgressReporter {
     /// Create a new Tauri progress reporter
-    pub fn new(app_handle: AppHandle) -> Self {
+    pub fn new(app_handle: AppHandle, job_id: String) -> Self {
         Self {
             app_handle,
+            job_id,
             first_report: AtomicBool::new(true),
             last_logged_pct: AtomicUsize::new(0),
         }
@@ -32,24 +34,26 @@ impl TauriProgressReporter {
 
     /// Emit decode progress events.
     pub fn emit_decoding_audio(&self) {
-        self.emit(TranscriptionProgress::decoding_audio());
+        self.emit(TranscriptionProgress::decoding_audio(&self.job_id));
     }
 
     /// Emit decode progress with frame counts.
     pub fn emit_decoding_audio_progress(&self, current: usize, total: usize) {
         self.emit(TranscriptionProgress::decoding_audio_progress(
-            current, total,
+            &self.job_id,
+            current,
+            total,
         ));
     }
 
     /// Emit preparing-audio stage event.
     pub fn emit_preparing_audio(&self) {
-        self.emit(TranscriptionProgress::preparing_audio());
+        self.emit(TranscriptionProgress::preparing_audio(&self.job_id));
     }
 
     /// Emit loading-model stage event.
     pub fn emit_loading_model(&self) {
-        self.emit(TranscriptionProgress::loading_model());
+        self.emit(TranscriptionProgress::loading_model(&self.job_id));
     }
 }
 
@@ -72,11 +76,15 @@ impl ProgressReporter for TauriProgressReporter {
             tracing::info!("Transcription progress: {}% ({}/{})", pct, current, total);
         }
 
-        self.emit(TranscriptionProgress::transcribing(current, total));
+        self.emit(TranscriptionProgress::transcribing(
+            &self.job_id,
+            current,
+            total,
+        ));
     }
 
     fn finish(&self) {
         tracing::info!("Transcription complete");
-        self.emit(TranscriptionProgress::completed());
+        self.emit(TranscriptionProgress::completed(&self.job_id));
     }
 }

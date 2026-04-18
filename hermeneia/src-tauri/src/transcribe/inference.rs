@@ -4,7 +4,8 @@ use crate::audio::{
 };
 use crate::error::{AudioError, Result};
 use crate::runtime_cache::{
-    global_runtime_cache, RuntimeCacheManager, WhisperRuntime, WhisperRuntimeKey,
+    global_runtime_cache, load_whisper_runtime_by_key, RuntimeCacheManager, WhisperRuntime,
+    WhisperRuntimeKey,
 };
 use crate::transcribe::{
     decoder::Decoder,
@@ -54,20 +55,11 @@ fn build_whisper_runtime_key(params: &TranscribeParams) -> WhisperRuntimeKey {
 }
 
 fn load_whisper_runtime(params: &TranscribeParams) -> Result<WhisperRuntime> {
-    let model_manager = ModelManager::new()?;
-    let model_files = model_manager.ensure_model(params.model, params.use_quantized)?;
-    let device = get_device(params.force_cpu)?;
-    tracing::info!("Using device: {}", device_name(&device));
-
-    let (config, tokenizer, model) =
-        load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
-
-    Ok(WhisperRuntime {
-        config,
-        tokenizer,
-        model,
-        device,
-    })
+    let key = build_whisper_runtime_key(params);
+    let runtime =
+        load_whisper_runtime_by_key(key).map_err(|e| enrich_oom_error(e, params.model))?;
+    tracing::info!("Using device: {}", device_name(&runtime.device));
+    Ok(runtime)
 }
 
 fn run_with_whisper_runtime<P: ProgressReporter>(
@@ -369,44 +361,6 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
     })
 }
 
-/// Load config, tokenizer, and model
-fn load_model(
-    files: &ModelFiles,
-    device: &Device,
-) -> Result<(Config, Tokenizer, m::model::Whisper)> {
-    if files.is_quantized {
-        return Err(AudioError::ModelLoad {
-            model: "quantized".to_string(),
-            details: "Quantized models not yet supported".to_string(),
-        });
-    }
-
-    // Load config
-    let config_str = std::fs::read_to_string(&files.config).map_err(|e| AudioError::ModelLoad {
-        model: "config".to_string(),
-        details: e.to_string(),
-    })?;
-    let config: Config = serde_json::from_str(&config_str).map_err(|e| AudioError::ModelLoad {
-        model: "config".to_string(),
-        details: e.to_string(),
-    })?;
-
-    // Load tokenizer
-    let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| AudioError::ModelLoad {
-        model: "tokenizer".to_string(),
-        details: e.to_string(),
-    })?;
-
-    // Load model weights (platform-safe: buffered on Windows, mmap on Linux/macOS)
-    let vb = crate::gpu_cleanup::load_safetensors_varbuilder(&files.weights, m::DTYPE, device)
-        .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, "weights"))?;
-
-    let model = m::model::Whisper::load(&vb, config.clone())
-        .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, device, "whisper"))?;
-
-    Ok((config, tokenizer, model))
-}
-
 /// Enrich OOM errors with model-specific information
 fn enrich_oom_error(error: AudioError, model: crate::transcribe::WhisperModel) -> AudioError {
     match error {
@@ -432,6 +386,41 @@ fn enrich_oom_error(error: AudioError, model: crate::transcribe::WhisperModel) -
         }
         other => other,
     }
+}
+
+/// Load config, tokenizer, and model
+fn load_model(
+    files: &ModelFiles,
+    device: &Device,
+) -> Result<(Config, Tokenizer, m::model::Whisper)> {
+    if files.is_quantized {
+        return Err(AudioError::ModelLoad {
+            model: "quantized".to_string(),
+            details: "Quantized models not yet supported".to_string(),
+        });
+    }
+
+    let config_str = std::fs::read_to_string(&files.config).map_err(|e| AudioError::ModelLoad {
+        model: "config".to_string(),
+        details: e.to_string(),
+    })?;
+    let config: Config = serde_json::from_str(&config_str).map_err(|e| AudioError::ModelLoad {
+        model: "config".to_string(),
+        details: e.to_string(),
+    })?;
+
+    let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| AudioError::ModelLoad {
+        model: "tokenizer".to_string(),
+        details: e.to_string(),
+    })?;
+
+    let vb = crate::gpu_cleanup::load_safetensors_varbuilder(&files.weights, m::DTYPE, device)
+        .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, "weights"))?;
+
+    let model = m::model::Whisper::load(&vb, config.clone())
+        .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, device, "whisper"))?;
+
+    Ok((config, tokenizer, model))
 }
 
 #[cfg(test)]

@@ -175,7 +175,8 @@ fn main() -> anyhow::Result<()> {
 
     let cancel = Arc::new(AtomicBool::new(false));
     let reporter = Arc::new(CliAnnotationReporter);
-    let result = annotate_audio_with_reporter(&args.input, params, reporter, Some(cancel))?;
+    let result =
+        annotate_audio_with_reporter(&args.input, params, reporter, "annotate-cli", Some(cancel))?;
 
     let content = match args.format.to_lowercase().as_str() {
         "json" => format_as_json(&result)?,
