@@ -1,4 +1,5 @@
 use crate::error::{AudioError, Result};
+use crate::hf_cache::hf_hub_cache_dir;
 use crate::translate::catalog::{load_model_catalog, CatalogModel, CatalogModelStatus};
 use crate::translate::language::get_marian_for_pair;
 use crate::translate::types::TranslateParams;
@@ -338,11 +339,7 @@ impl ModelManager {
 
     /// Get cache directory path
     pub fn cache_dir(&self) -> PathBuf {
-        // HuggingFace cache is typically at ~/.cache/huggingface/hub
-        dirs::cache_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("huggingface")
-            .join("hub")
+        hf_hub_cache_dir()
     }
 }
 
