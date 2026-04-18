@@ -134,21 +134,6 @@ impl RuntimeCacheManager {
         L: FnOnce() -> Result<WhisperRuntime>,
         U: FnOnce(&mut WhisperRuntime) -> Result<R>,
     {
-<<<<<<< Updated upstream
-        let mut slot = self
-            .whisper_slot
-            .lock()
-            .map_err(|e| AudioError::ModelLoad {
-                model: key.model.model_id().to_string(),
-                details: format!("Whisper cache lock failed: {}", e),
-            })?;
-
-        if let Some(entry) = slot.as_mut() {
-            if entry.key == key {
-                entry.last_used = Instant::now();
-                tracing::info!(model = %key.model.model_id(), "Whisper runtime cache hit");
-                return use_runtime(&mut entry.runtime);
-=======
         let (pool, base_runtime) = {
             let mut entries = self
                 .whisper_entries
@@ -164,57 +149,6 @@ impl RuntimeCacheManager {
             } else {
                 self.ensure_whisper_capacity(&key)?;
 
-                let started = Instant::now();
-                let runtime = load()?;
-                let load_ms = started.elapsed().as_millis();
-
-                let base_runtime = Arc::new(runtime);
-                let pool = Arc::new(RuntimePool::new(self.whisper_pool_limit));
-
-                entries.insert(
-                    key,
-                    WhisperCacheEntry {
-                        key,
-                        base_runtime: Arc::clone(&base_runtime),
-                        pool: Arc::clone(&pool),
-                        loaded_at: Instant::now(),
-                    },
-                );
-
-                tracing::info!(
-                    model = %key.model.model_id(),
-                    load_ms,
-                    "Whisper runtime cache miss: loaded keyed pool"
-                );
-
-                (pool, base_runtime)
->>>>>>> Stashed changes
-            }
-
-            tracing::info!(
-                old_model = %entry.key.model.model_id(),
-                new_model = %key.model.model_id(),
-                "Evicting Whisper runtime due to key mismatch"
-            );
-            crate::gpu_cleanup::synchronize_device(&entry.runtime.device);
-            *slot = None;
-        }
-
-        self.ensure_whisper_capacity(&key)?;
-
-        let (pool, base_runtime) = {
-            let mut entries = self
-                .whisper_entries
-                .lock()
-                .map_err(|e| AudioError::ModelLoad {
-                    model: key.model.model_id().to_string(),
-                    details: format!("Whisper cache lock failed: {}", e),
-                })?;
-
-            if let Some(entry) = entries.get(&key) {
-                tracing::info!(model = %key.model.model_id(), "Whisper runtime cache hit");
-                (Arc::clone(&entry.pool), Arc::clone(&entry.base_runtime))
-            } else {
                 let started = Instant::now();
                 let runtime = load()?;
                 let load_ms = started.elapsed().as_millis();
@@ -269,10 +203,6 @@ impl RuntimeCacheManager {
         L: FnOnce() -> Result<SpeakerRuntime>,
         U: FnOnce(&mut SpeakerRuntime) -> Result<R>,
     {
-<<<<<<< Updated upstream
-        let mut slot = self.speaker_slot.lock().map_err(|e| {
-            AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
-=======
         let pool = {
             let mut entries = self.speaker_entries.lock().map_err(|e| {
                 AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
@@ -287,66 +217,6 @@ impl RuntimeCacheManager {
             } else {
                 self.ensure_speaker_capacity(&key)?;
 
-                let pool = Arc::new(RuntimePool::new(self.speaker_pool_limit));
-
-                entries.insert(
-                    key.clone(),
-                    SpeakerCacheEntry {
-                        pool: Arc::clone(&pool),
-                        loaded_at: Instant::now(),
-                    },
-                );
-
-                tracing::info!(
-                    model = %key.model.display_name(),
-                    provider = %key.device.provider_string(),
-                    "Speaker runtime cache miss: initialized keyed pool"
-                );
-
-                Arc::clone(&pool)
-            }
-        };
-
-        let mut load_opt = Some(load);
-        let mut lease = pool.checkout(|| {
-            let loader = load_opt.take().ok_or_else(|| {
-                AudioError::DiarizationFailed("Speaker loader already consumed".to_string())
-            })?;
-            loader()
->>>>>>> Stashed changes
-        })?;
-
-        if let Some(entry) = slot.as_mut() {
-            if entry.key == key {
-                entry.last_used = Instant::now();
-                tracing::info!(provider = %entry.runtime.provider, "Speaker runtime cache hit");
-                return use_runtime(&mut entry.runtime);
-            }
-
-            tracing::info!(
-                old_model = %entry.key.model.display_name(),
-                new_model = %key.model.display_name(),
-                old_device = %entry.key.device.provider_string(),
-                new_device = %key.device.provider_string(),
-                "Evicting speaker runtime due to key mismatch"
-            );
-            *slot = None;
-        }
-
-        self.ensure_speaker_capacity(&key)?;
-
-        let pool = {
-            let mut entries = self.speaker_entries.lock().map_err(|e| {
-                AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
-            })?;
-
-            if let Some(entry) = entries.get(&key) {
-                tracing::info!(
-                    provider = %key.device.provider_string(),
-                    "Speaker runtime cache hit"
-                );
-                Arc::clone(&entry.pool)
-            } else {
                 let pool = Arc::new(RuntimePool::new(self.speaker_pool_limit));
 
                 entries.insert(
@@ -703,8 +573,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< Updated upstream
-=======
     fn test_keyed_whisper_pool_behavior() {
         let cache = RuntimeCacheManager::new(CachePolicy::default());
         let key_a = WhisperRuntimeKey {
@@ -787,7 +655,6 @@ mod tests {
     }
 
     #[test]
->>>>>>> Stashed changes
     fn test_speaker_runtime_requirements_by_device() {
         let (cpu_ram, cpu_vram) =
             speaker_runtime_requirements(&SpeakerModel::English, &SpeakerDevice::Cpu);
