@@ -60,6 +60,10 @@ export interface SystemCapabilities {
   gpu_info: GpuInfo | null;
 }
 
+export interface InferenceRuntimeLimits {
+  max_inference_concurrency: number;
+}
+
 export interface ModelValidation {
   status: 'ok' | 'warning' | 'error';
   messages: string[];

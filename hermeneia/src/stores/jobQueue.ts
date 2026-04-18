@@ -6,6 +6,7 @@ import type {
   AnnotatedResult,
   AnnotationProgress,
   ModelValidation,
+  InferenceRuntimeLimits,
   SpeakerDevice,
   SpeakerModelKey,
   SpeakerModelRequirement,
@@ -52,6 +53,7 @@ interface QueueState {
   jobs: QueueJob[];
   selectedJobId: string | null;
   maxConcurrency: number;
+  maxConcurrencyLimit: number;
   defaults: JobSettings;
   systemCapabilities: SystemCapabilities | null;
   modelValidation: ModelValidation | null;
@@ -120,7 +122,7 @@ function loadPersistedState(): Partial<QueueState> {
     return {
       jobs,
       selectedJobId: parsed.selectedJobId ?? null,
-      maxConcurrency: parsed.maxConcurrency ?? 2,
+      maxConcurrency: Math.max(1, Math.min(4, parsed.maxConcurrency ?? 2)),
       defaults: parsed.defaults ?? DEFAULT_SETTINGS,
     };
   } catch {
@@ -133,7 +135,8 @@ const persisted = loadPersistedState();
 const [state, setState] = createStore<QueueState>({
   jobs: persisted.jobs ?? [],
   selectedJobId: persisted.selectedJobId ?? null,
-  maxConcurrency: persisted.maxConcurrency ?? 2,
+  maxConcurrency: Math.max(1, Math.min(4, persisted.maxConcurrency ?? 2)),
+  maxConcurrencyLimit: 4,
   defaults: persisted.defaults ?? { ...DEFAULT_SETTINGS },
   systemCapabilities: null,
   modelValidation: null,
@@ -235,6 +238,11 @@ async function loadCapabilities(): Promise<void> {
   if (state.capabilitiesLoaded) return;
   const errors: string[] = [];
 
+  await refreshInferenceConcurrencyLimit().catch((err) => {
+    console.warn("Failed to load inference runtime limits:", err);
+    errors.push("Failed to load backend inference limits.");
+  });
+
   try {
     const caps = await invoke<SystemCapabilities>("get_system_capabilities");
     setState("systemCapabilities", caps);
@@ -298,15 +306,32 @@ function findJobIndex(jobId: string): number {
 
 export function setDefault<K extends keyof JobSettings>(key: K, value: JobSettings[K]) {
   setState("defaults", key, value);
-  if (key === "model") void validateCurrentModel();
+  if (key === "model") {
+    void validateCurrentModel();
+    void refreshInferenceConcurrencyLimit();
+  }
   schedulePersist();
 }
 
 export function setMaxConcurrency(n: number) {
-  const clamped = Math.max(1, Math.min(10, n | 0));
+  const clamped = Math.max(1, Math.min(state.maxConcurrencyLimit, n | 0));
   setState("maxConcurrency", clamped);
   schedulePersist();
   runScheduler();
+}
+
+async function refreshInferenceConcurrencyLimit(): Promise<void> {
+  const limits = await invoke<InferenceRuntimeLimits>("recommend_inference_concurrency", {
+    whisperModel: state.defaults.model,
+    whisperForceCpu: false,
+  });
+
+  const maxAllowed = Math.max(1, Math.min(4, limits.max_inference_concurrency | 0));
+  setState("maxConcurrencyLimit", maxAllowed);
+  if (state.maxConcurrency > maxAllowed) {
+    setState("maxConcurrency", maxAllowed);
+    schedulePersist();
+  }
 }
 
 export function setSelectedJob(jobId: string | null) {

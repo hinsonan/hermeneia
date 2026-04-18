@@ -4,7 +4,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import "./TextFileUploader.css";
 
 interface TextFileUploaderProps {
-  onFileSelected: (filePath: string) => void;
+  onFileSelected?: (filePath: string) => void;
+  onFilesSelected?: (filePaths: string[]) => void;
 }
 
 const TextFileUploader: Component<TextFileUploaderProps> = (props) => {
@@ -12,18 +13,28 @@ const TextFileUploader: Component<TextFileUploaderProps> = (props) => {
   let unlistenDrop: (() => void) | undefined;
   let unlistenHover: (() => void) | undefined;
 
+  const emitSelectedFiles = (paths: string[]) => {
+    const filtered = paths.filter((filePath) => {
+      const lower = filePath.toLowerCase();
+      return lower.endsWith(".txt") || lower.endsWith(".srt");
+    });
+
+    if (filtered.length === 0) return;
+
+    props.onFilesSelected?.(filtered);
+    if (props.onFileSelected) {
+      props.onFileSelected(filtered[0]);
+    }
+  };
+
   onMount(async () => {
     const appWindow = getCurrentWindow();
 
     // Listen for file drop events
     unlistenDrop = await appWindow.listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
       if (event.payload.paths && event.payload.paths.length > 0) {
-        const filePath = event.payload.paths[0];
-        // Only accept .txt and .srt files
-        if (filePath.toLowerCase().endsWith('.txt') || filePath.toLowerCase().endsWith('.srt')) {
-          setIsDragging(false);
-          props.onFileSelected(filePath);
-        }
+        setIsDragging(false);
+        emitSelectedFiles(event.payload.paths);
       }
     });
 
@@ -42,15 +53,19 @@ const TextFileUploader: Component<TextFileUploaderProps> = (props) => {
   const handleClick = async () => {
     try {
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{
           name: "Text Files",
           extensions: ["txt", "srt"],
         }],
       });
 
-      if (selected && typeof selected === "string") {
-        props.onFileSelected(selected);
+      if (!selected) return;
+
+      if (typeof selected === "string") {
+        emitSelectedFiles([selected]);
+      } else {
+        emitSelectedFiles(selected);
       }
     } catch (err) {
       console.error('Error opening file picker:', err);
@@ -71,8 +86,8 @@ const TextFileUploader: Component<TextFileUploaderProps> = (props) => {
           <polyline points="10 9 9 9 8 9" />
         </svg>
       </div>
-      <h3>Drop Text File Here or Click to Browse</h3>
-      <p>Supports TXT (plain text) and SRT (subtitles)</p>
+      <h3>Drop Text Files Here or Click to Browse</h3>
+      <p>Supports TXT and SRT, single or multiple files</p>
     </div>
   );
 };

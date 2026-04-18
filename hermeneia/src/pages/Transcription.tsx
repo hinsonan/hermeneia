@@ -444,7 +444,7 @@ const Transcription: Component = () => {
                   value={String(queueState.maxConcurrency)}
                   onChange={(e) => setMaxConcurrency(parseInt(e.currentTarget.value, 10))}
                 >
-                  <For each={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}>{(value) => <option value={value}>{value}</option>}</For>
+                  <For each={[1, 2, 3, 4].filter((value) => value <= queueState.maxConcurrencyLimit)}>{(value) => <option value={value}>{value}</option>}</For>
                 </select>
                 <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
               </div>
