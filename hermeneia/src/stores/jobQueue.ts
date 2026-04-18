@@ -16,7 +16,7 @@ import type {
   WhisperModel,
 } from "../types/transcription";
 
-export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type JobStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
 export type JobMode = "transcribe" | "annotate";
 export type JobProgress = TranscriptionProgress | AnnotationProgress;
 export type InspectorTab = "srt" | "text";
@@ -104,7 +104,7 @@ function loadPersistedState(): Partial<QueueState> {
     // Jobs that were running when the app closed are orphaned — the backend
     // job promise resolved into nothing. Mark them cancelled so the user can retry.
     const jobs = (parsed.jobs || []).map((job) =>
-      job.status === "running"
+      job.status === "running" || job.status === "cancelling"
         ? {
             ...job,
             status: "cancelled" as JobStatus,
@@ -163,22 +163,62 @@ function schedulePersist() {
 
 let unlistenTranscription: UnlistenFn | null = null;
 let unlistenAnnotation: UnlistenFn | null = null;
+let schedulerPaused = false;
+
+function isCancelJobCommandUnavailable(err: unknown): boolean {
+  const message = String(err).toLowerCase();
+  return message.includes("unknown command `cancel_job`")
+    || message.includes("unknown command: cancel_job")
+    || message.includes("command cancel_job not found")
+    || (message.includes("not found") && message.includes("cancel_job"));
+}
+
+function withSchedulerPaused<T>(fn: () => Promise<T>): Promise<T> {
+  schedulerPaused = true;
+  return fn().finally(() => {
+    schedulerPaused = false;
+    runScheduler();
+  });
+}
 
 export async function initJobQueue(): Promise<void> {
-  if (state.listenersInitialized) return;
-  setState("listenersInitialized", true);
+  if (state.listenersInitialized) {
+    if (!state.capabilitiesLoaded) {
+      await loadCapabilities();
+    }
+    return;
+  }
 
-  unlistenTranscription = await listen<TranscriptionProgress>("transcription-progress", (event) => {
-    const payload = event.payload;
-    if (!payload?.job_id) return;
-    updateJobProgress(payload.job_id, payload);
-  });
+  try {
+    const transcriptionUnlisten = await listen<TranscriptionProgress>("transcription-progress", (event) => {
+      const payload = event.payload;
+      if (!payload?.job_id) return;
+      updateJobProgress(payload.job_id, payload);
+    });
 
-  unlistenAnnotation = await listen<AnnotationProgress>("annotation-progress", (event) => {
-    const payload = event.payload;
-    if (!payload?.job_id) return;
-    updateJobProgress(payload.job_id, payload);
-  });
+    const annotationUnlisten = await listen<AnnotationProgress>("annotation-progress", (event) => {
+      const payload = event.payload;
+      if (!payload?.job_id) return;
+      updateJobProgress(payload.job_id, payload);
+    });
+
+    unlistenTranscription = transcriptionUnlisten;
+    unlistenAnnotation = annotationUnlisten;
+    setState("listenersInitialized", true);
+    setState("queueError", null);
+  } catch (err) {
+    if (unlistenTranscription) {
+      unlistenTranscription();
+      unlistenTranscription = null;
+    }
+    if (unlistenAnnotation) {
+      unlistenAnnotation();
+      unlistenAnnotation = null;
+    }
+    setState("listenersInitialized", false);
+    setState("queueError", `Queue initialization failed: ${String(err)}`);
+    return;
+  }
 
   await loadCapabilities();
 }
@@ -193,7 +233,7 @@ export function teardownJobQueue() {
 
 async function loadCapabilities(): Promise<void> {
   if (state.capabilitiesLoaded) return;
-  setState("capabilitiesLoaded", true);
+  const errors: string[] = [];
 
   try {
     const caps = await invoke<SystemCapabilities>("get_system_capabilities");
@@ -206,6 +246,7 @@ async function loadCapabilities(): Promise<void> {
     }
   } catch (err) {
     console.warn("Failed to get system capabilities:", err);
+    errors.push("Failed to load system capabilities.");
   }
 
   try {
@@ -216,9 +257,17 @@ async function loadCapabilities(): Promise<void> {
     }
   } catch (err) {
     console.warn("Failed to load speaker model requirements:", err);
+    errors.push("Failed to load speaker model requirements.");
   }
 
   await validateCurrentModel();
+
+  if (errors.length === 0) {
+    setState("capabilitiesLoaded", true);
+  } else {
+    setState("capabilitiesLoaded", false);
+    setState("queueError", errors.join(" "));
+  }
 }
 
 export async function validateCurrentModel(): Promise<void> {
@@ -230,6 +279,7 @@ export async function validateCurrentModel(): Promise<void> {
     setState("modelValidation", validation);
   } catch (err) {
     console.warn("Validation failed:", err);
+    setState("queueError", `Model validation failed: ${String(err)}`);
   }
 }
 
@@ -319,25 +369,95 @@ export async function cancelJob(jobId: string): Promise<void> {
   const current = state.jobs[index];
   if (current.status === "completed") return;
 
+  if (current.status === "queued" || current.status === "failed" || current.status === "cancelled") {
+    setState("jobs", index, (job) => ({
+      ...job,
+      status: "cancelled" as JobStatus,
+      progress: null,
+      error: null,
+    }));
+
+    schedulePersist();
+    runScheduler();
+    return;
+  }
+
+  if (current.status === "cancelling") return;
+
   setState("jobs", index, (job) => ({
     ...job,
-    status: "cancelled" as JobStatus,
-    progress: null,
+    status: "cancelling" as JobStatus,
+    progress: job.progress
+      ? {
+          ...job.progress,
+          message: "Cancelling...",
+        }
+      : null,
   }));
 
   schedulePersist();
-  runScheduler();
 
   try {
-    await invoke("cancel_job", { jobId });
-  } catch {
-    await invoke("cancel_inference").catch(() => {});
+    const cancelled = await invoke<boolean>("cancel_job", { jobId });
+    if (!cancelled) {
+      throw new Error(`Job '${jobId}' is not active in backend cancel registry`);
+    }
+    setState("jobs", (job) => job.id === jobId, (job) => ({
+      ...job,
+      status: "cancelled" as JobStatus,
+      error: null,
+      progress: null,
+    }));
+  } catch (err) {
+    if (isCancelJobCommandUnavailable(err)) {
+      try {
+        await invoke("cancel_inference");
+        setState("jobs", (job) => job.id === jobId, (job) => ({
+          ...job,
+          status: "cancelled" as JobStatus,
+          error: null,
+          progress: null,
+        }));
+      } catch (fallbackErr) {
+        setState("jobs", (job) => job.id === jobId, (job) => ({
+          ...job,
+          status: "running" as JobStatus,
+        }));
+        setState("queueError", `Failed to cancel job '${jobId}': ${String(fallbackErr)}`);
+      }
+    } else {
+      setState("jobs", (job) => job.id === jobId, (job) => ({
+        ...job,
+        status: "running" as JobStatus,
+      }));
+      setState("queueError", `Failed to cancel job '${jobId}': ${String(err)}`);
+    }
+  } finally {
+    schedulePersist();
+    runScheduler();
   }
 }
 
 export async function cancelAllRunning(): Promise<void> {
-  const running = state.jobs.filter((job) => job.status === "running");
-  await Promise.allSettled(running.map((job) => cancelJob(job.id)));
+  await withSchedulerPaused(async () => {
+    const active = state.jobs.filter((job) => job.status === "running" || job.status === "cancelling");
+    await Promise.allSettled(active.map((job) => cancelJob(job.id)));
+  });
+}
+
+export async function cancelAllAndClear(): Promise<void> {
+  await withSchedulerPaused(async () => {
+    const active = state.jobs.filter((job) => job.status === "running" || job.status === "cancelling");
+    await Promise.allSettled(active.map((job) => cancelJob(job.id)));
+
+    setState(
+      produce((draft) => {
+        draft.jobs = [];
+        draft.selectedJobId = null;
+      })
+    );
+    schedulePersist();
+  });
 }
 
 export function retryJob(jobId: string): void {
@@ -371,17 +491,33 @@ export function retryJob(jobId: string): void {
 }
 
 export function retryFailedJobs(): void {
+  const now = Date.now();
   setState(
     produce((draft) => {
+      const idMap = new Map<string, string>();
+      let nextOffset = 0;
+
       draft.jobs.forEach((job) => {
         if (job.status === "failed") {
+          const oldId = job.id;
+          const newId = makeId();
+
+          job.id = newId;
+          job.createdAt = now + nextOffset;
+          nextOffset += 1;
           job.status = "queued";
           job.error = null;
           job.progress = null;
           job.result = null;
           job.annotatedResult = null;
+
+          idMap.set(oldId, newId);
         }
       });
+
+      if (draft.selectedJobId && idMap.has(draft.selectedJobId)) {
+        draft.selectedJobId = idMap.get(draft.selectedJobId) || null;
+      }
     })
   );
   schedulePersist();
@@ -390,7 +526,7 @@ export function retryFailedJobs(): void {
 
 export function removeJob(jobId: string): void {
   const target = state.jobs.find((job) => job.id === jobId);
-  if (!target || target.status === "running") return;
+  if (!target || target.status === "running" || target.status === "cancelling") return;
   setState(
     produce((draft) => {
       draft.jobs = draft.jobs.filter((job) => job.id !== jobId);
@@ -415,7 +551,7 @@ export function clearCompleted(): void {
 }
 
 export function clearAll(): void {
-  const running = state.jobs.filter((j) => j.status === "running");
+  const running = state.jobs.filter((j) => j.status === "running" || j.status === "cancelling");
   if (running.length > 0) return; // caller should cancel running jobs first
   setState(
     produce((draft) => {
@@ -436,11 +572,12 @@ export function updateSpeakerName(jobId: string, speakerId: number, value: strin
 let schedulerRunning = false;
 
 function runScheduler(): void {
+  if (schedulerPaused) return;
   if (schedulerRunning) return;
   schedulerRunning = true;
   try {
     while (true) {
-      const runningCount = state.jobs.filter((job) => job.status === "running").length;
+      const runningCount = state.jobs.filter((job) => job.status === "running" || job.status === "cancelling").length;
       const slots = state.maxConcurrency - runningCount;
       if (slots <= 0) break;
       const next = state.jobs.find((job) => job.status === "queued");
@@ -496,6 +633,16 @@ async function runJob(jobId: string): Promise<void> {
       const freshIndex = findJobIndex(jobId);
       if (freshIndex >= 0) {
         const current = state.jobs[freshIndex];
+        if (current.status === "cancelling") {
+          setState("jobs", freshIndex, (c) => ({
+            ...c,
+            status: "cancelled" as JobStatus,
+            error: null,
+            progress: null,
+          }));
+          return;
+        }
+
         if (current.status !== "running") {
           return;
         }
@@ -528,6 +675,16 @@ async function runJob(jobId: string): Promise<void> {
       const freshIndex = findJobIndex(jobId);
       if (freshIndex >= 0) {
         const current = state.jobs[freshIndex];
+        if (current.status === "cancelling") {
+          setState("jobs", freshIndex, (c) => ({
+            ...c,
+            status: "cancelled" as JobStatus,
+            error: null,
+            progress: null,
+          }));
+          return;
+        }
+
         if (current.status !== "running") {
           return;
         }
@@ -554,6 +711,13 @@ async function runJob(jobId: string): Promise<void> {
     // User-initiated cancel already set status=cancelled; don't overwrite.
     if (current.status === "cancelled") {
       // leave as cancelled
+    } else if (current.status === "cancelling") {
+      setState("jobs", freshIndex, (c) => ({
+        ...c,
+        status: "cancelled" as JobStatus,
+        error: null,
+        progress: null,
+      }));
     } else if (errStr.includes("cancelled") || errStr.includes("Operation cancelled")) {
       setState("jobs", freshIndex, (c) => ({
         ...c,
@@ -583,6 +747,10 @@ export const selectedJob = createMemo(() =>
 
 export const runningCount = createMemo(() =>
   state.jobs.filter((job) => job.status === "running").length
+);
+
+export const cancellingCount = createMemo(() =>
+  state.jobs.filter((job) => job.status === "cancelling").length
 );
 
 export const queuedCount = createMemo(() =>

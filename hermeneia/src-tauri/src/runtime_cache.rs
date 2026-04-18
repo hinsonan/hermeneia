@@ -1,5 +1,5 @@
 use crate::error::{AudioError, Result};
-use crate::runtime_pool::RuntimePool;
+use crate::runtime_pool::{RuntimePool, RuntimePoolCheckoutError};
 use crate::speaker::{SpeakerDevice, SpeakerModel};
 use crate::transcribe::model::{get_device, ModelManager};
 use crate::transcribe::WhisperModel;
@@ -9,10 +9,13 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use sherpa_rs::diarize::Diarize;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 use sysinfo::System;
 use tokenizers::Tokenizer;
+
+const CACHE_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct CachePolicy {
@@ -80,6 +83,13 @@ struct WhisperCacheEntry {
 struct SpeakerCacheEntry {
     pool: Arc<RuntimePool<SpeakerRuntime>>,
     loaded_at: Instant,
+    init_state: Arc<(Mutex<SpeakerInitState>, Condvar)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpeakerInitState {
+    initializing: bool,
+    initialized: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +144,20 @@ impl RuntimeCacheManager {
         L: FnOnce() -> Result<WhisperRuntime>,
         U: FnOnce(&mut WhisperRuntime) -> Result<R>,
     {
+        self.with_whisper_runtime_cancellable(key, load, use_runtime, None)
+    }
+
+    pub fn with_whisper_runtime_cancellable<R, L, U>(
+        &self,
+        key: WhisperRuntimeKey,
+        load: L,
+        use_runtime: U,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<R>
+    where
+        L: FnOnce() -> Result<WhisperRuntime>,
+        U: FnOnce(&mut WhisperRuntime) -> Result<R>,
+    {
         let (pool, base_runtime) = {
             let mut entries = self
                 .whisper_entries
@@ -176,11 +200,16 @@ impl RuntimeCacheManager {
             }
         };
 
-        let mut lease = pool.checkout(|| {
-            let mut worker = base_runtime.clone_whisper_runtime()?;
-            worker.reset_kv_cache();
-            Ok::<WhisperRuntime, AudioError>(worker)
-        })?;
+        let mut lease = pool
+            .checkout_cancellable(
+                || {
+                    let mut worker = base_runtime.clone_whisper_runtime()?;
+                    worker.reset_kv_cache();
+                    Ok::<WhisperRuntime, AudioError>(worker)
+                },
+                || is_cancelled(cancel_flag),
+            )
+            .map_err(map_pool_checkout_error)?;
 
         lease.reset_kv_cache();
         let result = use_runtime(&mut lease);
@@ -203,7 +232,21 @@ impl RuntimeCacheManager {
         L: FnOnce() -> Result<SpeakerRuntime>,
         U: FnOnce(&mut SpeakerRuntime) -> Result<R>,
     {
-        let pool = {
+        self.with_speaker_runtime_cancellable(key, load, use_runtime, None)
+    }
+
+    pub fn with_speaker_runtime_cancellable<R, L, U>(
+        &self,
+        key: SpeakerRuntimeKey,
+        load: L,
+        use_runtime: U,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<R>
+    where
+        L: FnOnce() -> Result<SpeakerRuntime>,
+        U: FnOnce(&mut SpeakerRuntime) -> Result<R>,
+    {
+        let (pool, init_state, should_initialize) = {
             let mut entries = self.speaker_entries.lock().map_err(|e| {
                 AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
             })?;
@@ -213,17 +256,25 @@ impl RuntimeCacheManager {
                     provider = %key.device.provider_string(),
                     "Speaker runtime cache hit"
                 );
-                Arc::clone(&entry.pool)
+                (Arc::clone(&entry.pool), Arc::clone(&entry.init_state), false)
             } else {
                 self.ensure_speaker_capacity(&key)?;
 
                 let pool = Arc::new(RuntimePool::new(self.speaker_pool_limit));
+                let init_state = Arc::new((
+                    Mutex::new(SpeakerInitState {
+                        initializing: true,
+                        initialized: false,
+                    }),
+                    Condvar::new(),
+                ));
 
                 entries.insert(
                     key.clone(),
                     SpeakerCacheEntry {
                         pool: Arc::clone(&pool),
                         loaded_at: Instant::now(),
+                        init_state: Arc::clone(&init_state),
                     },
                 );
 
@@ -233,19 +284,139 @@ impl RuntimeCacheManager {
                     "Speaker runtime cache miss: initialized keyed pool"
                 );
 
-                Arc::clone(&pool)
+                (Arc::clone(&pool), Arc::clone(&init_state), true)
             }
         };
 
+        if should_initialize {
+            let mut bootstrap_load = Some(load);
+            let mut lease = match pool.checkout_cancellable(
+                || {
+                    let loader = bootstrap_load.take().ok_or_else(|| {
+                        AudioError::DiarizationFailed(
+                            "Speaker loader already consumed during bootstrap".to_string(),
+                        )
+                    })?;
+                    loader()
+                },
+                || is_cancelled(cancel_flag),
+            ) {
+                Ok(lease) => lease,
+                Err(RuntimePoolCheckoutError::Worker(err)) => {
+                    self.finish_speaker_initialization(&key, &init_state, false)?;
+                    self.remove_speaker_entry(&key, &init_state)?;
+                    return Err(err);
+                }
+                Err(RuntimePoolCheckoutError::Cancelled) => {
+                    self.finish_speaker_initialization(&key, &init_state, false)?;
+                    self.remove_speaker_entry(&key, &init_state)?;
+                    return Err(AudioError::Cancelled);
+                }
+            };
+
+            self.finish_speaker_initialization(&key, &init_state, true)?;
+            return use_runtime(&mut lease);
+        }
+
+        self.wait_for_speaker_initialization(&key, &init_state, cancel_flag)?;
+
         let mut load_opt = Some(load);
-        let mut lease = pool.checkout(|| {
-            let loader = load_opt.take().ok_or_else(|| {
-                AudioError::DiarizationFailed("Speaker loader already consumed".to_string())
-            })?;
-            loader()
-        })?;
+        let mut lease = pool
+            .checkout_cancellable(
+                || {
+                    let loader = load_opt.take().ok_or_else(|| {
+                        AudioError::DiarizationFailed("Speaker loader already consumed".to_string())
+                    })?;
+                    loader()
+                },
+                || is_cancelled(cancel_flag),
+            )
+            .map_err(map_pool_checkout_error)?;
 
         use_runtime(&mut lease)
+    }
+
+    fn finish_speaker_initialization(
+        &self,
+        key: &SpeakerRuntimeKey,
+        init_state: &Arc<(Mutex<SpeakerInitState>, Condvar)>,
+        initialized: bool,
+    ) -> Result<()> {
+        let (lock, cvar) = &**init_state;
+        let mut state = lock.lock().map_err(|e| {
+            AudioError::DiarizationFailed(format!(
+                "Speaker init lock failed for {}:{}: {}",
+                key.model.display_name(),
+                key.device.provider_string(),
+                e
+            ))
+        })?;
+        state.initializing = false;
+        state.initialized = initialized;
+        cvar.notify_all();
+        Ok(())
+    }
+
+    fn wait_for_speaker_initialization(
+        &self,
+        key: &SpeakerRuntimeKey,
+        init_state: &Arc<(Mutex<SpeakerInitState>, Condvar)>,
+        cancel_flag: Option<&AtomicBool>,
+    ) -> Result<()> {
+        let (lock, cvar) = &**init_state;
+        let mut state = lock.lock().map_err(|e| {
+            AudioError::DiarizationFailed(format!(
+                "Speaker init lock failed for {}:{}: {}",
+                key.model.display_name(),
+                key.device.provider_string(),
+                e
+            ))
+        })?;
+
+        while state.initializing {
+            if is_cancelled(cancel_flag) {
+                return Err(AudioError::Cancelled);
+            }
+
+            let (next_state, _) = cvar.wait_timeout(state, CACHE_WAIT_POLL_INTERVAL).map_err(|e| {
+                AudioError::DiarizationFailed(format!(
+                    "Speaker init wait failed for {}:{}: {}",
+                    key.model.display_name(),
+                    key.device.provider_string(),
+                    e
+                ))
+            })?;
+            state = next_state;
+        }
+
+        if state.initialized {
+            Ok(())
+        } else {
+            Err(AudioError::DiarizationFailed(format!(
+                "Speaker runtime initialization failed for {}:{}",
+                key.model.display_name(),
+                key.device.provider_string()
+            )))
+        }
+    }
+
+    fn remove_speaker_entry(
+        &self,
+        key: &SpeakerRuntimeKey,
+        init_state: &Arc<(Mutex<SpeakerInitState>, Condvar)>,
+    ) -> Result<()> {
+        let mut entries = self.speaker_entries.lock().map_err(|e| {
+            AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
+        })?;
+
+        let should_remove = entries
+            .get(key)
+            .map(|entry| Arc::ptr_eq(&entry.init_state, init_state))
+            .unwrap_or(false);
+        if should_remove {
+            entries.remove(key);
+        }
+        Ok(())
     }
 
     pub fn clear_whisper(&self) {
@@ -396,6 +567,19 @@ impl RuntimeCacheManager {
         }
 
         Ok(())
+    }
+}
+
+fn is_cancelled(cancel_flag: Option<&AtomicBool>) -> bool {
+    cancel_flag
+        .map(|flag| flag.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+fn map_pool_checkout_error(err: RuntimePoolCheckoutError<AudioError>) -> AudioError {
+    match err {
+        RuntimePoolCheckoutError::Worker(inner) => inner,
+        RuntimePoolCheckoutError::Cancelled => AudioError::Cancelled,
     }
 }
 
@@ -631,6 +815,13 @@ mod tests {
                 SpeakerCacheEntry {
                     pool: Arc::new(RuntimePool::new(1)),
                     loaded_at: Instant::now(),
+                    init_state: Arc::new((
+                        Mutex::new(SpeakerInitState {
+                            initializing: false,
+                            initialized: true,
+                        }),
+                        Condvar::new(),
+                    )),
                 },
             );
         }

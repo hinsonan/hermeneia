@@ -398,7 +398,7 @@ pub fn diarize_prepared_audio_with_callbacks_cached(
             device: params.device.clone(),
         };
 
-        cache.with_speaker_runtime(
+        cache.with_speaker_runtime_cancellable(
             key,
             || load_speaker_runtime(&params, &cancel, &callbacks.stage_progress),
             |runtime| {
@@ -411,6 +411,7 @@ pub fn diarize_prepared_audio_with_callbacks_cached(
                     cancel.clone(),
                 )
             },
+            cancel.as_deref(),
         )?
     } else {
         let mut runtime = load_speaker_runtime(&params, &cancel, &callbacks.stage_progress)?;

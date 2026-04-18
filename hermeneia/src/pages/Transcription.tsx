@@ -23,9 +23,10 @@ import {
   JobStatus,
   QueueJob,
   cancelAllRunning,
+  cancelAllAndClear,
   cancelJob,
+  cancellingCount,
   cancelledCount,
-  clearAll,
   clearCompleted,
   completedCount,
   dismissQueueError,
@@ -87,6 +88,7 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 const statusLabel = (status: JobStatus): string => {
   if (status === "queued") return "Queued";
   if (status === "running") return "Running";
+  if (status === "cancelling") return "Cancelling";
   if (status === "completed") return "Done";
   if (status === "failed") return "Failed";
   return "Cancelled";
@@ -104,6 +106,15 @@ const QueueStatusIcon: Component<QueueStatusIconProps> = (props) => {
           <path d="M12 3l6 6-6 12L6 9z" />
           <path d="M12 7v10" />
           <path d="M10 13h4" />
+        </svg>
+      );
+    }
+
+    if (props.status === "cancelling") {
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M9 9h6v6H9z" />
         </svg>
       );
     }
@@ -284,6 +295,7 @@ const Transcription: Component = () => {
   });
 
   const totalJobs = createMemo(() => queueState.jobs.length);
+  const activeRunningCount = createMemo(() => runningCount() + cancellingCount());
 
   createEffect(() => {
     if (typeof window === "undefined") return;
@@ -384,8 +396,7 @@ const Transcription: Component = () => {
 
   const confirmClearAll = async () => {
     setShowClearDialog(false);
-    await cancelAllRunning();
-    clearAll();
+    await cancelAllAndClear();
   };
 
   return (
@@ -456,6 +467,9 @@ const Transcription: Component = () => {
               <Show when={runningCount() > 0}>
                 <span class="tx-count-pill tx-count-running">{runningCount()} running</span>
               </Show>
+              <Show when={cancellingCount() > 0}>
+                <span class="tx-count-pill tx-count-cancelled">{cancellingCount()} cancelling</span>
+              </Show>
               <Show when={queuedCount() > 0}>
                 <span class="tx-count-pill tx-count-queued">{queuedCount()} queued</span>
               </Show>
@@ -474,7 +488,7 @@ const Transcription: Component = () => {
               {(seg) => (
                 <div class="tx-batch-bar" role="progressbar" aria-valuenow={completedCount()} aria-valuemax={totalJobs()}>
                   <div class="tx-batch-bar-seg tx-seg-completed" style={{ width: `${seg().completed}%` }} />
-                  <div class="tx-batch-bar-seg tx-seg-running" style={{ width: `${seg().running}%` }} />
+                  <div class="tx-batch-bar-seg tx-seg-running" style={{ width: `${(seg().running + (cancellingCount() / totalJobs()) * 100)}%` }} />
                   <div class="tx-batch-bar-seg tx-seg-failed" style={{ width: `${seg().failed}%` }} />
                   <div class="tx-batch-bar-seg tx-seg-cancelled" style={{ width: `${seg().cancelled}%` }} />
                 </div>
@@ -482,7 +496,7 @@ const Transcription: Component = () => {
             </Show>
 
             <div class="tx-batch-actions">
-              <button class="tx-link-btn" onClick={() => void cancelAllRunning()} disabled={runningCount() === 0}>
+              <button class="tx-link-btn" onClick={() => void cancelAllRunning()} disabled={activeRunningCount() === 0}>
                 Cancel running
               </button>
               <button class="tx-link-btn" onClick={retryFailedJobs} disabled={failedCount() === 0}>
@@ -556,7 +570,7 @@ const Transcription: Component = () => {
                               <div class="tx-queue-row-meta">
                                 <span class="tx-chip">{job.settings.mode === "annotate" ? "Annotate" : "Transcribe"}</span>
                                 <span class="tx-chip tx-chip-muted">{job.settings.model}</span>
-                                <Show when={job.status === "running"}>
+                                <Show when={job.status === "running" || job.status === "cancelling"}>
                                   <span class="tx-queue-row-progress">
                                     {getProgressPercent(job.progress) === null
                                       ? (job.progress?.message || "Preparing...")
@@ -673,10 +687,13 @@ const JobInspector: Component<JobInspectorProps> = (props) => {
           <Show when={job().status === "running"}>
             <button class="tx-btn" onClick={() => void cancelJob(job().id)}>Cancel</button>
           </Show>
+          <Show when={job().status === "cancelling"}>
+            <button class="tx-btn" disabled>Cancelling...</button>
+          </Show>
           <Show when={job().status === "failed" || job().status === "cancelled"}>
             <button class="tx-btn" onClick={() => retryJob(job().id)}>Retry</button>
           </Show>
-          <button class="tx-btn" onClick={() => removeJob(job().id)} disabled={job().status === "running"}>Remove</button>
+          <button class="tx-btn" onClick={() => removeJob(job().id)} disabled={job().status === "running" || job().status === "cancelling"}>Remove</button>
         </div>
       </header>
 
@@ -695,6 +712,13 @@ const JobInspector: Component<JobInspectorProps> = (props) => {
           <div class="tx-progress-wrap">
             <TranscriptionProgressBar progress={job().progress} />
           </div>
+        </section>
+      </Show>
+
+      <Show when={job().status === "cancelling"}>
+        <section class="tx-status-panel tx-status-cancelled">
+          <h3>Cancelling...</h3>
+          <p>Waiting for backend workers to stop cleanly.</p>
         </section>
       </Show>
 

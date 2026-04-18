@@ -495,6 +495,7 @@ async fn write_zip_archive(
     tokio::task::spawn_blocking(move || {
         use std::fs::File;
         use std::io::Write;
+        use std::path::PathBuf;
         use zip::write::SimpleFileOptions;
 
         let mut output_path = normalize_output_path(&path);
@@ -506,8 +507,25 @@ async fn write_zip_archive(
                 .map_err(|e| format!("Failed to create export directory: {}", e))?;
         }
 
-        let file = File::create(&output_path)
-            .map_err(|e| format!("Failed to create zip file: {}", e))?;
+        let temp_name = format!(
+            ".{}.tmp-{}-{}.zip",
+            output_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("export"),
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let temp_path = output_path
+            .parent()
+            .map(|p| p.join(&temp_name))
+            .unwrap_or_else(|| PathBuf::from(&temp_name));
+
+        let file = File::create(&temp_path)
+            .map_err(|e| format!("Failed to create temporary zip file: {}", e))?;
         let mut zip = zip::ZipWriter::new(file);
         let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
@@ -516,20 +534,38 @@ async fn write_zip_archive(
         for entry in entries {
             let normalized = entry.path.trim().replace('\\', "/");
             if normalized.is_empty() {
+                let _ = std::fs::remove_file(&temp_path);
                 return Err("Archive entry path cannot be empty".to_string());
             }
             if normalized.starts_with('/') || normalized.split('/').any(|part| part == "..") {
+                let _ = std::fs::remove_file(&temp_path);
                 return Err(format!("Invalid archive entry path: {}", entry.path));
             }
 
             zip.start_file(&normalized, options)
-                .map_err(|e| format!("Failed to add '{}' to zip: {}", normalized, e))?;
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&temp_path);
+                    format!("Failed to add '{}' to zip: {}", normalized, e)
+                })?;
             zip.write_all(entry.content.as_bytes())
-                .map_err(|e| format!("Failed to write '{}' in zip: {}", normalized, e))?;
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&temp_path);
+                    format!("Failed to write '{}' in zip: {}", normalized, e)
+                })?;
         }
 
         zip.finish()
-            .map_err(|e| format!("Failed to finalize zip archive: {}", e))?;
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&temp_path);
+                format!("Failed to finalize zip archive: {}", e)
+            })?;
+
+        if output_path.exists() {
+            std::fs::remove_file(&output_path)
+                .map_err(|e| format!("Failed to replace existing zip archive: {}", e))?;
+        }
+        std::fs::rename(&temp_path, &output_path)
+            .map_err(|e| format!("Failed to move zip archive into place: {}", e))?;
         Ok(())
     })
     .await

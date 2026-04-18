@@ -13,6 +13,8 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
   const [isDragging, setIsDragging] = createSignal(false);
   let unlistenDrop: (() => void) | undefined;
   let unlistenHover: (() => void) | undefined;
+  let unlistenEnter: (() => void) | undefined;
+  let unlistenLeave: (() => void) | undefined;
 
   onMount(async () => {
     const appWindow = getCurrentWindow();
@@ -30,18 +32,34 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
       }
     });
 
-    // Listen for drag hover events
+    // Listen for drag hover events (legacy + current names for compatibility)
     unlistenHover = await appWindow.listen("tauri://drag", () => {
       console.log("Drag hover detected");
       setIsDragging(true);
     });
 
-    // Note: There's no drag-cancelled event in Tauri 2, we handle it in drop
+    unlistenEnter = await appWindow.listen("tauri://drag-enter", () => {
+      setIsDragging(true);
+    });
+
+    unlistenLeave = await appWindow.listen("tauri://drag-leave", () => {
+      setIsDragging(false);
+    });
+
+    // Fallback cleanup when focus changes without drop/leave delivery.
+    window.addEventListener("blur", handleWindowBlur);
   });
+
+  const handleWindowBlur = () => {
+    setIsDragging(false);
+  };
 
   onCleanup(() => {
     if (unlistenDrop) unlistenDrop();
     if (unlistenHover) unlistenHover();
+    if (unlistenEnter) unlistenEnter();
+    if (unlistenLeave) unlistenLeave();
+    window.removeEventListener("blur", handleWindowBlur);
   });
 
   // Handle click to open file picker

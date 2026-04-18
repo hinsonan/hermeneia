@@ -1,5 +1,14 @@
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
+
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug)]
+pub enum RuntimePoolCheckoutError<E> {
+    Worker(E),
+    Cancelled,
+}
 
 #[derive(Debug)]
 struct RuntimePoolState<T> {
@@ -38,6 +47,25 @@ impl<T> RuntimePool<T> {
     where
         F: FnOnce() -> std::result::Result<T, E>,
     {
+        match self.checkout_cancellable(create_worker, || false) {
+            Ok(lease) => Ok(lease),
+            Err(RuntimePoolCheckoutError::Worker(err)) => Err(err),
+            Err(RuntimePoolCheckoutError::Cancelled) => {
+                unreachable!("checkout() cannot be cancelled")
+            }
+        }
+    }
+
+    pub fn checkout_cancellable<F, E, C>(
+        &self,
+        create_worker: F,
+        is_cancelled: C,
+    ) -> std::result::Result<RuntimeLease<T>, RuntimePoolCheckoutError<E>>
+    where
+        F: FnOnce() -> std::result::Result<T, E>,
+        C: Fn() -> bool,
+    {
+        let mut create_worker = Some(create_worker);
         let mut state = self.inner.state.lock().expect("RuntimePool mutex poisoned");
 
         loop {
@@ -47,6 +75,9 @@ impl<T> RuntimePool<T> {
 
             if state.total_workers < self.inner.max_workers {
                 state.total_workers += 1;
+                let create_worker = create_worker
+                    .take()
+                    .expect("create_worker already consumed");
                 drop(state);
 
                 match create_worker() {
@@ -58,16 +89,21 @@ impl<T> RuntimePool<T> {
                             self.inner.state.lock().expect("RuntimePool mutex poisoned");
                         state.total_workers = state.total_workers.saturating_sub(1);
                         self.inner.condvar.notify_one();
-                        return Err(err);
+                        return Err(RuntimePoolCheckoutError::Worker(err));
                     }
                 }
             }
 
-            state = self
+            if is_cancelled() {
+                return Err(RuntimePoolCheckoutError::Cancelled);
+            }
+
+            let (next_state, _) = self
                 .inner
                 .condvar
-                .wait(state)
+                .wait_timeout(state, CANCEL_POLL_INTERVAL)
                 .expect("RuntimePool condvar wait failed");
+            state = next_state;
         }
     }
 
@@ -208,5 +244,28 @@ mod tests {
         let value = handle.join().unwrap();
         assert_eq!(value, 1);
         assert_eq!(create_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_checkout_cancellable_returns_cancelled_when_waiting() {
+        let pool = Arc::new(RuntimePool::new(1));
+        let _first_lease = pool.checkout(|| Ok::<usize, ()>(1)).unwrap();
+
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        let cancelled_for_thread = Arc::clone(&cancelled);
+        let pool_for_thread = Arc::clone(&pool);
+
+        let handle = thread::spawn(move || {
+            pool_for_thread.checkout_cancellable(
+                || Ok::<usize, ()>(2),
+                || cancelled_for_thread.load(Ordering::SeqCst) == 1,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(120));
+        cancelled.store(1, Ordering::SeqCst);
+
+        let result = handle.join().unwrap();
+        assert!(matches!(result, Err(RuntimePoolCheckoutError::Cancelled)));
     }
 }

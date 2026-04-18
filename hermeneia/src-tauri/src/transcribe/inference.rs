@@ -325,7 +325,7 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
     let (segments, text) = if let Some(cache) = runtime_cache {
         let key = build_whisper_runtime_key(&params);
 
-        cache.with_whisper_runtime(
+        cache.with_whisper_runtime_cancellable(
             key,
             || load_whisper_runtime(&params),
             |runtime| {
@@ -337,6 +337,7 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
                     cancel_flag.clone(),
                 )
             },
+            cancel_flag.as_deref(),
         )?
     } else {
         let mut runtime = load_whisper_runtime(&params)?;
