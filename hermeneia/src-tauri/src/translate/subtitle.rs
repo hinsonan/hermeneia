@@ -85,12 +85,52 @@ impl SubtitleFile {
         let segments = self
             .segments
             .iter()
-            .zip(translated_texts.into_iter())
-            .map(|(seg, text)| SubtitleSegment {
+            .enumerate()
+            .map(|(i, seg)| SubtitleSegment {
                 index: seg.index,
                 start: seg.start.clone(),
                 end: seg.end.clone(),
-                text,
+                text: translated_texts
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| seg.text.clone()),
+            })
+            .collect();
+
+        SubtitleFile { segments }
+    }
+
+    /// Create a new SubtitleFile with translated text while preserving
+    /// leading bracket labels (e.g., `[Speaker 1]`) verbatim.
+    pub fn with_translated_text_preserving_labels(&self, translated_texts: Vec<String>) -> Self {
+        let segments = self
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(i, seg)| {
+                let translated = translated_texts
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| seg.text.clone());
+                let (label_prefix, body) = split_leading_label_prefix(&seg.text);
+
+                let text = if let Some(prefix) = label_prefix {
+                    let translated_body = if body.trim().is_empty() {
+                        body.to_string()
+                    } else {
+                        translated
+                    };
+                    format!("{}{}", prefix, translated_body)
+                } else {
+                    translated
+                };
+
+                SubtitleSegment {
+                    index: seg.index,
+                    start: seg.start.clone(),
+                    end: seg.end.clone(),
+                    text,
+                }
             })
             .collect();
 
@@ -100,6 +140,18 @@ impl SubtitleFile {
     /// Get just the text content for translation (preserving order)
     pub fn get_texts(&self) -> Vec<String> {
         self.segments.iter().map(|s| s.text.clone()).collect()
+    }
+
+    /// Get text content prepared for translation while preserving leading
+    /// bracket labels by excluding them from translation input.
+    pub fn get_texts_for_translation(&self) -> Vec<String> {
+        self.segments
+            .iter()
+            .map(|s| {
+                let (_, body) = split_leading_label_prefix(&s.text);
+                body.to_string()
+            })
+            .collect()
     }
 
     /// Get the number of segments
@@ -149,6 +201,52 @@ fn is_valid_timestamp(ts: &str) -> bool {
         .iter()
         .all(|p| p.chars().all(|c| c.is_ascii_digit()))
         && parts[1].chars().all(|c| c.is_ascii_digit())
+}
+
+fn split_leading_label_prefix(text: &str) -> (Option<&str>, &str) {
+    if !text.starts_with('[') {
+        return (None, text);
+    }
+
+    let mut closing_bracket_idx = None;
+    for (idx, ch) in text.char_indices().skip(1) {
+        if ch == '\n' || ch == '\r' {
+            return (None, text);
+        }
+        if ch == ']' {
+            if idx == 1 {
+                return (None, text);
+            }
+            closing_bracket_idx = Some(idx);
+            break;
+        }
+    }
+
+    let Some(closing_bracket_idx) = closing_bracket_idx else {
+        return (None, text);
+    };
+
+    let mut prefix_end = closing_bracket_idx + 1;
+    while let Some(ch) = text[prefix_end..].chars().next() {
+        if ch == ' ' || ch == '\t' {
+            prefix_end += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if text[prefix_end..].starts_with('\n') {
+        prefix_end += '\n'.len_utf8();
+        while let Some(ch) = text[prefix_end..].chars().next() {
+            if ch == ' ' || ch == '\t' {
+                prefix_end += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    (Some(&text[..prefix_end]), &text[prefix_end..])
 }
 
 /// Errors that can occur during SRT parsing
@@ -242,5 +340,71 @@ mod tests {
 
         assert_eq!(srt_file.segments[0].text, "Line one\nLine two");
         assert_eq!(srt_file.segments[1].text, "Single line");
+    }
+
+    #[test]
+    fn test_get_texts_for_translation_strips_leading_bracket_labels() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Alex Jones] Hello world\n\n2\n00:00:03,500 --> 00:00:05,500\nNo label here\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec!["Hello world", "No label here"]);
+    }
+
+    #[test]
+    fn test_with_translated_text_preserving_labels_keeps_prefix() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Joe Rogan] Hello\n\n2\n00:00:03,500 --> 00:00:05,500\n[Alex Jones] World\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let translated = vec!["Hola".to_string(), "Mundo".to_string()];
+        let rebuilt = srt_file.with_translated_text_preserving_labels(translated);
+
+        assert_eq!(rebuilt.segments[0].text, "[Joe Rogan] Hola");
+        assert_eq!(rebuilt.segments[1].text, "[Alex Jones] Mundo");
+    }
+
+    #[test]
+    fn test_with_translated_text_preserving_labels_mixed_segments() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1] First line\n\n2\n00:00:03,500 --> 00:00:05,500\nSecond line\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let translated = vec!["Primera linea".to_string(), "Segunda linea".to_string()];
+        let rebuilt = srt_file.with_translated_text_preserving_labels(translated);
+
+        assert_eq!(rebuilt.segments[0].text, "[Speaker 1] Primera linea");
+        assert_eq!(rebuilt.segments[1].text, "Segunda linea");
+    }
+
+    #[test]
+    fn test_with_translated_text_preserving_labels_supports_label_line_then_text() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1]\nHello world\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec!["Hello world"]);
+
+        let rebuilt =
+            srt_file.with_translated_text_preserving_labels(vec!["Hola mundo".to_string()]);
+        assert_eq!(rebuilt.segments[0].text, "[Speaker 1]\nHola mundo");
+    }
+
+    #[test]
+    fn test_with_translated_text_preserving_labels_label_only_stays_label_only() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1]\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec![""]);
+
+        let rebuilt =
+            srt_file.with_translated_text_preserving_labels(vec!["Hallucinated text".to_string()]);
+        assert_eq!(rebuilt.segments[0].text, "[Speaker 1]");
+    }
+
+    #[test]
+    fn test_split_leading_label_prefix_ignores_malformed_prefix() {
+        let (prefix, body) = split_leading_label_prefix("[Speaker 1 Hello");
+        assert_eq!(prefix, None);
+        assert_eq!(body, "[Speaker 1 Hello");
     }
 }

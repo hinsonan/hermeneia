@@ -1081,7 +1081,7 @@ async fn translate_text_file(
                 .map_err(|e| format!("Failed to parse SRT file: {}", e))?;
 
             let total_segments = srt_file.len();
-            let texts = srt_file.get_texts();
+            let texts = srt_file.get_texts_for_translation();
 
             // Create progress callback that emits Tauri events
             let app_handle_clone = app_handle.clone();
@@ -1110,7 +1110,7 @@ async fn translate_text_file(
             .map_err(|e| format!("Translation failed: {}", e))?;
 
             // Reassemble SRT with translated text
-            let translated_srt = srt_file.with_translated_text(translated_texts);
+            let translated_srt = srt_file.with_translated_text_preserving_labels(translated_texts);
             (
                 translated_srt.render(),
                 model_used.display_name().to_string(),
