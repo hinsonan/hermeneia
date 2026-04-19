@@ -39,6 +39,7 @@ import {
   retryJob,
   runningCount,
   selectedJob,
+  startQueuedJobs,
   setDefault,
   setInspectorTab,
   setMaxConcurrency,
@@ -432,7 +433,6 @@ const Transcription: Component = () => {
 
           <div class="tx-title">
             <h1>Transcription</h1>
-            <p>Queue batches, switch freely — jobs keep running in the background.</p>
           </div>
 
           <div class="tx-header-actions">
@@ -539,17 +539,25 @@ const Transcription: Component = () => {
                       <h2>Queue</h2>
                       <span class="tx-queue-head-total">{totalJobs()} {totalJobs() === 1 ? "job" : "jobs"}</span>
                     </div>
-                    <button
-                      class="tx-queue-toggle"
-                      aria-expanded={queueExpanded()}
-                      aria-controls="tx-queue-list"
-                      onClick={() => setQueueExpanded(!queueExpanded())}
-                    >
-                      <span>{queueExpanded() ? "Hide queue" : "Show queue"}</span>
-                      <svg viewBox="0 0 24 24" width="14" height="14" classList={{ expanded: queueExpanded() }}>
-                        <path d="M6 9l6 6 6-6" />
-                      </svg>
-                    </button>
+                    <div class="tx-queue-head-actions">
+                      <button class="tx-queue-toggle" onClick={startQueuedJobs} disabled={queuedCount() === 0}>
+                        <svg viewBox="0 0 24 24" width="14" height="14">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                        <span>Start ({queuedCount()})</span>
+                      </button>
+                      <button
+                        class="tx-queue-toggle"
+                        aria-expanded={queueExpanded()}
+                        aria-controls="tx-queue-list"
+                        onClick={() => setQueueExpanded(!queueExpanded())}
+                      >
+                        <span>{queueExpanded() ? "Hide queue" : "Show queue"}</span>
+                        <svg viewBox="0 0 24 24" width="14" height="14" classList={{ expanded: queueExpanded() }}>
+                          <path d="M6 9l6 6 6-6" />
+                        </svg>
+                      </button>
+                    </div>
                   </header>
 
                   <Show when={queueExpanded()}>
@@ -908,7 +916,7 @@ const SettingsPanel: Component<SettingsPanelProps> = (props) => {
               position="right"
             />
           </label>
-          <div class="tx-toggle">
+          <div class="tx-toggle tx-toggle-two">
             <button class={`tx-toggle-btn ${!props.isAnnotateMode ? "active" : ""}`} onClick={() => setDefault("mode", "transcribe")}>Transcribe</button>
             <button class={`tx-toggle-btn ${props.isAnnotateMode ? "active" : ""}`} onClick={() => setDefault("mode", "annotate")}>Annotate</button>
           </div>

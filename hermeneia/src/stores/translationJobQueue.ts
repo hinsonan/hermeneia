@@ -21,6 +21,7 @@ interface TranslationQueueState {
   selectedJobId: string | null;
   maxConcurrency: number;
   maxConcurrencyLimit: number;
+  startArmed: boolean;
   defaults: TranslationJobSettings;
   queueError: string | null;
   listenersInitialized: boolean;
@@ -329,6 +330,7 @@ const [state, setState] = createStore<TranslationQueueState>({
   selectedJobId: persisted.selectedJobId ?? null,
   maxConcurrency: Math.max(1, Math.min(4, persisted.maxConcurrency ?? 2)),
   maxConcurrencyLimit: 4,
+  startArmed: false,
   defaults: persisted.defaults ?? { ...DEFAULT_SETTINGS },
   queueError: null,
   listenersInitialized: false,
@@ -619,6 +621,7 @@ async function ensureModelDownloaded(
 function runScheduler(): void {
   if (schedulerPaused) return;
   if (schedulerRunning) return;
+  if (!state.startArmed) return;
   schedulerRunning = true;
   try {
     while (true) {
@@ -637,6 +640,19 @@ function runScheduler(): void {
       const next = state.jobs.find((job) => job.status === "queued");
       if (!next) break;
       void runJob(next.id);
+    }
+
+    const hasQueued = state.jobs.some((job) => job.status === "queued");
+    const hasActive = state.jobs.some(
+      (job) =>
+        job.status === "waiting_resources"
+        || job.status === "downloading_model"
+        || job.status === "loading_model"
+        || job.status === "running"
+        || job.status === "cancelling"
+    );
+    if (!hasQueued && !hasActive && state.startArmed) {
+      setState("startArmed", false);
     }
   } finally {
     schedulerRunning = false;
@@ -941,6 +957,7 @@ export function enqueueTranslationFiles(
   setState(
     produce((draft) => {
       draft.jobs.push(...jobs);
+      draft.startArmed = false;
       if (!draft.selectedJobId) {
         draft.selectedJobId = jobs[0].id;
       }
@@ -1071,10 +1088,17 @@ export async function clearAllTranslationJobs(): Promise<void> {
       produce((draft) => {
         draft.jobs = [];
         draft.selectedJobId = null;
+        draft.startArmed = false;
       })
     );
     schedulePersist();
   });
+}
+
+export function startQueuedTranslationJobs(): void {
+  if (!state.jobs.some((job) => job.status === "queued")) return;
+  setState("startArmed", true);
+  runScheduler();
 }
 
 export function clearCompletedTranslationJobs(): void {
@@ -1137,6 +1161,7 @@ export function retryFailedTranslationJob(jobId: string): void {
       job.result = null;
       job.lastFailureType = null;
       job.retryCount = normalizeRetryCount(job.retryCount) + 1;
+      draft.startArmed = false;
 
       if (draft.selectedJobId === oldId) {
         draft.selectedJobId = newId;
@@ -1175,6 +1200,10 @@ export function retryAllFailedTranslationJobs(): void {
 
         selectedMap.set(oldId, newId);
       });
+
+      if (selectedMap.size > 0) {
+        draft.startArmed = false;
+      }
 
       if (selected && selectedMap.has(selected)) {
         draft.selectedJobId = selectedMap.get(selected) || null;
@@ -1223,5 +1252,5 @@ export const translationCancelledCount = createMemo(() =>
 );
 
 queueMicrotask(() => {
-  void initTranslationJobQueue().finally(() => runScheduler());
+  void initTranslationJobQueue();
 });

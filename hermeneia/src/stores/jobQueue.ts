@@ -54,6 +54,7 @@ interface QueueState {
   selectedJobId: string | null;
   maxConcurrency: number;
   maxConcurrencyLimit: number;
+  startArmed: boolean;
   defaults: JobSettings;
   systemCapabilities: SystemCapabilities | null;
   modelValidation: ModelValidation | null;
@@ -137,6 +138,7 @@ const [state, setState] = createStore<QueueState>({
   selectedJobId: persisted.selectedJobId ?? null,
   maxConcurrency: Math.max(1, Math.min(4, persisted.maxConcurrency ?? 2)),
   maxConcurrencyLimit: 4,
+  startArmed: false,
   defaults: persisted.defaults ?? { ...DEFAULT_SETTINGS },
   systemCapabilities: null,
   modelValidation: null,
@@ -377,6 +379,7 @@ export function enqueueFiles(paths: string[]): void {
   setState(
     produce((draft) => {
       draft.jobs.push(...newJobs);
+      draft.startArmed = false;
       if (!draft.selectedJobId) {
         draft.selectedJobId = newJobs[0].id;
       }
@@ -479,10 +482,17 @@ export async function cancelAllAndClear(): Promise<void> {
       produce((draft) => {
         draft.jobs = [];
         draft.selectedJobId = null;
+        draft.startArmed = false;
       })
     );
     schedulePersist();
   });
+}
+
+export function startQueuedJobs(): void {
+  if (!state.jobs.some((job) => job.status === "queued")) return;
+  setState("startArmed", true);
+  runScheduler();
 }
 
 export function retryJob(jobId: string): void {
@@ -504,6 +514,7 @@ export function retryJob(jobId: string): void {
       job.progress = null;
       job.result = null;
       job.annotatedResult = null;
+      draft.startArmed = false;
 
       if (draft.selectedJobId === jobId) {
         draft.selectedJobId = newId;
@@ -539,6 +550,10 @@ export function retryFailedJobs(): void {
           idMap.set(oldId, newId);
         }
       });
+
+      if (idMap.size > 0) {
+        draft.startArmed = false;
+      }
 
       if (draft.selectedJobId && idMap.has(draft.selectedJobId)) {
         draft.selectedJobId = idMap.get(draft.selectedJobId) || null;
@@ -582,6 +597,7 @@ export function clearAll(): void {
     produce((draft) => {
       draft.jobs = [];
       draft.selectedJobId = null;
+      draft.startArmed = false;
     })
   );
   schedulePersist();
@@ -599,6 +615,7 @@ let schedulerRunning = false;
 function runScheduler(): void {
   if (schedulerPaused) return;
   if (schedulerRunning) return;
+  if (!state.startArmed) return;
   schedulerRunning = true;
   try {
     while (true) {
@@ -608,6 +625,12 @@ function runScheduler(): void {
       const next = state.jobs.find((job) => job.status === "queued");
       if (!next) break;
       void runJob(next.id);
+    }
+
+    const hasQueued = state.jobs.some((job) => job.status === "queued");
+    const hasActive = state.jobs.some((job) => job.status === "running" || job.status === "cancelling");
+    if (!hasQueued && !hasActive && state.startArmed) {
+      setState("startArmed", false);
     }
   } finally {
     schedulerRunning = false;
@@ -799,5 +822,7 @@ export const sortedJobs = createMemo(() =>
 );
 
 // Kick the scheduler once on module load in case persisted state contains queued jobs.
-// Safe: runJob guards against non-queued status and concurrency limit.
-queueMicrotask(() => runScheduler());
+// Persisted queued jobs stay idle until the user explicitly starts them.
+queueMicrotask(() => {
+  void initJobQueue();
+});

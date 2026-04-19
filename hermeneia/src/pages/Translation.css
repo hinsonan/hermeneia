@@ -95,12 +95,8 @@
   line-height: 1.4;
 }
 
-.tx-toggle {
-  flex-wrap: wrap;
-}
-
-.tx-toggle .tx-toggle-btn {
-  flex: 1 1 180px;
+.tx-toggle.tx-toggle-three {
+  gap: 0.2rem;
 }
 
 .tx-status-icon.waiting_resources,

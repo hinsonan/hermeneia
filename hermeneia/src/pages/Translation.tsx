@@ -27,6 +27,7 @@ import {
   retryAllFailedTranslationJobs,
   retryFailedTranslationJob,
   selectedTranslationJob,
+  startQueuedTranslationJobs,
   setSelectedTranslationJob,
   setTranslationDefault,
   setTranslationMaxConcurrency,
@@ -457,7 +458,6 @@ const Translation: Component = () => {
 
               <div class="tx-title">
                 <h1>Translation</h1>
-                <p>Queue text and subtitle files, inspect each result, and export in batches.</p>
               </div>
 
               <div class="tx-header-actions">
@@ -561,17 +561,25 @@ const Translation: Component = () => {
                           <h2>Queue</h2>
                           <span class="tx-queue-head-total">{totalJobs()} {totalJobs() === 1 ? "job" : "jobs"}</span>
                         </div>
-                        <button
-                          class="tx-queue-toggle"
-                          aria-expanded={queueExpanded()}
-                          aria-controls="translation-queue-list"
-                          onClick={() => setQueueExpanded(!queueExpanded())}
-                        >
-                          <span>{queueExpanded() ? "Hide queue" : "Show queue"}</span>
-                          <svg viewBox="0 0 24 24" width="14" height="14" classList={{ expanded: queueExpanded() }}>
-                            <path d="M6 9l6 6 6-6" />
-                          </svg>
-                        </button>
+                        <div class="tx-queue-head-actions">
+                          <button class="tx-queue-toggle" onClick={startQueuedTranslationJobs} disabled={translationQueuedCount() === 0}>
+                            <svg viewBox="0 0 24 24" width="14" height="14">
+                              <path d="M8 5v14l11-7z" />
+                            </svg>
+                            <span>Start ({translationQueuedCount()})</span>
+                          </button>
+                          <button
+                            class="tx-queue-toggle"
+                            aria-expanded={queueExpanded()}
+                            aria-controls="translation-queue-list"
+                            onClick={() => setQueueExpanded(!queueExpanded())}
+                          >
+                            <span>{queueExpanded() ? "Hide queue" : "Show queue"}</span>
+                            <svg viewBox="0 0 24 24" width="14" height="14" classList={{ expanded: queueExpanded() }}>
+                              <path d="M6 9l6 6 6-6" />
+                            </svg>
+                          </button>
+                        </div>
                       </header>
 
                       <Show when={queueExpanded()}>
@@ -887,7 +895,7 @@ const TranslationSettingsPanel: Component<TranslationSettingsPanelProps> = (prop
             position="right"
           />
         </label>
-        <div class="tx-toggle">
+        <div class="tx-toggle tx-toggle-three">
           <button
             class={`tx-toggle-btn ${props.defaults.strategy === "auto" ? "active" : ""}`}
             onClick={() => setTranslationDefault("strategy", "auto")}

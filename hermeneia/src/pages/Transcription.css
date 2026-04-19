@@ -345,11 +345,30 @@
 /* Segmented toggle */
 .tx-toggle {
   display: inline-flex;
+  flex-wrap: nowrap;
   border: 1px solid color-mix(in srgb, var(--border-ornament) 50%, transparent);
   border-radius: 0.5rem;
   padding: 3px;
   background: color-mix(in srgb, var(--parchment) 30%, transparent);
   width: fit-content;
+}
+
+.tx-toggle-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+.tx-toggle-three {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+}
+
+.tx-toggle-two .tx-toggle-btn,
+.tx-toggle-three .tx-toggle-btn {
+  width: 100%;
+  text-align: center;
 }
 
 .tx-toggle-btn {
@@ -609,6 +628,12 @@
 .tx-queue-head-total {
   font-size: 0.8rem;
   color: var(--ink-medium);
+}
+
+.tx-queue-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
 }
 
 .tx-queue-toggle {
@@ -1409,5 +1434,10 @@
   .tx-queue-row-progress {
     margin-left: 0;
     max-width: 100%;
+  }
+
+  .tx-toggle-two,
+  .tx-toggle-three {
+    grid-template-columns: 1fr;
   }
 }
