@@ -1,4 +1,6 @@
-use crate::audio::{decode_audio_file_with_progress, prepare_speech_audio, DecodeProgressCallback};
+use crate::audio::{
+    decode_audio_file_with_progress, prepare_speech_audio_owned, DecodeProgressCallback,
+};
 use crate::error::{AudioError, Result};
 use crate::runtime_cache::{global_runtime_cache, RuntimeCacheManager};
 use crate::speaker::{
@@ -393,8 +395,7 @@ pub fn annotate_audio_with_reporter_cached(
     check_cancelled(&cancel_flag)?;
 
     reporter.report(AnnotationProgress::preparing_audio(&job_id));
-    let speech_audio = prepare_speech_audio(&audio)?;
-    drop(audio);
+    let speech_audio = prepare_speech_audio_owned(audio)?;
     check_cancelled(&cancel_flag)?;
 
     reporter.report(AnnotationProgress::loading_speaker_model(&job_id));

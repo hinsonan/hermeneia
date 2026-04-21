@@ -14,7 +14,10 @@ pub use decoder::{
 };
 pub use encoder::encode_wav;
 pub use playback::AudioPlayer;
-pub use preprocessing::{convert_to_mono, prepare_speech_audio, resample_to_16khz};
+pub use preprocessing::{
+    convert_to_mono, convert_to_mono_owned, prepare_speech_audio, prepare_speech_audio_owned,
+    resample_to_16khz, resample_to_16khz_owned,
+};
 pub use trim::trim_audio;
 pub use types::{AudioData, AudioInfo, SpeechAudio, TrimParams, WaveformPeaks};
 pub use waveform::extract_waveform_peaks;

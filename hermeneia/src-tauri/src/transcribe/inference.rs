@@ -1,5 +1,5 @@
 use crate::audio::{
-    decode_audio_file, decode_audio_file_with_progress, prepare_speech_audio,
+    decode_audio_file, decode_audio_file_with_progress, prepare_speech_audio_owned,
     DecodeProgressCallback, SpeechAudio,
 };
 use crate::error::{AudioError, Result};
@@ -114,25 +114,20 @@ fn run_with_whisper_runtime<P: ProgressReporter>(
         reporter_ref.report(current, total);
     });
 
-    let mut params_with_token = params.clone();
-    params_with_token.language = None;
     let mut decoder = Decoder::new_with_language_token(
         &mut runtime.model,
         &runtime.tokenizer,
         &runtime.config,
         &runtime.device,
-        &params_with_token,
+        params.task,
+        params.timestamps,
         language_token,
     )?;
 
     let raw_segments = decoder.run(&mel, Some(callback), cancel_flag)?;
     let segments = decoder.extract_segments(raw_segments);
 
-    let text = segments
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text = join_segments_with_space(&segments);
 
     crate::gpu_cleanup::synchronize_device(&runtime.device);
 
@@ -151,7 +146,7 @@ pub fn transcribe_audio_with_progress(
     progress_callback: Option<ProgressCallback>,
 ) -> Result<TranscriptResult> {
     let audio_data = decode_audio_file(file_path)?;
-    let speech_audio = prepare_speech_audio(&audio_data)?;
+    let speech_audio = prepare_speech_audio_owned(audio_data)?;
     transcribe_prepared_audio_with_progress(&speech_audio, params, progress_callback)
 }
 
@@ -209,14 +204,13 @@ pub fn transcribe_prepared_audio_with_progress(
         };
 
         // Run inference with full decoder
-        let mut params_with_token = params.clone();
-        params_with_token.language = None; // Clear language string, we'll use token directly
         let mut decoder = Decoder::new_with_language_token(
             &mut model,
             &tokenizer,
             &config,
             &device,
-            &params_with_token,
+            params.task,
+            params.timestamps,
             language_token,
         )?;
         let raw_segments = decoder.run(&mel, progress_callback, None)?;
@@ -240,11 +234,7 @@ pub fn transcribe_prepared_audio_with_progress(
             tracing::info!("Extracted segment {}: text='{}'", seg.id, seg.text);
         }
 
-        let text = segments
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let text = join_segments_with_space(&segments);
 
         // Sync GPU before model/mel/decoder drop at end of scope
         crate::gpu_cleanup::synchronize_device(&device);
@@ -261,6 +251,17 @@ pub fn transcribe_prepared_audio_with_progress(
         model: params.model,
         inference_time: start_time.elapsed().as_secs_f64(),
     })
+}
+
+fn join_segments_with_space(segments: &[crate::transcribe::TranscriptSegment]) -> String {
+    let mut text = String::new();
+    for (idx, segment) in segments.iter().enumerate() {
+        if idx > 0 {
+            text.push(' ');
+        }
+        text.push_str(segment.text.as_str());
+    }
+    text
 }
 
 /// Main transcription function with progress reporter trait
@@ -287,8 +288,7 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     let audio_data = decode_audio_file_with_progress(file_path, Some(decode_progress))?;
     check_cancelled(&cancel_flag)?;
 
-    let speech_audio = prepare_speech_audio(&audio_data)?;
-    drop(audio_data);
+    let speech_audio = prepare_speech_audio_owned(audio_data)?;
     check_cancelled(&cancel_flag)?;
 
     transcribe_prepared_audio_with_reporter(&speech_audio, params, reporter, cancel_flag)

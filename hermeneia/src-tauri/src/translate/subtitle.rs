@@ -67,32 +67,46 @@ impl SubtitleFile {
 
     /// Render the subtitle file back to SRT format
     pub fn render(&self) -> String {
-        self.segments
-            .iter()
-            .map(|seg| {
-                format!(
-                    "{}\n{} --> {}\n{}\n",
-                    seg.index, seg.start, seg.end, seg.text
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut out = String::new();
+        let mut first = true;
+
+        for seg in &self.segments {
+            if !first {
+                out.push('\n');
+            }
+            first = false;
+
+            out.push_str(&seg.index.to_string());
+            out.push('\n');
+            out.push_str(&seg.start);
+            out.push_str(" --> ");
+            out.push_str(&seg.end);
+            out.push('\n');
+            out.push_str(&seg.text);
+            out.push('\n');
+        }
+
+        out
     }
 
     /// Create a new SubtitleFile with translated text segments
     /// The translated_texts should be in the same order as self.segments
-    pub fn with_translated_text(&self, translated_texts: Vec<String>) -> Self {
+    pub fn with_translated_text<I, S>(&self, translated_texts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut translated_iter = translated_texts.into_iter();
         let segments = self
             .segments
             .iter()
-            .enumerate()
-            .map(|(i, seg)| SubtitleSegment {
+            .map(|seg| SubtitleSegment {
                 index: seg.index,
                 start: seg.start.clone(),
                 end: seg.end.clone(),
-                text: translated_texts
-                    .get(i)
-                    .cloned()
+                text: translated_iter
+                    .next()
+                    .map(|t| t.as_ref().to_string())
                     .unwrap_or_else(|| seg.text.clone()),
             })
             .collect();
@@ -102,15 +116,19 @@ impl SubtitleFile {
 
     /// Create a new SubtitleFile with translated text while preserving
     /// leading bracket labels (e.g., `[Speaker 1]`) verbatim.
-    pub fn with_translated_text_preserving_labels(&self, translated_texts: Vec<String>) -> Self {
+    pub fn with_translated_text_preserving_labels<I, S>(&self, translated_texts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut translated_iter = translated_texts.into_iter();
         let segments = self
             .segments
             .iter()
-            .enumerate()
-            .map(|(i, seg)| {
-                let translated = translated_texts
-                    .get(i)
-                    .cloned()
+            .map(|seg| {
+                let translated = translated_iter
+                    .next()
+                    .map(|t| t.as_ref().to_string())
                     .unwrap_or_else(|| seg.text.clone());
                 let (label_prefix, body) = split_leading_label_prefix(&seg.text);
 
@@ -145,11 +163,20 @@ impl SubtitleFile {
     /// Get text content prepared for translation while preserving leading
     /// bracket labels by excluding them from translation input.
     pub fn get_texts_for_translation(&self) -> Vec<String> {
+        self.get_texts_for_translation_ref()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Get borrowed text slices prepared for translation while preserving
+    /// leading bracket labels by excluding them from translation input.
+    pub fn get_texts_for_translation_ref(&self) -> Vec<&str> {
         self.segments
             .iter()
             .map(|s| {
                 let (_, body) = split_leading_label_prefix(&s.text);
-                body.to_string()
+                body
             })
             .collect()
     }

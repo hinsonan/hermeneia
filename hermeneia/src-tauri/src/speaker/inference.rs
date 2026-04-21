@@ -1,4 +1,4 @@
-use crate::audio::{decode_audio_file, prepare_speech_audio, SpeechAudio};
+use crate::audio::{decode_audio_file, prepare_speech_audio_owned, SpeechAudio};
 use crate::error::{AudioError, Result};
 use crate::runtime_cache::{
     global_runtime_cache, RuntimeCacheManager, SpeakerRuntime, SpeakerRuntimeKey,
@@ -96,11 +96,10 @@ pub fn diarize_audio_with_progress(
     let audio = decode_audio_file(audio_path)?;
     check_cancelled(&cancel)?;
 
-    let speech_audio = prepare_speech_audio(&audio)?;
-    drop(audio);
+    let speech_audio = prepare_speech_audio_owned(audio)?;
     check_cancelled(&cancel)?;
 
-    diarize_prepared_audio_with_progress(&speech_audio, params, progress, cancel)
+    diarize_prepared_audio_owned_with_progress(speech_audio, params, progress, cancel)
 }
 
 /// Diarize already-preprocessed mono 16kHz speech audio.
@@ -198,7 +197,7 @@ fn load_speaker_runtime(
 fn maybe_warmup_speaker_runtime(
     runtime: &mut SpeakerRuntime,
     device: &crate::speaker::SpeakerDevice,
-    speech_audio: &SpeechAudio,
+    samples_16k_mono: &[f32],
     cancel: &Option<Arc<AtomicBool>>,
 ) {
     if !should_attempt_warmup(runtime.warmed_up, device, cancel) {
@@ -208,12 +207,12 @@ fn maybe_warmup_speaker_runtime(
         return;
     }
 
-    let samples_len = warmup_sample_count(speech_audio.samples_16k_mono.len());
+    let samples_len = warmup_sample_count(samples_16k_mono.len());
     if samples_len < SPEECH_SAMPLE_RATE / 2 {
         runtime.warmed_up = true;
         return;
     }
-    let samples = speech_audio.samples_16k_mono[..samples_len].to_vec();
+    let samples = samples_16k_mono[..samples_len].to_vec();
 
     tracing::info!(
         provider = %runtime.provider,
@@ -244,7 +243,7 @@ fn maybe_warmup_speaker_runtime(
 
 fn compute_speaker_segments(
     sd: &mut Diarize,
-    speech_audio: &SpeechAudio,
+    samples_16k: Vec<f32>,
     chunk_progress: Option<DiarizeProgressCallback>,
     stage_progress: Option<DiarizeStageProgressCallback>,
     cancel: Option<Arc<AtomicBool>>,
@@ -304,9 +303,6 @@ fn compute_speaker_segments(
         None
     };
 
-    // sherpa-rs consumes Vec<f32>, so clone when using shared prepared audio.
-    let samples_16k = speech_audio.samples_16k_mono.clone();
-
     let segments = sd.compute(samples_16k, sherpa_callback).map_err(|e| {
         if cancel
             .as_ref()
@@ -329,6 +325,73 @@ fn compute_speaker_segments(
         .collect();
 
     Ok(result_segments)
+}
+
+fn diarize_prepared_audio_owned_with_progress(
+    speech_audio: SpeechAudio,
+    params: DiarizeParams,
+    progress: Option<DiarizeProgressCallback>,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<DiarizationResult> {
+    let start = Instant::now();
+    validate_diarize_params(&params)?;
+    check_cancelled(&cancel)?;
+
+    let device_name = params.device.provider_string().to_string();
+    let model_name = params.model.display_name().to_string();
+    let audio_duration = speech_audio.duration_seconds as f32;
+    let mut owned_samples = Some(speech_audio.samples_16k_mono);
+
+    tracing::info!(
+        "Running diarization with {} model on {}...",
+        model_name,
+        device_name
+    );
+
+    let cache = global_runtime_cache();
+    let key = SpeakerRuntimeKey {
+        model: params.model.clone(),
+        device: params.device.clone(),
+    };
+
+    let result_segments = cache.with_speaker_runtime_cancellable(
+        key,
+        || load_speaker_runtime(&params, &cancel, &None),
+        |runtime| {
+            let warmup_samples = owned_samples.as_deref().ok_or_else(|| {
+                AudioError::DiarizationFailed("Owned speaker samples already consumed".to_string())
+            })?;
+
+            maybe_warmup_speaker_runtime(runtime, &params.device, warmup_samples, &cancel);
+
+            let samples_for_compute = owned_samples.take().ok_or_else(|| {
+                AudioError::DiarizationFailed("Owned speaker samples already consumed".to_string())
+            })?;
+
+            compute_speaker_segments(
+                &mut runtime.diarize,
+                samples_for_compute,
+                progress,
+                None,
+                cancel.clone(),
+            )
+        },
+        cancel.as_deref(),
+    )?;
+
+    check_cancelled(&cancel)?;
+
+    let num_speakers = count_unique_speakers(&result_segments);
+    let inference_time = start.elapsed().as_secs_f64();
+
+    Ok(DiarizationResult {
+        segments: result_segments,
+        num_speakers,
+        audio_duration,
+        inference_time,
+        model: model_name,
+        device: device_name,
+    })
 }
 
 fn count_unique_speakers(segments: &[SpeakerSegment]) -> usize {
@@ -402,10 +465,15 @@ pub fn diarize_prepared_audio_with_callbacks_cached(
             key,
             || load_speaker_runtime(&params, &cancel, &callbacks.stage_progress),
             |runtime| {
-                maybe_warmup_speaker_runtime(runtime, &params.device, speech_audio, &cancel);
+                maybe_warmup_speaker_runtime(
+                    runtime,
+                    &params.device,
+                    &speech_audio.samples_16k_mono,
+                    &cancel,
+                );
                 compute_speaker_segments(
                     &mut runtime.diarize,
-                    speech_audio,
+                    speech_audio.samples_16k_mono.clone(),
                     callbacks.chunk_progress,
                     callbacks.stage_progress.clone(),
                     cancel.clone(),
@@ -415,10 +483,15 @@ pub fn diarize_prepared_audio_with_callbacks_cached(
         )?
     } else {
         let mut runtime = load_speaker_runtime(&params, &cancel, &callbacks.stage_progress)?;
-        maybe_warmup_speaker_runtime(&mut runtime, &params.device, speech_audio, &cancel);
+        maybe_warmup_speaker_runtime(
+            &mut runtime,
+            &params.device,
+            &speech_audio.samples_16k_mono,
+            &cancel,
+        );
         compute_speaker_segments(
             &mut runtime.diarize,
-            speech_audio,
+            speech_audio.samples_16k_mono.clone(),
             callbacks.chunk_progress,
             callbacks.stage_progress.clone(),
             cancel.clone(),

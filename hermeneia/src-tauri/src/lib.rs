@@ -156,7 +156,9 @@ fn build_translate_params_for_strategy(
     })
 }
 
-fn translation_inference_requirements(strategy: TranslationStrategy) -> InferenceMemoryRequirements {
+fn translation_inference_requirements(
+    strategy: TranslationStrategy,
+) -> InferenceMemoryRequirements {
     match strategy {
         TranslationStrategy::Universal => InferenceMemoryRequirements {
             // MADLAD 3B is large and can exceed 12GB VRAM once loaded.
@@ -280,7 +282,8 @@ fn calculate_max_inference_concurrency_for_selection(
     let mut force_cpu = whisper_force_cpu;
 
     if let Some(whisper_model) = selected_whisper_model {
-        requirements = max_requirements(requirements, whisper_inference_requirements(whisper_model));
+        requirements =
+            max_requirements(requirements, whisper_inference_requirements(whisper_model));
     }
 
     if let Some(strategy) = translation_strategy {
@@ -495,8 +498,7 @@ async fn transcribe_audio_file(
 
         // Stage 2: prepare mono 16kHz speech audio
         reporter.emit_preparing_audio();
-        let speech_audio = prepare_speech_audio(&audio_data).map_err(|e| e.to_string())?;
-        drop(audio_data);
+        let speech_audio = prepare_speech_audio_owned(audio_data).map_err(|e| e.to_string())?;
 
         if cancel_flag.load(Ordering::SeqCst) {
             return Err(AudioError::Cancelled.to_string());
@@ -822,23 +824,20 @@ async fn write_zip_archive(
                 return Err(format!("Invalid archive entry path: {}", entry.path));
             }
 
-            zip.start_file(&normalized, options)
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&temp_path);
-                    format!("Failed to add '{}' to zip: {}", normalized, e)
-                })?;
-            zip.write_all(entry.content.as_bytes())
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&temp_path);
-                    format!("Failed to write '{}' in zip: {}", normalized, e)
-                })?;
+            zip.start_file(&normalized, options).map_err(|e| {
+                let _ = std::fs::remove_file(&temp_path);
+                format!("Failed to add '{}' to zip: {}", normalized, e)
+            })?;
+            zip.write_all(entry.content.as_bytes()).map_err(|e| {
+                let _ = std::fs::remove_file(&temp_path);
+                format!("Failed to write '{}' in zip: {}", normalized, e)
+            })?;
         }
 
-        zip.finish()
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&temp_path);
-                format!("Failed to finalize zip archive: {}", e)
-            })?;
+        zip.finish().map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            format!("Failed to finalize zip archive: {}", e)
+        })?;
 
         if output_path.exists() {
             std::fs::remove_file(&output_path)
@@ -1068,12 +1067,9 @@ async fn translate_text_file(
         );
 
         // Set up translation parameters
-        let params = build_translate_params_for_strategy(
-            source_lang.clone(),
-            target_lang.clone(),
-            strategy,
-        )
-        .map_err(|e| e.to_string())?;
+        let params =
+            build_translate_params_for_strategy(source_lang.clone(), target_lang.clone(), strategy)
+                .map_err(|e| e.to_string())?;
 
         let (translated_text, model_used, segments_count) = if is_srt {
             // Parse SRT file
@@ -1081,7 +1077,7 @@ async fn translate_text_file(
                 .map_err(|e| format!("Failed to parse SRT file: {}", e))?;
 
             let total_segments = srt_file.len();
-            let texts = srt_file.get_texts_for_translation();
+            let texts = srt_file.get_texts_for_translation_ref();
 
             // Create progress callback that emits Tauri events
             let app_handle_clone = app_handle.clone();
@@ -1353,9 +1349,7 @@ async fn recommend_inference_concurrency(
 ) -> std::result::Result<InferenceRuntimeLimits, String> {
     let caps = system_info::get_system_capabilities()?;
 
-    let selected_whisper_model = whisper_model
-        .as_deref()
-        .and_then(parse_whisper_model);
+    let selected_whisper_model = whisper_model.as_deref().and_then(parse_whisper_model);
 
     let strategy = translation_strategy
         .map(|value| parse_translation_strategy(Some(value), None))

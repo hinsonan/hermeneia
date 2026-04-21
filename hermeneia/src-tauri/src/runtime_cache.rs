@@ -256,7 +256,11 @@ impl RuntimeCacheManager {
                     provider = %key.device.provider_string(),
                     "Speaker runtime cache hit"
                 );
-                (Arc::clone(&entry.pool), Arc::clone(&entry.init_state), false)
+                (
+                    Arc::clone(&entry.pool),
+                    Arc::clone(&entry.init_state),
+                    false,
+                )
             } else {
                 self.ensure_speaker_capacity(&key)?;
 
@@ -378,14 +382,16 @@ impl RuntimeCacheManager {
                 return Err(AudioError::Cancelled);
             }
 
-            let (next_state, _) = cvar.wait_timeout(state, CACHE_WAIT_POLL_INTERVAL).map_err(|e| {
-                AudioError::DiarizationFailed(format!(
-                    "Speaker init wait failed for {}:{}: {}",
-                    key.model.display_name(),
-                    key.device.provider_string(),
-                    e
-                ))
-            })?;
+            let (next_state, _) =
+                cvar.wait_timeout(state, CACHE_WAIT_POLL_INTERVAL)
+                    .map_err(|e| {
+                        AudioError::DiarizationFailed(format!(
+                            "Speaker init wait failed for {}:{}: {}",
+                            key.model.display_name(),
+                            key.device.provider_string(),
+                            e
+                        ))
+                    })?;
             state = next_state;
         }
 
