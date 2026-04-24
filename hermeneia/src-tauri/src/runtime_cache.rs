@@ -203,21 +203,15 @@ impl RuntimeCacheManager {
         let mut lease = pool
             .checkout_cancellable(
                 || {
-                    let mut worker = base_runtime.clone_whisper_runtime()?;
-                    worker.reset_kv_cache();
+                    let worker = base_runtime.clone_whisper_runtime()?;
                     Ok::<WhisperRuntime, AudioError>(worker)
                 },
                 || is_cancelled(cancel_flag),
             )
             .map_err(map_pool_checkout_error)?;
 
-        lease.reset_kv_cache();
         let result = use_runtime(&mut lease);
         lease.reset_kv_cache();
-
-        if let Device::Cuda(_) | Device::Metal(_) = lease.device {
-            crate::gpu_cleanup::synchronize_device(&lease.device);
-        }
 
         result
     }
@@ -452,19 +446,23 @@ impl RuntimeCacheManager {
     pub fn stats(&self) -> RuntimeCacheStats {
         let now = Instant::now();
 
-        let whisper = self.whisper_entries.lock().ok().and_then(|entries| {
-            entries
-                .iter()
-                .max_by_key(|(_, entry)| entry.loaded_at)
-                .map(|(key, entry)| (*key, entry.loaded_at))
-        });
+        let whisper_entries = self
+            .whisper_entries
+            .lock()
+            .expect("Whisper cache mutex poisoned");
+        let whisper = whisper_entries
+            .iter()
+            .max_by_key(|(_, entry)| entry.loaded_at)
+            .map(|(key, entry)| (*key, entry.loaded_at));
 
-        let speaker = self.speaker_entries.lock().ok().and_then(|entries| {
-            entries
-                .iter()
-                .max_by_key(|(_, entry)| entry.loaded_at)
-                .map(|(key, entry)| (key.clone(), entry.loaded_at))
-        });
+        let speaker_entries = self
+            .speaker_entries
+            .lock()
+            .expect("Speaker cache mutex poisoned");
+        let speaker = speaker_entries
+            .iter()
+            .max_by_key(|(_, entry)| entry.loaded_at)
+            .map(|(key, entry)| (key.clone(), entry.loaded_at));
 
         RuntimeCacheStats {
             whisper_loaded: whisper.is_some(),

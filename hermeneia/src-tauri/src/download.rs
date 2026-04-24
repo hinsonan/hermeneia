@@ -65,6 +65,12 @@ fn model_cache_path(model_id: &str) -> PathBuf {
     hf_cache_dir().join(model_cache_dir_name(model_id))
 }
 
+fn has_nontrivial_cached_file(path: &std::path::Path, min_bytes: u64) -> bool {
+    path.metadata()
+        .map(|m| m.is_file() && m.len() >= min_bytes)
+        .unwrap_or(false)
+}
+
 /// Check whether a model appears to be cached by looking for weight files in snapshots.
 /// Uses metadata() to follow symlinks and verify the target file actually exists.
 /// We check for weight files (not just config.json) to avoid treating partially-downloaded
@@ -80,21 +86,10 @@ fn is_model_cached_on_disk(model_id: &str) -> bool {
             if entry.path().is_dir() {
                 let dir = entry.path();
                 // Check for weight files - the large files that actually matter
-                let has_weights = dir
-                    .join("model.safetensors")
-                    .metadata()
-                    .map(|m| m.is_file())
-                    .unwrap_or(false)
-                    || dir
-                        .join("pytorch_model.bin")
-                        .metadata()
-                        .map(|m| m.is_file())
-                        .unwrap_or(false)
-                    || dir
-                        .join("model-q8_0.gguf")
-                        .metadata()
-                        .map(|m| m.is_file())
-                        .unwrap_or(false);
+                let has_weights =
+                    has_nontrivial_cached_file(&dir.join("model.safetensors"), 1_000_000)
+                        || has_nontrivial_cached_file(&dir.join("pytorch_model.bin"), 1_000_000)
+                        || has_nontrivial_cached_file(&dir.join("model-q8_0.gguf"), 1_000_000);
                 if has_weights {
                     return true;
                 }
@@ -610,7 +605,12 @@ fn download_with_progress(
     }
 
     // Collect the result
-    let _ = handle.join();
+    if handle.join().is_err() {
+        return Err(AudioError::ModelDownload {
+            model: model_id.to_string(),
+            details: "Download thread panicked".to_string(),
+        });
+    }
     let result = download_result.lock().unwrap().take();
     match result {
         Some(Ok(_)) => {

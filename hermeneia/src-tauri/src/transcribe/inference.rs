@@ -62,11 +62,11 @@ fn load_whisper_runtime(params: &TranscribeParams) -> Result<WhisperRuntime> {
     Ok(runtime)
 }
 
-fn run_with_whisper_runtime<P: ProgressReporter>(
+fn run_with_whisper_runtime<P: ProgressReporter + 'static>(
     runtime: &mut WhisperRuntime,
     speech_audio: &SpeechAudio,
     params: &TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<(Vec<crate::transcribe::TranscriptSegment>, String)> {
     check_cancelled(&cancel_flag)?;
@@ -108,10 +108,9 @@ fn run_with_whisper_runtime<P: ProgressReporter>(
         }
     };
 
-    let reporter_ptr = reporter as *const P as usize;
-    let callback: ProgressCallback = Box::new(move |current, total| unsafe {
-        let reporter_ref = &*(reporter_ptr as *const P);
-        reporter_ref.report(current, total);
+    let reporter_for_callback = Arc::clone(&reporter);
+    let callback: ProgressCallback = Box::new(move |current, total| {
+        reporter_for_callback.report(current, total);
     });
 
     let mut decoder = Decoder::new_with_language_token(
@@ -265,19 +264,18 @@ fn join_segments_with_space(segments: &[crate::transcribe::TranscriptSegment]) -
 }
 
 /// Main transcription function with progress reporter trait
-pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
+pub fn transcribe_audio_with_reporter<P: ProgressReporter + 'static>(
     file_path: &str,
     params: TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranscriptResult> {
     check_cancelled(&cancel_flag)?;
 
-    let reporter_ptr = reporter as *const P as usize;
+    let reporter_for_decode = Arc::clone(&reporter);
     let cancel_for_decode = cancel_flag.clone();
-    let decode_progress: DecodeProgressCallback = Box::new(move |current, total| unsafe {
-        let reporter_ref = &*(reporter_ptr as *const P);
-        reporter_ref.report(current, total);
+    let decode_progress: DecodeProgressCallback = Box::new(move |current, total| {
+        reporter_for_decode.report(current, total);
 
         !cancel_for_decode
             .as_ref()
@@ -295,10 +293,10 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
 }
 
 /// Transcribe already-preprocessed mono 16kHz speech audio with progress reporter.
-pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter>(
+pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter + 'static>(
     speech_audio: &SpeechAudio,
     params: TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranscriptResult> {
     transcribe_prepared_audio_with_reporter_cached(
@@ -310,10 +308,10 @@ pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter>(
     )
 }
 
-pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
+pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter + 'static>(
     speech_audio: &SpeechAudio,
     params: TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
     runtime_cache: Option<Arc<RuntimeCacheManager>>,
 ) -> Result<TranscriptResult> {
@@ -333,7 +331,7 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
                     runtime,
                     speech_audio,
                     &params,
-                    reporter,
+                    Arc::clone(&reporter),
                     cancel_flag.clone(),
                 )
             },
@@ -345,7 +343,7 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
             &mut runtime,
             speech_audio,
             &params,
-            reporter,
+            Arc::clone(&reporter),
             cancel_flag.clone(),
         )?
     };

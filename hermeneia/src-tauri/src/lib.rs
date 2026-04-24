@@ -15,8 +15,8 @@ pub mod translate;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::Semaphore;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use cancel_registry::CancelRegistry;
 
@@ -201,7 +201,6 @@ pub struct TranslationModelResolution {
 /// Global audio player state managed by Tauri
 pub struct AppState {
     pub player: Mutex<AudioPlayer>,
-    pub cancel_inference: Mutex<Arc<AtomicBool>>,
     pub inference_cancel_registry: Arc<CancelRegistry>,
     pub inference_semaphore: Arc<Semaphore>,
     pub max_inference_concurrency: usize,
@@ -329,6 +328,29 @@ fn generate_job_id(prefix: &str) -> String {
     format!("{}-{}-{}", prefix, ts, seq)
 }
 
+async fn acquire_inference_permit(
+    inference_semaphore: Arc<Semaphore>,
+    cancel_flag: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
+) -> std::result::Result<OwnedSemaphorePermit, String> {
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled.to_string());
+        }
+
+        tokio::select! {
+            permit_result = inference_semaphore.clone().acquire_owned() => {
+                return permit_result.map_err(|_| "Inference queue is unavailable".to_string());
+            }
+            _ = cancel_notify.notified() => {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    return Err(AudioError::Cancelled.to_string());
+                }
+            }
+        }
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -337,11 +359,13 @@ fn greet(name: &str) -> String {
 
 /// Cancel a running inference operation (transcription or translation)
 #[tauri::command]
-fn cancel_inference(state: tauri::State<AppState>) {
-    state.inference_cancel_registry.cancel_all();
-    let flag = state.cancel_inference.lock().unwrap();
-    flag.store(true, Ordering::SeqCst);
-    tracing::info!("Inference cancellation requested");
+fn cancel_inference(state: tauri::State<AppState>) -> usize {
+    let cancelled = state.inference_cancel_registry.cancel_all();
+    tracing::info!(
+        cancelled_jobs = cancelled,
+        "Inference cancellation requested"
+    );
+    cancelled
 }
 
 #[tauri::command]
@@ -433,33 +457,20 @@ async fn transcribe_audio_file(
     let cancel_registry = state.inference_cancel_registry.clone();
     let registration = cancel_registry.register_job(job_id.clone(), batch_id);
     let cancel_flag = registration.cancel_flag();
-    let inference_semaphore = state.inference_semaphore.clone();
-    let inference_permit = loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            drop(registration);
-            return Err(AudioError::Cancelled.to_string());
-        }
-
-        match tokio::time::timeout(
-            Duration::from_millis(100),
-            inference_semaphore.clone().acquire_owned(),
-        )
-        .await
-        {
-            Ok(permit_result) => {
-                break permit_result.map_err(|_| "Inference queue is unavailable".to_string())?
-            }
-            Err(_) => continue,
-        }
-    };
+    let cancel_notify = registration.cancel_notify();
+    let inference_permit = acquire_inference_permit(
+        state.inference_semaphore.clone(),
+        cancel_flag.clone(),
+        cancel_notify,
+    )
+    .await?;
 
     tokio::task::spawn_blocking(move || {
         let _inference_permit = inference_permit;
         let _registration = registration;
         let started = Instant::now();
 
-        let model_enum =
-            parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
+        let model_enum = annotate::parse_whisper_model(&model).map_err(|e| e.to_string())?;
 
         let task_enum = match task.as_str() {
             "transcribe" => TranscriptionTask::Transcribe,
@@ -509,7 +520,7 @@ async fn transcribe_audio_file(
         let result = transcribe::transcribe_prepared_audio_with_reporter_cached(
             &speech_audio,
             params,
-            &*reporter,
+            reporter.clone(),
             Some(cancel_flag.clone()),
             Some(runtime_cache),
         )
@@ -550,25 +561,13 @@ async fn annotate_audio_file(
     let cancel_registry = state.inference_cancel_registry.clone();
     let registration = cancel_registry.register_job(job_id.clone(), batch_id);
     let cancel_flag = registration.cancel_flag();
-    let inference_semaphore = state.inference_semaphore.clone();
-    let inference_permit = loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            drop(registration);
-            return Err(AudioError::Cancelled.to_string());
-        }
-
-        match tokio::time::timeout(
-            Duration::from_millis(100),
-            inference_semaphore.clone().acquire_owned(),
-        )
-        .await
-        {
-            Ok(permit_result) => {
-                break permit_result.map_err(|_| "Inference queue is unavailable".to_string())?
-            }
-            Err(_) => continue,
-        }
-    };
+    let cancel_notify = registration.cancel_notify();
+    let inference_permit = acquire_inference_permit(
+        state.inference_semaphore.clone(),
+        cancel_flag.clone(),
+        cancel_notify,
+    )
+    .await?;
 
     tokio::task::spawn_blocking(move || {
         let _inference_permit = inference_permit;
@@ -688,23 +687,6 @@ fn clear_runtime_cache(
         }
     }
     Ok(())
-}
-
-fn parse_whisper_model(s: &str) -> Option<WhisperModel> {
-    match s.to_lowercase().as_str() {
-        "tiny" => Some(WhisperModel::Tiny),
-        "tiny.en" => Some(WhisperModel::TinyEn),
-        "base" => Some(WhisperModel::Base),
-        "base.en" => Some(WhisperModel::BaseEn),
-        "small" => Some(WhisperModel::Small),
-        "small.en" => Some(WhisperModel::SmallEn),
-        "medium" => Some(WhisperModel::Medium),
-        "medium.en" => Some(WhisperModel::MediumEn),
-        "large" => Some(WhisperModel::Large),
-        "large-v2" => Some(WhisperModel::LargeV2),
-        "large-v3" => Some(WhisperModel::LargeV3),
-        _ => None,
-    }
 }
 
 fn decode_percent_encoded(input: &str) -> String {
@@ -882,8 +864,7 @@ async fn validate_model_selection(
     force_cpu: bool,
 ) -> std::result::Result<ModelValidation, String> {
     tokio::task::spawn_blocking(move || {
-        let model_enum =
-            parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
+        let model_enum = annotate::parse_whisper_model(&model).map_err(|e| e.to_string())?;
 
         let validator = ModelValidator::new().map_err(|e| e.to_string())?;
         let result = validator.validate_model(model_enum, force_cpu);
@@ -1022,25 +1003,13 @@ async fn translate_text_file(
     let cancel_registry = state.inference_cancel_registry.clone();
     let registration = cancel_registry.register_job(job_id.clone(), batch_id);
     let cancel_flag = registration.cancel_flag();
-    let inference_semaphore = state.inference_semaphore.clone();
-    let inference_permit = loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            drop(registration);
-            return Err(AudioError::Cancelled.to_string());
-        }
-
-        match tokio::time::timeout(
-            Duration::from_millis(100),
-            inference_semaphore.clone().acquire_owned(),
-        )
-        .await
-        {
-            Ok(permit_result) => {
-                break permit_result.map_err(|_| "Inference queue is unavailable".to_string())?
-            }
-            Err(_) => continue,
-        }
-    };
+    let cancel_notify = registration.cancel_notify();
+    let inference_permit = acquire_inference_permit(
+        state.inference_semaphore.clone(),
+        cancel_flag.clone(),
+        cancel_notify,
+    )
+    .await?;
 
     tokio::task::spawn_blocking(move || {
         let _inference_permit = inference_permit;
@@ -1349,7 +1318,11 @@ async fn recommend_inference_concurrency(
 ) -> std::result::Result<InferenceRuntimeLimits, String> {
     let caps = system_info::get_system_capabilities()?;
 
-    let selected_whisper_model = whisper_model.as_deref().and_then(parse_whisper_model);
+    let selected_whisper_model = whisper_model
+        .as_deref()
+        .map(annotate::parse_whisper_model)
+        .transpose()
+        .map_err(|e| e.to_string())?;
 
     let strategy = translation_strategy
         .map(|value| parse_translation_strategy(Some(value), None))
@@ -1479,7 +1452,24 @@ fn is_newer(remote: &str, local: &str) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     gpu::apply_optimizations();
-    let max_inference_concurrency = HARD_MAX_INFERENCE_CONCURRENCY;
+    let max_inference_concurrency = match system_info::get_system_capabilities() {
+        Ok(caps) => calculate_max_inference_concurrency_for_selection(
+            &caps,
+            None,
+            false,
+            None,
+            None,
+            None,
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "Failed to detect capabilities; falling back to default inference concurrency");
+            DEFAULT_MAX_INFERENCE_CONCURRENCY
+        }
+    }
+    .clamp(
+        DEFAULT_MAX_INFERENCE_CONCURRENCY,
+        HARD_MAX_INFERENCE_CONCURRENCY,
+    );
 
     tracing::info!(
         max_inference_concurrency = max_inference_concurrency,
@@ -1491,7 +1481,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             player: Mutex::new(AudioPlayer::new()),
-            cancel_inference: Mutex::new(Arc::new(AtomicBool::new(false))),
             inference_cancel_registry: Arc::new(CancelRegistry::new()),
             inference_semaphore: Arc::new(Semaphore::new(max_inference_concurrency)),
             max_inference_concurrency,

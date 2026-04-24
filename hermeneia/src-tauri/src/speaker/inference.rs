@@ -523,6 +523,108 @@ pub fn diarize_prepared_audio_with_callbacks_cached(
     })
 }
 
+pub fn diarize_prepared_audio_with_callbacks_cached_owned(
+    speech_audio: SpeechAudio,
+    params: DiarizeParams,
+    callbacks: DiarizeCallbacks,
+    cancel: Option<Arc<AtomicBool>>,
+    runtime_cache: Option<Arc<RuntimeCacheManager>>,
+) -> Result<DiarizationResult> {
+    let start = Instant::now();
+    validate_diarize_params(&params)?;
+    check_cancelled(&cancel)?;
+
+    let device_name = params.device.provider_string().to_string();
+    let model_name = params.model.display_name().to_string();
+    let audio_duration = speech_audio.duration_seconds as f32;
+    let mut owned_samples = Some(speech_audio.samples_16k_mono);
+
+    tracing::info!(
+        "Running diarization with {} model on {}...",
+        model_name,
+        device_name
+    );
+
+    let result_segments = if let Some(cache) = runtime_cache {
+        let key = SpeakerRuntimeKey {
+            model: params.model.clone(),
+            device: params.device.clone(),
+        };
+
+        cache.with_speaker_runtime_cancellable(
+            key,
+            || load_speaker_runtime(&params, &cancel, &callbacks.stage_progress),
+            |runtime| {
+                let warmup_samples = owned_samples.as_deref().ok_or_else(|| {
+                    AudioError::DiarizationFailed(
+                        "Owned speaker samples already consumed".to_string(),
+                    )
+                })?;
+
+                maybe_warmup_speaker_runtime(runtime, &params.device, warmup_samples, &cancel);
+
+                let samples_for_compute = owned_samples.take().ok_or_else(|| {
+                    AudioError::DiarizationFailed(
+                        "Owned speaker samples already consumed".to_string(),
+                    )
+                })?;
+
+                compute_speaker_segments(
+                    &mut runtime.diarize,
+                    samples_for_compute,
+                    callbacks.chunk_progress,
+                    callbacks.stage_progress.clone(),
+                    cancel.clone(),
+                )
+            },
+            cancel.as_deref(),
+        )?
+    } else {
+        let mut runtime = load_speaker_runtime(&params, &cancel, &callbacks.stage_progress)?;
+
+        let warmup_samples = owned_samples.as_deref().ok_or_else(|| {
+            AudioError::DiarizationFailed("Owned speaker samples already consumed".to_string())
+        })?;
+
+        maybe_warmup_speaker_runtime(&mut runtime, &params.device, warmup_samples, &cancel);
+
+        let samples_for_compute = owned_samples.take().ok_or_else(|| {
+            AudioError::DiarizationFailed("Owned speaker samples already consumed".to_string())
+        })?;
+
+        compute_speaker_segments(
+            &mut runtime.diarize,
+            samples_for_compute,
+            callbacks.chunk_progress,
+            callbacks.stage_progress.clone(),
+            cancel.clone(),
+        )?
+    };
+
+    check_cancelled(&cancel)?;
+
+    emit_stage(
+        &callbacks.stage_progress,
+        DiarizeStage::Finalizing,
+        None,
+        None,
+        "Finalizing speaker segments...",
+        true,
+    );
+
+    let num_speakers = count_unique_speakers(&result_segments);
+    let inference_time = start.elapsed().as_secs_f64();
+
+    Ok(DiarizationResult {
+        segments: result_segments,
+        num_speakers,
+        audio_duration,
+        inference_time,
+        model: model_name,
+        device: device_name,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

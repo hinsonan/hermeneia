@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 #[derive(Debug, Default)]
 struct RegistryState {
@@ -11,6 +12,7 @@ struct RegistryState {
 #[derive(Debug, Clone)]
 struct JobMeta {
     cancel_flag: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
     batch_id: Option<String>,
     registration_id: u64,
 }
@@ -35,6 +37,7 @@ impl CancelRegistry {
         static REGISTRATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
         let cancel_flag = Arc::new(AtomicBool::new(false));
+        let cancel_notify = Arc::new(Notify::new());
         let registration_id = REGISTRATION_COUNTER.fetch_add(1, Ordering::SeqCst);
         let mut state = self.state.lock().expect("CancelRegistry mutex poisoned");
 
@@ -42,12 +45,14 @@ impl CancelRegistry {
             existing
                 .cancel_flag
                 .store(true, std::sync::atomic::Ordering::SeqCst);
+            existing.cancel_notify.notify_waiters();
         }
 
         if let Some(previous) = state.jobs.insert(
             job_id.clone(),
             JobMeta {
                 cancel_flag: Arc::clone(&cancel_flag),
+                cancel_notify: Arc::clone(&cancel_notify),
                 batch_id: batch_id.clone(),
                 registration_id,
             },
@@ -75,6 +80,7 @@ impl CancelRegistry {
             job_id,
             registration_id,
             cancel_flag,
+            cancel_notify,
             active: true,
         }
     }
@@ -84,6 +90,7 @@ impl CancelRegistry {
         if let Some(meta) = state.jobs.get(job_id) {
             meta.cancel_flag
                 .store(true, std::sync::atomic::Ordering::SeqCst);
+            meta.cancel_notify.notify_waiters();
             return true;
         }
         false
@@ -100,6 +107,7 @@ impl CancelRegistry {
             if let Some(meta) = state.jobs.get(job_id) {
                 meta.cancel_flag
                     .store(true, std::sync::atomic::Ordering::SeqCst);
+                meta.cancel_notify.notify_waiters();
                 cancelled += 1;
             }
         }
@@ -112,6 +120,7 @@ impl CancelRegistry {
         for meta in state.jobs.values() {
             meta.cancel_flag
                 .store(true, std::sync::atomic::Ordering::SeqCst);
+            meta.cancel_notify.notify_waiters();
             cancelled += 1;
         }
         cancelled
@@ -157,12 +166,17 @@ pub struct JobRegistration {
     job_id: String,
     registration_id: u64,
     cancel_flag: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
     active: bool,
 }
 
 impl JobRegistration {
     pub fn cancel_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.cancel_flag)
+    }
+
+    pub fn cancel_notify(&self) -> Arc<Notify> {
+        Arc::clone(&self.cancel_notify)
     }
 }
 

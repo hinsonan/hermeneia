@@ -4,7 +4,7 @@ use crate::audio::{
 use crate::error::{AudioError, Result};
 use crate::runtime_cache::{global_runtime_cache, RuntimeCacheManager};
 use crate::speaker::{
-    diarize_prepared_audio_with_callbacks_cached, validate_diarize_params, DiarizationResult,
+    diarize_prepared_audio_with_callbacks_cached_owned, validate_diarize_params, DiarizationResult,
     DiarizeCallbacks, DiarizeParams, DiarizeStage, SpeakerDevice, SpeakerModel,
 };
 use crate::transcribe::{
@@ -398,6 +398,24 @@ pub fn annotate_audio_with_reporter_cached(
     let speech_audio = prepare_speech_audio_owned(audio)?;
     check_cancelled(&cancel_flag)?;
 
+    let adapter = TranscribeProgressAdapter {
+        reporter: reporter.clone(),
+        job_id: job_id.clone(),
+    };
+
+    // Ensure loading_model phase is emitted in annotate flow.
+    adapter.start();
+
+    let transcript = transcribe_prepared_audio_with_reporter_cached(
+        &speech_audio,
+        params.transcribe.clone(),
+        Arc::new(adapter),
+        cancel_flag.clone(),
+        runtime_cache.clone(),
+    )?;
+
+    check_cancelled(&cancel_flag)?;
+
     reporter.report(AnnotationProgress::loading_speaker_model(&job_id));
 
     let reporter_for_diarize_stage = reporter.clone();
@@ -445,31 +463,13 @@ pub fn annotate_audio_with_reporter_cached(
         },
     );
 
-    let diarization = diarize_prepared_audio_with_callbacks_cached(
-        &speech_audio,
+    let diarization = diarize_prepared_audio_with_callbacks_cached_owned(
+        speech_audio,
         params.diarize.clone(),
         DiarizeCallbacks {
             chunk_progress: None,
             stage_progress: Some(diarize_stage_progress),
         },
-        cancel_flag.clone(),
-        runtime_cache.clone(),
-    )?;
-
-    check_cancelled(&cancel_flag)?;
-
-    let adapter = TranscribeProgressAdapter {
-        reporter: reporter.clone(),
-        job_id: job_id.clone(),
-    };
-
-    // Ensure loading_model phase is emitted in annotate flow.
-    adapter.start();
-
-    let transcript = transcribe_prepared_audio_with_reporter_cached(
-        &speech_audio,
-        params.transcribe.clone(),
-        &adapter,
         cancel_flag.clone(),
         runtime_cache,
     )?;
