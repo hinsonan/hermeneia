@@ -16,6 +16,7 @@ pub mod translate;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use cancel_registry::CancelRegistry;
 
@@ -34,6 +35,21 @@ pub struct UpdateInfo {
 }
 
 const ANNOTATION_PROGRESS_EVENT: &str = "annotation-progress";
+const DEFAULT_MAX_INFERENCE_CONCURRENCY: usize = 1;
+const HARD_MAX_INFERENCE_CONCURRENCY: usize = 4;
+const INFERENCE_RAM_HEADROOM_GB: f32 = 1.5;
+const INFERENCE_VRAM_HEADROOM_GB: f32 = 0.8;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InferenceRuntimeLimits {
+    pub max_inference_concurrency: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InferenceMemoryRequirements {
+    ram_gb: f32,
+    vram_gb: f32,
+}
 
 struct TauriAnnotationProgressReporter {
     app_handle: tauri::AppHandle,
@@ -64,14 +80,240 @@ pub struct SpeakerModelRequirement {
     pub embedding_file: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranslationStrategy {
+    Auto,
+    FastOnly,
+    Universal,
+}
+
+impl TranslationStrategy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::FastOnly => "fast_only",
+            Self::Universal => "universal",
+        }
+    }
+}
+
+fn parse_translation_strategy(
+    strategy: Option<String>,
+    allow_madlad: Option<bool>,
+) -> std::result::Result<TranslationStrategy, String> {
+    if let Some(strategy) = strategy {
+        let normalized = strategy.trim().to_lowercase();
+        return match normalized.as_str() {
+            "auto" => Ok(TranslationStrategy::Auto),
+            "fast_only" | "fast-only" => Ok(TranslationStrategy::FastOnly),
+            "universal" => Ok(TranslationStrategy::Universal),
+            _ => Err(
+                "Invalid translation strategy. Accepted values: auto, fast_only, universal"
+                    .to_string(),
+            ),
+        };
+    }
+
+    Ok(match allow_madlad.unwrap_or(true) {
+        true => TranslationStrategy::Auto,
+        false => TranslationStrategy::FastOnly,
+    })
+}
+
+fn build_translate_params_for_strategy(
+    source_lang: String,
+    target_lang: String,
+    strategy: TranslationStrategy,
+) -> std::result::Result<translate::TranslateParams, AudioError> {
+    use translate::TranslationModel;
+
+    let (preferred_model, fallback_enabled) = match strategy {
+        TranslationStrategy::Auto => (None, true),
+        TranslationStrategy::FastOnly => {
+            let marian = translate::language::get_marian_for_pair(&source_lang, &target_lang)
+                .ok_or_else(|| AudioError::ModelNotAvailable {
+                    model: format!(
+                        "Fast translation model for {} -> {}",
+                        source_lang, target_lang
+                    ),
+                })?;
+            (Some(marian), false)
+        }
+        TranslationStrategy::Universal => (Some(TranslationModel::Madlad3B), false),
+    };
+
+    Ok(translate::TranslateParams {
+        source_language: source_lang,
+        target_language: target_lang,
+        preferred_model,
+        fallback_enabled,
+        force_cpu: false,
+        use_quantized: false,
+        max_length: Some(512),
+        temperature: Some(0.0),
+        top_p: None,
+        repetition_penalty: Some(1.0),
+    })
+}
+
+fn translation_inference_requirements(
+    strategy: TranslationStrategy,
+) -> InferenceMemoryRequirements {
+    match strategy {
+        TranslationStrategy::Universal => InferenceMemoryRequirements {
+            // MADLAD 3B is large and can exceed 12GB VRAM once loaded.
+            ram_gb: 14.0,
+            vram_gb: 13.0,
+        },
+        // Auto may pick universal depending on language pair, so budget as universal.
+        TranslationStrategy::Auto => InferenceMemoryRequirements {
+            ram_gb: 14.0,
+            vram_gb: 13.0,
+        },
+        TranslationStrategy::FastOnly => InferenceMemoryRequirements {
+            // Marian models are much smaller (~298MB files) but runtime overhead still applies.
+            ram_gb: 2.0,
+            vram_gb: 1.5,
+        },
+    }
+}
+
+fn whisper_inference_requirements(model: transcribe::WhisperModel) -> InferenceMemoryRequirements {
+    let reqs = model.requirements();
+    InferenceMemoryRequirements {
+        ram_gb: reqs.min_ram_gb,
+        vram_gb: reqs.min_vram_gb,
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TranslationModelResolution {
+    pub strategy: String,
+    pub model_id: String,
+    pub model_name: String,
+    pub engine_tier: String,
+    pub label: String,
+    pub message: String,
+    pub speed_label: String,
+    pub user_hint: String,
+}
+
 /// Global audio player state managed by Tauri
 pub struct AppState {
     pub player: Mutex<AudioPlayer>,
-    pub cancel_inference: Mutex<Arc<AtomicBool>>,
     pub inference_cancel_registry: Arc<CancelRegistry>,
+    pub inference_semaphore: Arc<Semaphore>,
+    pub max_inference_concurrency: usize,
     pub cancel_download: Mutex<Arc<AtomicBool>>,
     pub is_downloading: Arc<AtomicBool>,
     pub runtime_cache: Arc<runtime_cache::RuntimeCacheManager>,
+}
+
+fn slots_for_memory_budget(available_gb: f32, headroom_gb: f32, per_job_gb: f32) -> usize {
+    if !available_gb.is_finite() || !headroom_gb.is_finite() || !per_job_gb.is_finite() {
+        return DEFAULT_MAX_INFERENCE_CONCURRENCY;
+    }
+
+    if available_gb <= headroom_gb || per_job_gb <= 0.0 {
+        return DEFAULT_MAX_INFERENCE_CONCURRENCY;
+    }
+
+    let slots = ((available_gb - headroom_gb) / per_job_gb).floor() as isize;
+    slots.max(1) as usize
+}
+
+fn max_requirements(
+    a: InferenceMemoryRequirements,
+    b: InferenceMemoryRequirements,
+) -> InferenceMemoryRequirements {
+    InferenceMemoryRequirements {
+        ram_gb: a.ram_gb.max(b.ram_gb),
+        vram_gb: a.vram_gb.max(b.vram_gb),
+    }
+}
+
+fn compute_slots_from_requirements(
+    caps: &system_info::SystemCapabilities,
+    requirements: InferenceMemoryRequirements,
+    force_cpu: bool,
+) -> usize {
+    let ram_slots = slots_for_memory_budget(
+        caps.available_ram_gb,
+        INFERENCE_RAM_HEADROOM_GB,
+        requirements.ram_gb,
+    );
+
+    if force_cpu {
+        return ram_slots;
+    }
+
+    let gpu_slots = caps.gpu_info.as_ref().map(|gpu| {
+        if let Some(vram_available) = gpu.vram_available_gb {
+            slots_for_memory_budget(
+                vram_available,
+                INFERENCE_VRAM_HEADROOM_GB,
+                requirements.vram_gb,
+            )
+        } else {
+            DEFAULT_MAX_INFERENCE_CONCURRENCY
+        }
+    });
+
+    match gpu_slots {
+        Some(gpu_slots) => ram_slots.min(gpu_slots),
+        None => ram_slots,
+    }
+}
+
+fn calculate_max_inference_concurrency_for_selection(
+    caps: &system_info::SystemCapabilities,
+    selected_whisper_model: Option<transcribe::WhisperModel>,
+    whisper_force_cpu: bool,
+    translation_strategy: Option<TranslationStrategy>,
+    source_lang: Option<&str>,
+    target_lang: Option<&str>,
+) -> usize {
+    let mut requirements = InferenceMemoryRequirements {
+        ram_gb: 2.0,
+        vram_gb: 1.5,
+    };
+
+    let mut force_cpu = whisper_force_cpu;
+
+    if let Some(whisper_model) = selected_whisper_model {
+        requirements =
+            max_requirements(requirements, whisper_inference_requirements(whisper_model));
+    }
+
+    if let Some(strategy) = translation_strategy {
+        let effective_strategy = match strategy {
+            TranslationStrategy::Auto => {
+                if let (Some(src), Some(tgt)) = (source_lang, target_lang) {
+                    if translate::language::get_marian_for_pair(src, tgt).is_some() {
+                        TranslationStrategy::FastOnly
+                    } else {
+                        TranslationStrategy::Universal
+                    }
+                } else {
+                    TranslationStrategy::Universal
+                }
+            }
+            other => other,
+        };
+
+        requirements = max_requirements(
+            requirements,
+            translation_inference_requirements(effective_strategy),
+        );
+
+        // Translation currently runs on auto device selection; keep GPU path enabled when available.
+        force_cpu = false;
+    }
+
+    compute_slots_from_requirements(caps, requirements, force_cpu).clamp(
+        DEFAULT_MAX_INFERENCE_CONCURRENCY,
+        HARD_MAX_INFERENCE_CONCURRENCY,
+    )
 }
 
 fn generate_job_id(prefix: &str) -> String {
@@ -86,6 +328,33 @@ fn generate_job_id(prefix: &str) -> String {
     format!("{}-{}-{}", prefix, ts, seq)
 }
 
+async fn acquire_inference_permit(
+    inference_semaphore: Arc<Semaphore>,
+    cancel_flag: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
+) -> std::result::Result<OwnedSemaphorePermit, String> {
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(AudioError::Cancelled.to_string());
+        }
+
+        tokio::select! {
+            permit_result = inference_semaphore.clone().acquire_owned() => {
+                let permit = permit_result.map_err(|_| "Inference queue is unavailable".to_string())?;
+                if cancel_flag.load(Ordering::SeqCst) {
+                    return Err(AudioError::Cancelled.to_string());
+                }
+                return Ok(permit);
+            }
+            _ = cancel_notify.notified() => {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    return Err(AudioError::Cancelled.to_string());
+                }
+            }
+        }
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -94,11 +363,13 @@ fn greet(name: &str) -> String {
 
 /// Cancel a running inference operation (transcription or translation)
 #[tauri::command]
-fn cancel_inference(state: tauri::State<AppState>) {
-    state.inference_cancel_registry.cancel_all();
-    let flag = state.cancel_inference.lock().unwrap();
-    flag.store(true, Ordering::SeqCst);
-    tracing::info!("Inference cancellation requested");
+fn cancel_inference(state: tauri::State<AppState>) -> usize {
+    let cancelled = state.inference_cancel_registry.cancel_all();
+    tracing::info!(
+        cancelled_jobs = cancelled,
+        "Inference cancellation requested"
+    );
+    cancelled
 }
 
 #[tauri::command]
@@ -188,14 +459,22 @@ async fn transcribe_audio_file(
     let job_id = job_id.unwrap_or_else(|| generate_job_id("transcribe"));
     let runtime_cache = state.runtime_cache.clone();
     let cancel_registry = state.inference_cancel_registry.clone();
+    let registration = cancel_registry.register_job(job_id.clone(), batch_id);
+    let cancel_flag = registration.cancel_flag();
+    let cancel_notify = registration.cancel_notify();
+    let inference_permit = acquire_inference_permit(
+        state.inference_semaphore.clone(),
+        cancel_flag.clone(),
+        cancel_notify,
+    )
+    .await?;
 
     tokio::task::spawn_blocking(move || {
+        let _inference_permit = inference_permit;
+        let _registration = registration;
         let started = Instant::now();
-        let registration = cancel_registry.register_job(job_id.clone(), batch_id);
-        let cancel_flag = registration.cancel_flag();
 
-        let model_enum =
-            parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
+        let model_enum = annotate::parse_whisper_model(&model).map_err(|e| e.to_string())?;
 
         let task_enum = match task.as_str() {
             "transcribe" => TranscriptionTask::Transcribe,
@@ -234,8 +513,7 @@ async fn transcribe_audio_file(
 
         // Stage 2: prepare mono 16kHz speech audio
         reporter.emit_preparing_audio();
-        let speech_audio = prepare_speech_audio(&audio_data).map_err(|e| e.to_string())?;
-        drop(audio_data);
+        let speech_audio = prepare_speech_audio_owned(audio_data).map_err(|e| e.to_string())?;
 
         if cancel_flag.load(Ordering::SeqCst) {
             return Err(AudioError::Cancelled.to_string());
@@ -246,13 +524,12 @@ async fn transcribe_audio_file(
         let result = transcribe::transcribe_prepared_audio_with_reporter_cached(
             &speech_audio,
             params,
-            &*reporter,
+            reporter.clone(),
             Some(cancel_flag.clone()),
             Some(runtime_cache),
         )
         .map_err(|e| e.to_string());
 
-        drop(registration);
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis(),
             active_jobs = cancel_registry.active_jobs(),
@@ -286,11 +563,20 @@ async fn annotate_audio_file(
     let job_id = job_id.unwrap_or_else(|| generate_job_id("annotate"));
     let runtime_cache = state.runtime_cache.clone();
     let cancel_registry = state.inference_cancel_registry.clone();
+    let registration = cancel_registry.register_job(job_id.clone(), batch_id);
+    let cancel_flag = registration.cancel_flag();
+    let cancel_notify = registration.cancel_notify();
+    let inference_permit = acquire_inference_permit(
+        state.inference_semaphore.clone(),
+        cancel_flag.clone(),
+        cancel_notify,
+    )
+    .await?;
 
     tokio::task::spawn_blocking(move || {
+        let _inference_permit = inference_permit;
+        let _registration = registration;
         let started = Instant::now();
-        let registration = cancel_registry.register_job(job_id.clone(), batch_id);
-        let cancel_flag = registration.cancel_flag();
 
         let transcribe_model_enum =
             annotate::parse_whisper_model(&transcribe_model).map_err(|e| e.to_string())?;
@@ -331,7 +617,6 @@ async fn annotate_audio_file(
         )
         .map_err(|e| e.to_string());
 
-        drop(registration);
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis(),
             active_jobs = cancel_registry.active_jobs(),
@@ -395,9 +680,9 @@ fn clear_runtime_cache(
     kind: String,
 ) -> std::result::Result<(), String> {
     match kind.as_str() {
-        "whisper" => state.runtime_cache.clear_whisper(),
-        "speaker" => state.runtime_cache.clear_speaker(),
-        "all" => state.runtime_cache.clear_all(),
+        "whisper" => state.runtime_cache.clear_whisper().map(|_| ()),
+        "speaker" => state.runtime_cache.clear_speaker().map(|_| ()),
+        "all" => state.runtime_cache.clear_all().map(|_| ()),
         _ => {
             return Err(format!(
                 "Invalid cache kind: {} (expected whisper|speaker|all)",
@@ -405,24 +690,7 @@ fn clear_runtime_cache(
             ))
         }
     }
-    Ok(())
-}
-
-fn parse_whisper_model(s: &str) -> Option<WhisperModel> {
-    match s.to_lowercase().as_str() {
-        "tiny" => Some(WhisperModel::Tiny),
-        "tiny.en" => Some(WhisperModel::TinyEn),
-        "base" => Some(WhisperModel::Base),
-        "base.en" => Some(WhisperModel::BaseEn),
-        "small" => Some(WhisperModel::Small),
-        "small.en" => Some(WhisperModel::SmallEn),
-        "medium" => Some(WhisperModel::Medium),
-        "medium.en" => Some(WhisperModel::MediumEn),
-        "large" => Some(WhisperModel::Large),
-        "large-v2" => Some(WhisperModel::LargeV2),
-        "large-v3" => Some(WhisperModel::LargeV3),
-        _ => None,
-    }
+    .map_err(|e| e.to_string())
 }
 
 fn decode_percent_encoded(input: &str) -> String {
@@ -542,23 +810,20 @@ async fn write_zip_archive(
                 return Err(format!("Invalid archive entry path: {}", entry.path));
             }
 
-            zip.start_file(&normalized, options)
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&temp_path);
-                    format!("Failed to add '{}' to zip: {}", normalized, e)
-                })?;
-            zip.write_all(entry.content.as_bytes())
-                .map_err(|e| {
-                    let _ = std::fs::remove_file(&temp_path);
-                    format!("Failed to write '{}' in zip: {}", normalized, e)
-                })?;
+            zip.start_file(&normalized, options).map_err(|e| {
+                let _ = std::fs::remove_file(&temp_path);
+                format!("Failed to add '{}' to zip: {}", normalized, e)
+            })?;
+            zip.write_all(entry.content.as_bytes()).map_err(|e| {
+                let _ = std::fs::remove_file(&temp_path);
+                format!("Failed to write '{}' in zip: {}", normalized, e)
+            })?;
         }
 
-        zip.finish()
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&temp_path);
-                format!("Failed to finalize zip archive: {}", e)
-            })?;
+        zip.finish().map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            format!("Failed to finalize zip archive: {}", e)
+        })?;
 
         if output_path.exists() {
             std::fs::remove_file(&output_path)
@@ -578,6 +843,16 @@ async fn get_system_capabilities() -> std::result::Result<system_info::SystemCap
     system_info::get_system_capabilities()
 }
 
+/// Get runtime limits used by the backend scheduler.
+#[tauri::command]
+async fn get_inference_runtime_limits(
+    state: tauri::State<'_, AppState>,
+) -> std::result::Result<InferenceRuntimeLimits, String> {
+    Ok(InferenceRuntimeLimits {
+        max_inference_concurrency: state.max_inference_concurrency,
+    })
+}
+
 /// Model validation result for frontend
 #[derive(serde::Serialize)]
 pub struct ModelValidation {
@@ -593,8 +868,7 @@ async fn validate_model_selection(
     force_cpu: bool,
 ) -> std::result::Result<ModelValidation, String> {
     tokio::task::spawn_blocking(move || {
-        let model_enum =
-            parse_whisper_model(&model).ok_or_else(|| format!("Invalid model: {}", model))?;
+        let model_enum = annotate::parse_whisper_model(&model).map_err(|e| e.to_string())?;
 
         let validator = ModelValidator::new().map_err(|e| e.to_string())?;
         let result = validator.validate_model(model_enum, force_cpu);
@@ -721,19 +995,29 @@ async fn translate_text_file(
     file_path: String,
     source_lang: String,
     target_lang: String,
-    allow_madlad: bool,
+    strategy: Option<String>,
+    allow_madlad: Option<bool>,
+    job_id: Option<String>,
+    batch_id: Option<String>,
 ) -> std::result::Result<TextTranslationResult, String> {
     use tauri::Emitter;
 
-    // Swap in a fresh cancel flag so any previous job's flag stays true
-    let cancel_flag = {
-        let mut guard = state.cancel_inference.lock().unwrap();
-        let new_flag = Arc::new(AtomicBool::new(false));
-        *guard = new_flag.clone();
-        new_flag
-    };
+    let job_id = job_id.unwrap_or_else(|| generate_job_id("translate"));
+    let strategy = parse_translation_strategy(strategy, allow_madlad)?;
+    let cancel_registry = state.inference_cancel_registry.clone();
+    let registration = cancel_registry.register_job(job_id.clone(), batch_id);
+    let cancel_flag = registration.cancel_flag();
+    let cancel_notify = registration.cancel_notify();
+    let inference_permit = acquire_inference_permit(
+        state.inference_semaphore.clone(),
+        cancel_flag.clone(),
+        cancel_notify,
+    )
+    .await?;
 
     tokio::task::spawn_blocking(move || {
+        let _inference_permit = inference_permit;
+        let _registration = registration;
         let start_time = std::time::Instant::now();
 
         // Read the file content
@@ -747,6 +1031,7 @@ async fn translate_text_file(
         let _ = app_handle.emit(
             "translation-progress",
             serde_json::json!({
+                "job_id": job_id.clone(),
                 "phase": "loading_model",
                 "current": null,
                 "total": null,
@@ -755,18 +1040,9 @@ async fn translate_text_file(
         );
 
         // Set up translation parameters
-        let params = translate::TranslateParams {
-            source_language: source_lang.clone(),
-            target_language: target_lang.clone(),
-            preferred_model: None,
-            fallback_enabled: allow_madlad,
-            force_cpu: false,
-            use_quantized: false,
-            max_length: Some(512),
-            temperature: Some(0.0),
-            top_p: None,
-            repetition_penalty: Some(1.0),
-        };
+        let params =
+            build_translate_params_for_strategy(source_lang.clone(), target_lang.clone(), strategy)
+                .map_err(|e| e.to_string())?;
 
         let (translated_text, model_used, segments_count) = if is_srt {
             // Parse SRT file
@@ -774,15 +1050,17 @@ async fn translate_text_file(
                 .map_err(|e| format!("Failed to parse SRT file: {}", e))?;
 
             let total_segments = srt_file.len();
-            let texts = srt_file.get_texts();
+            let texts = srt_file.get_texts_for_translation_ref();
 
             // Create progress callback that emits Tauri events
             let app_handle_clone = app_handle.clone();
+            let progress_job_id = job_id.clone();
             let progress_callback: translate::BatchProgressCallback =
                 Box::new(move |current, total, _text| {
                     let _ = app_handle_clone.emit(
                         "translation-progress",
                         serde_json::json!({
+                            "job_id": progress_job_id.clone(),
                             "phase": "translating",
                             "current": current,
                             "total": total,
@@ -801,7 +1079,7 @@ async fn translate_text_file(
             .map_err(|e| format!("Translation failed: {}", e))?;
 
             // Reassemble SRT with translated text
-            let translated_srt = srt_file.with_translated_text(translated_texts);
+            let translated_srt = srt_file.with_translated_text_preserving_labels(translated_texts);
             (
                 translated_srt.render(),
                 model_used.display_name().to_string(),
@@ -816,11 +1094,13 @@ async fn translate_text_file(
             let total_chunks = chunks.len();
 
             let app_handle_clone = app_handle.clone();
+            let progress_job_id = job_id.clone();
             let progress_callback: translate::BatchProgressCallback =
                 Box::new(move |current, total, _text| {
                     let _ = app_handle_clone.emit(
                         "translation-progress",
                         serde_json::json!({
+                            "job_id": progress_job_id.clone(),
                             "phase": "translating",
                             "current": current,
                             "total": total,
@@ -846,6 +1126,11 @@ async fn translate_text_file(
         };
 
         let inference_time = start_time.elapsed().as_secs_f64();
+        tracing::info!(
+            elapsed_ms = start_time.elapsed().as_millis(),
+            active_jobs = cancel_registry.active_jobs(),
+            "Translation job finished"
+        );
 
         Ok(TextTranslationResult {
             translated_text,
@@ -1028,24 +1313,77 @@ fn get_playback_state(state: tauri::State<AppState>) -> std::result::Result<Play
 }
 
 #[tauri::command]
+async fn recommend_inference_concurrency(
+    whisper_model: Option<String>,
+    whisper_force_cpu: Option<bool>,
+    translation_strategy: Option<String>,
+    translation_source_lang: Option<String>,
+    translation_target_lang: Option<String>,
+) -> std::result::Result<InferenceRuntimeLimits, String> {
+    let caps = system_info::get_system_capabilities()?;
+
+    let selected_whisper_model = whisper_model
+        .as_deref()
+        .map(annotate::parse_whisper_model)
+        .transpose()
+        .map_err(|e| e.to_string())?;
+
+    let strategy = translation_strategy
+        .map(|value| parse_translation_strategy(Some(value), None))
+        .transpose()?;
+
+    let max_inference_concurrency = calculate_max_inference_concurrency_for_selection(
+        &caps,
+        selected_whisper_model,
+        whisper_force_cpu.unwrap_or(false),
+        strategy,
+        translation_source_lang.as_deref(),
+        translation_target_lang.as_deref(),
+    );
+
+    Ok(InferenceRuntimeLimits {
+        max_inference_concurrency,
+    })
+}
+
+#[tauri::command]
 async fn resolve_translation_model(
     source_lang: String,
     target_lang: String,
-    allow_madlad: bool,
-) -> std::result::Result<(String, String), String> {
+    strategy: Option<String>,
+    allow_madlad: Option<bool>,
+) -> std::result::Result<TranslationModelResolution, String> {
     tokio::task::spawn_blocking(move || {
-        let params = translate::TranslateParams {
-            source_language: source_lang,
-            target_language: target_lang,
-            fallback_enabled: allow_madlad,
-            ..Default::default()
-        };
+        let strategy = parse_translation_strategy(strategy, allow_madlad)?;
+        let params = build_translate_params_for_strategy(source_lang, target_lang, strategy)
+            .map_err(|e| e.to_string())?;
         let mm = translate::model::ModelManager::new().map_err(|e| e.to_string())?;
         let model = mm.select_model(&params).map_err(|e| e.to_string())?;
-        Ok((
-            model.model_id().to_string(),
-            model.display_name().to_string(),
-        ))
+
+        let (engine_tier, label, message) = if model.is_marian() {
+            (
+                "fast".to_string(),
+                "Fast model".to_string(),
+                "Using fast translation model for this language pair.".to_string(),
+            )
+        } else {
+            (
+                "universal".to_string(),
+                "Universal model".to_string(),
+                "Using a slower larger general model for broader language coverage.".to_string(),
+            )
+        };
+
+        Ok(TranslationModelResolution {
+            strategy: strategy.as_str().to_string(),
+            model_id: model.model_id().to_string(),
+            model_name: model.display_name().to_string(),
+            engine_tier,
+            label: label.clone(),
+            message: message.clone(),
+            speed_label: label,
+            user_hint: message,
+        })
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -1118,14 +1456,38 @@ fn is_newer(remote: &str, local: &str) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     gpu::apply_optimizations();
+    let max_inference_concurrency = match system_info::get_system_capabilities() {
+        Ok(caps) => calculate_max_inference_concurrency_for_selection(
+            &caps,
+            None,
+            false,
+            None,
+            None,
+            None,
+        ),
+        Err(error) => {
+            tracing::warn!(%error, "Failed to detect capabilities; falling back to default inference concurrency");
+            DEFAULT_MAX_INFERENCE_CONCURRENCY
+        }
+    }
+    .clamp(
+        DEFAULT_MAX_INFERENCE_CONCURRENCY,
+        HARD_MAX_INFERENCE_CONCURRENCY,
+    );
+
+    tracing::info!(
+        max_inference_concurrency = max_inference_concurrency,
+        "Configured inference concurrency"
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             player: Mutex::new(AudioPlayer::new()),
-            cancel_inference: Mutex::new(Arc::new(AtomicBool::new(false))),
             inference_cancel_registry: Arc::new(CancelRegistry::new()),
+            inference_semaphore: Arc::new(Semaphore::new(max_inference_concurrency)),
+            max_inference_concurrency,
             cancel_download: Mutex::new(Arc::new(AtomicBool::new(false))),
             is_downloading: Arc::new(AtomicBool::new(false)),
             runtime_cache: runtime_cache::global_runtime_cache(),
@@ -1139,7 +1501,9 @@ pub fn run() {
             write_text_file,
             write_zip_archive,
             get_system_capabilities,
+            get_inference_runtime_limits,
             validate_model_selection,
+            recommend_inference_concurrency,
             list_speaker_model_requirements,
             ensure_speaker_model_downloaded,
             get_runtime_cache_stats,

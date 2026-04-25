@@ -582,9 +582,9 @@ impl Translator {
     /// Translate multiple texts efficiently (model loaded once).
     ///
     /// This is the recommended way to translate SRT segments or multiple paragraphs.
-    pub fn translate_batch(
+    pub fn translate_batch<T: AsRef<str>>(
         &mut self,
-        texts: &[String],
+        texts: &[T],
         progress_callback: Option<&BatchProgressCallback>,
         cancel_flag: Option<&Arc<AtomicBool>>,
     ) -> Result<Vec<String>> {
@@ -592,6 +592,7 @@ impl Translator {
         let mut results = Vec::with_capacity(total);
 
         for (i, text) in texts.iter().enumerate() {
+            let text = text.as_ref();
             if let Some(callback) = progress_callback {
                 callback(i + 1, total, text);
             }
@@ -616,8 +617,8 @@ impl Drop for Translator {
 /// This is the main API for batch translation - use this for SRT files
 /// or any case where you need to translate multiple texts with the same
 /// language pair.
-pub fn translate_texts_batch(
-    texts: &[String],
+pub fn translate_texts_batch<T: AsRef<str>>(
+    texts: &[T],
     params: TranslateParams,
     progress_callback: Option<BatchProgressCallback>,
     cancel_flag: Option<Arc<AtomicBool>>,

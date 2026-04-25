@@ -3,6 +3,7 @@ use hermeneia_lib::transcribe::{
     transcribe_audio_with_reporter, ModelValidator, TranscribeParams, TranscriptionTask,
     ValidationResult, WhisperModel,
 };
+use std::sync::Arc;
 use tracing::info;
 
 mod progress;
@@ -183,7 +184,7 @@ fn main() -> anyhow::Result<()> {
 
     let progress = TranscriptionProgress::new();
 
-    let result = transcribe_audio_with_reporter(&args.input, params, &progress, None)?;
+    let result = transcribe_audio_with_reporter(&args.input, params, Arc::new(progress), None)?;
 
     println!();
     info!(

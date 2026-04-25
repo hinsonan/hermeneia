@@ -1,7 +1,5 @@
 use crate::error::{AudioError, Result};
-use crate::transcribe::types::{
-    ProgressCallback, TranscribeParams, TranscriptSegment, TranscriptionTask,
-};
+use crate::transcribe::types::{ProgressCallback, TranscriptSegment, TranscriptionTask};
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::ops::{log_softmax, softmax};
 use candle_transformers::models::whisper::{self as m, Config};
@@ -61,7 +59,8 @@ impl<'a> Decoder<'a> {
         tokenizer: &'a Tokenizer,
         config: &Config,
         device: &Device,
-        params: &TranscribeParams,
+        task: TranscriptionTask,
+        timestamps: bool,
         language_token: Option<u32>,
     ) -> Result<Self> {
         let no_timestamps_token = token_id(tokenizer, m::NO_TIMESTAMPS_TOKEN)?;
@@ -69,9 +68,7 @@ impl<'a> Decoder<'a> {
         // Suppress tokens that should not be generated
         let suppress_tokens: Vec<f32> = (0..config.vocab_size as u32)
             .map(|i| {
-                if config.suppress_tokens.contains(&i)
-                    || params.timestamps && i == no_timestamps_token
-                {
+                if config.suppress_tokens.contains(&i) || timestamps && i == no_timestamps_token {
                     f32::NEG_INFINITY
                 } else {
                     0f32
@@ -97,8 +94,8 @@ impl<'a> Decoder<'a> {
             model,
             rng: rand::rngs::StdRng::seed_from_u64(299792458),
             tokenizer,
-            task: params.task,
-            timestamps: params.timestamps,
+            task,
+            timestamps,
             max_initial_timestamp_index: None,
             _verbose: false,
             suppress_tokens,
