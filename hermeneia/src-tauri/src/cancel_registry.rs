@@ -1,12 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::Notify;
+
+const PENDING_CANCEL_TTL: Duration = Duration::from_secs(300);
+const MAX_PENDING_CANCELS: usize = 1024;
 
 #[derive(Debug, Default)]
 struct RegistryState {
     jobs: HashMap<String, JobMeta>,
     batches: HashMap<String, HashSet<String>>,
+    pending_cancels: HashMap<String, Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,10 +41,12 @@ impl CancelRegistry {
 
         static REGISTRATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let mut state = self.state.lock().expect("CancelRegistry mutex poisoned");
+        Self::prune_pending_cancels(&mut state);
+        let was_pending_cancel = state.pending_cancels.remove(&job_id).is_some();
+        let cancel_flag = Arc::new(AtomicBool::new(was_pending_cancel));
         let cancel_notify = Arc::new(Notify::new());
         let registration_id = REGISTRATION_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let mut state = self.state.lock().expect("CancelRegistry mutex poisoned");
 
         if let Some(existing) = state.jobs.get(&job_id) {
             existing
@@ -75,6 +82,10 @@ impl CancelRegistry {
                 .insert(job_id.clone());
         }
 
+        if was_pending_cancel {
+            cancel_notify.notify_waiters();
+        }
+
         JobRegistration {
             registry: Arc::clone(self),
             job_id,
@@ -86,14 +97,36 @@ impl CancelRegistry {
     }
 
     pub fn cancel_job(&self, job_id: &str) -> bool {
-        let state = self.state.lock().expect("CancelRegistry mutex poisoned");
+        let mut state = self.state.lock().expect("CancelRegistry mutex poisoned");
+        Self::prune_pending_cancels(&mut state);
         if let Some(meta) = state.jobs.get(job_id) {
             meta.cancel_flag
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             meta.cancel_notify.notify_waiters();
             return true;
         }
-        false
+        let is_new_pending = !state.pending_cancels.contains_key(job_id);
+        if is_new_pending && state.pending_cancels.len() >= MAX_PENDING_CANCELS {
+            if let Some(oldest_key) = state
+                .pending_cancels
+                .iter()
+                .min_by_key(|(_, created_at)| *created_at)
+                .map(|(job_id, _)| job_id.clone())
+            {
+                state.pending_cancels.remove(&oldest_key);
+            }
+        }
+        state
+            .pending_cancels
+            .insert(job_id.to_string(), Instant::now());
+        true
+    }
+
+    fn prune_pending_cancels(state: &mut RegistryState) {
+        let now = Instant::now();
+        state
+            .pending_cancels
+            .retain(|_, created_at| now.duration_since(*created_at) <= PENDING_CANCEL_TTL);
     }
 
     pub fn cancel_batch(&self, batch_id: &str) -> usize {
@@ -244,5 +277,17 @@ mod tests {
         assert_eq!(registry.active_jobs(), 1);
         assert_eq!(registry.cancel_batch("batch-1"), 1);
         assert!(new.cancel_flag().load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_cancel_job_before_registration_marks_registration_cancelled() {
+        let registry = Arc::new(CancelRegistry::new());
+
+        assert!(registry.cancel_job("job-a"));
+
+        let job = registry.register_job("job-a".to_string(), None);
+
+        assert!(job.cancel_flag().load(Ordering::SeqCst));
+        assert_eq!(registry.active_jobs(), 1);
     }
 }

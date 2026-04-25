@@ -115,7 +115,7 @@ impl SubtitleFile {
     }
 
     /// Create a new SubtitleFile with translated text while preserving
-    /// leading bracket labels (e.g., `[Speaker 1]`) verbatim.
+    /// leading Hermeneia speaker labels (e.g., `[Speaker 1]`) verbatim.
     pub fn with_translated_text_preserving_labels<I, S>(&self, translated_texts: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -126,21 +126,20 @@ impl SubtitleFile {
             .segments
             .iter()
             .map(|seg| {
-                let translated = translated_iter
-                    .next()
-                    .map(|t| t.as_ref().to_string())
-                    .unwrap_or_else(|| seg.text.clone());
+                let translated = translated_iter.next().map(|t| t.as_ref().to_string());
                 let (label_prefix, body) = split_leading_label_prefix(&seg.text);
 
-                let text = if let Some(prefix) = label_prefix {
-                    let translated_body = if body.trim().is_empty() {
-                        body.to_string()
-                    } else {
-                        translated
-                    };
-                    format!("{}{}", prefix, translated_body)
-                } else {
-                    translated
+                let text = match (label_prefix, translated) {
+                    (Some(prefix), Some(translated)) => {
+                        let translated_body = if body.trim().is_empty() {
+                            body.to_string()
+                        } else {
+                            translated
+                        };
+                        format!("{}{}", prefix, translated_body)
+                    }
+                    (None, Some(translated)) => translated,
+                    (_, None) => seg.text.clone(),
                 };
 
                 SubtitleSegment {
@@ -161,7 +160,7 @@ impl SubtitleFile {
     }
 
     /// Get text content prepared for translation while preserving leading
-    /// bracket labels by excluding them from translation input.
+    /// Hermeneia speaker labels by excluding them from translation input.
     pub fn get_texts_for_translation(&self) -> Vec<String> {
         self.get_texts_for_translation_ref()
             .into_iter()
@@ -170,7 +169,7 @@ impl SubtitleFile {
     }
 
     /// Get borrowed text slices prepared for translation while preserving
-    /// leading bracket labels by excluding them from translation input.
+    /// leading Hermeneia speaker labels by excluding them from translation input.
     pub fn get_texts_for_translation_ref(&self) -> Vec<&str> {
         self.segments
             .iter()
@@ -273,7 +272,108 @@ fn split_leading_label_prefix(text: &str) -> (Option<&str>, &str) {
         }
     }
 
-    (Some(&text[..prefix_end]), &text[prefix_end..])
+    let label = &text[1..closing_bracket_idx];
+    let body = &text[prefix_end..];
+
+    if !is_preserved_speaker_label(label, body) {
+        return (None, text);
+    }
+
+    (Some(&text[..prefix_end]), body)
+}
+
+fn is_preserved_speaker_label(label: &str, body: &str) -> bool {
+    let trimmed = label.trim();
+
+    if is_generated_speaker_label(trimmed) {
+        return true;
+    }
+
+    if body.trim().is_empty()
+        || is_known_bracketed_caption(trimmed)
+        || is_caption_like_label(trimmed)
+    {
+        return false;
+    }
+
+    is_custom_speaker_name(trimmed)
+}
+
+fn is_generated_speaker_label(label: &str) -> bool {
+    if let Some(speaker) = label.strip_prefix("Speaker ") {
+        return !speaker.is_empty() && speaker.chars().all(|ch| ch.is_ascii_digit());
+    }
+
+    false
+}
+
+fn is_known_bracketed_caption(label: &str) -> bool {
+    matches!(
+        label.to_ascii_lowercase().as_str(),
+        "music" | "laughter" | "applause" | "laughs" | "sighs" | "inaudible"
+    )
+}
+
+fn is_caption_like_label(label: &str) -> bool {
+    label.split_whitespace().any(|word| {
+        let normalized = word
+            .trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+            .to_ascii_lowercase();
+
+        matches!(
+            normalized.as_str(),
+            "applause"
+                | "audience"
+                | "cheering"
+                | "clapping"
+                | "closes"
+                | "closing"
+                | "crash"
+                | "crashing"
+                | "cough"
+                | "coughing"
+                | "crowd"
+                | "crying"
+                | "door"
+                | "doors"
+                | "footsteps"
+                | "laughing"
+                | "laughs"
+                | "music"
+                | "opens"
+                | "opening"
+                | "phone"
+                | "phones"
+                | "rumbles"
+                | "rumbling"
+                | "scream"
+                | "screaming"
+                | "shout"
+                | "shouting"
+                | "rings"
+                | "ringing"
+                | "silence"
+                | "sighing"
+                | "sighs"
+                | "sobbing"
+                | "thunder"
+                | "whispering"
+        )
+    })
+}
+
+fn is_custom_speaker_name(label: &str) -> bool {
+    !label.is_empty() && label.split_whitespace().all(is_title_case_name_word)
+}
+
+fn is_title_case_name_word(word: &str) -> bool {
+    let mut chars = word.chars();
+    let Some(first_char) = chars.next() else {
+        return false;
+    };
+
+    first_char.is_uppercase()
+        && chars.all(|ch| ch.is_alphabetic() || ch == '-' || ch == '\'' || ch == '.')
 }
 
 /// Errors that can occur during SRT parsing
@@ -370,8 +470,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_texts_for_translation_strips_leading_bracket_labels() {
-        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Alex Jones] Hello world\n\n2\n00:00:03,500 --> 00:00:05,500\nNo label here\n";
+    fn test_get_texts_for_translation_strips_leading_speaker_labels() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1] Hello world\n\n2\n00:00:03,500 --> 00:00:05,500\nNo label here\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
         let texts = srt_file.get_texts_for_translation();
@@ -379,15 +479,142 @@ mod tests {
     }
 
     #[test]
-    fn test_with_translated_text_preserving_labels_keeps_prefix() {
-        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Joe Rogan] Hello\n\n2\n00:00:03,500 --> 00:00:05,500\n[Alex Jones] World\n";
+    fn test_get_texts_for_translation_keeps_bracketed_captions_translatable() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Music]\n\n2\n00:00:03,500 --> 00:00:05,500\n[laughter] continues\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec!["[Music]", "[laughter] continues"]);
+    }
+
+    #[test]
+    fn test_title_case_bracketed_captions_remain_translatable() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Door Opens]\n\n2\n00:00:03,500 --> 00:00:05,500\n[Phone Rings] Hello\n\n3\n00:00:06,000 --> 00:00:07,000\n[Audience Laughs]\n\n4\n00:00:07,500 --> 00:00:08,500\n[Thunder] rumbles\n\n5\n00:00:09,000 --> 00:00:10,000\n[Birds Chirping]\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(
+            texts,
+            vec![
+                "[Door Opens]",
+                "[Phone Rings] Hello",
+                "[Audience Laughs]",
+                "[Thunder] rumbles",
+                "[Birds Chirping]"
+            ]
+        );
+
+        let rebuilt = srt_file.with_translated_text_preserving_labels(vec![
+            "[Se abre la puerta]".to_string(),
+            "[Suena el telefono] Hola".to_string(),
+            "[El publico rie]".to_string(),
+            "[Trueno] retumba".to_string(),
+            "[Pajaros cantando]".to_string(),
+        ]);
+
+        assert_eq!(rebuilt.segments[0].text, "[Se abre la puerta]");
+        assert_eq!(rebuilt.segments[1].text, "[Suena el telefono] Hola");
+        assert_eq!(rebuilt.segments[2].text, "[El publico rie]");
+        assert_eq!(rebuilt.segments[3].text, "[Trueno] retumba");
+        assert_eq!(rebuilt.segments[4].text, "[Pajaros cantando]");
+    }
+
+    #[test]
+    fn test_with_translated_text_preserving_labels_keeps_speaker_prefix() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1] Hello\n\n2\n00:00:03,500 --> 00:00:05,500\n[Speaker 23] World\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
         let translated = vec!["Hola".to_string(), "Mundo".to_string()];
         let rebuilt = srt_file.with_translated_text_preserving_labels(translated);
 
-        assert_eq!(rebuilt.segments[0].text, "[Joe Rogan] Hola");
-        assert_eq!(rebuilt.segments[1].text, "[Alex Jones] Mundo");
+        assert_eq!(rebuilt.segments[0].text, "[Speaker 1] Hola");
+        assert_eq!(rebuilt.segments[1].text, "[Speaker 23] Mundo");
+    }
+
+    #[test]
+    fn test_with_translated_text_preserving_labels_does_not_preserve_bracketed_captions() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Music]\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let rebuilt = srt_file.with_translated_text_preserving_labels(vec!["[Musica]".to_string()]);
+
+        assert_eq!(rebuilt.segments[0].text, "[Musica]");
+    }
+
+    #[test]
+    fn test_speaker_like_captions_remain_translatable() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1 laughs] Hello\n\n2\n00:00:03,500 --> 00:00:05,500\n[Speaker 1A] World\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(
+            texts,
+            vec!["[Speaker 1 laughs] Hello", "[Speaker 1A] World"]
+        );
+    }
+
+    #[test]
+    fn test_custom_speaker_label_is_preserved_when_prefixed_to_dialogue() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Alice] Hello\n\n2\n00:00:03,500 --> 00:00:05,000\n[Pastor John] Welcome\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec!["Hello", "Welcome"]);
+
+        let rebuilt = srt_file.with_translated_text_preserving_labels(vec![
+            "Hola".to_string(),
+            "Bienvenido".to_string(),
+        ]);
+        assert_eq!(rebuilt.segments[0].text, "[Alice] Hola");
+        assert_eq!(rebuilt.segments[1].text, "[Pastor John] Bienvenido");
+    }
+
+    #[test]
+    fn test_custom_speaker_label_supports_unicode_and_name_punctuation() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[José] Hola\n\n2\n00:00:03,500 --> 00:00:05,000\n[Élodie] Bonjour\n\n3\n00:00:05,500 --> 00:00:07,000\n[Dr. Smith] Hello\n\n4\n00:00:07,500 --> 00:00:09,000\n[Pastor John Jr.] Welcome\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec!["Hola", "Bonjour", "Hello", "Welcome"]);
+
+        let rebuilt = srt_file.with_translated_text_preserving_labels(vec![
+            "Hola".to_string(),
+            "Bonjour".to_string(),
+            "Hola".to_string(),
+            "Bienvenido".to_string(),
+        ]);
+
+        assert_eq!(rebuilt.segments[0].text, "[José] Hola");
+        assert_eq!(rebuilt.segments[1].text, "[Élodie] Bonjour");
+        assert_eq!(rebuilt.segments[2].text, "[Dr. Smith] Hola");
+        assert_eq!(rebuilt.segments[3].text, "[Pastor John Jr.] Bienvenido");
+    }
+
+    #[test]
+    fn test_lowercase_bracketed_caption_with_dialogue_stays_translatable() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[sighs] Hello\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec!["[sighs] Hello"]);
+    }
+
+    #[test]
+    fn test_whitespace_only_bracketed_prefix_stays_translatable() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[   ] Hello\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let texts = srt_file.get_texts_for_translation();
+        assert_eq!(texts, vec!["[   ] Hello"]);
+    }
+
+    #[test]
+    fn test_missing_translation_does_not_duplicate_speaker_label() {
+        let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1] Hello\n";
+        let srt_file = SubtitleFile::parse(srt_content).unwrap();
+
+        let rebuilt = srt_file.with_translated_text_preserving_labels(Vec::<String>::new());
+        assert_eq!(rebuilt.segments[0].text, "[Speaker 1] Hello");
     }
 
     #[test]

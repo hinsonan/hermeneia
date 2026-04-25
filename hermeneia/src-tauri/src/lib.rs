@@ -340,7 +340,11 @@ async fn acquire_inference_permit(
 
         tokio::select! {
             permit_result = inference_semaphore.clone().acquire_owned() => {
-                return permit_result.map_err(|_| "Inference queue is unavailable".to_string());
+                let permit = permit_result.map_err(|_| "Inference queue is unavailable".to_string())?;
+                if cancel_flag.load(Ordering::SeqCst) {
+                    return Err(AudioError::Cancelled.to_string());
+                }
+                return Ok(permit);
             }
             _ = cancel_notify.notified() => {
                 if cancel_flag.load(Ordering::SeqCst) {
@@ -676,9 +680,9 @@ fn clear_runtime_cache(
     kind: String,
 ) -> std::result::Result<(), String> {
     match kind.as_str() {
-        "whisper" => state.runtime_cache.clear_whisper(),
-        "speaker" => state.runtime_cache.clear_speaker(),
-        "all" => state.runtime_cache.clear_all(),
+        "whisper" => state.runtime_cache.clear_whisper().map(|_| ()),
+        "speaker" => state.runtime_cache.clear_speaker().map(|_| ()),
+        "all" => state.runtime_cache.clear_all().map(|_| ()),
         _ => {
             return Err(format!(
                 "Invalid cache kind: {} (expected whisper|speaker|all)",
@@ -686,7 +690,7 @@ fn clear_runtime_cache(
             ))
         }
     }
-    Ok(())
+    .map_err(|e| e.to_string())
 }
 
 fn decode_percent_encoded(input: &str) -> String {

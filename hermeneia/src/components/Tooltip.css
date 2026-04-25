@@ -7,18 +7,20 @@
 .tooltip-content {
   position: absolute;
   z-index: 1000;
-  padding: 0.75rem 1rem;
+  padding: 0.6rem 0.8rem;
   background: var(--aged-paper);
   color: var(--ink-dark);
   font-family: 'Crimson Text', serif;
-  font-size: 0.9rem;
-  line-height: 1.5;
+  font-size: 0.82rem;
+  line-height: 1.35;
   border-radius: 6px;
   border: 2px solid var(--border-ornament);
   box-shadow: 0 4px 12px var(--shadow-color);
   white-space: normal;
-  max-width: 400px;
-  min-width: 200px;
+  max-width: min(380px, calc(100vw - 2rem));
+  min-width: min(200px, calc(100vw - 2rem));
+  overflow-wrap: anywhere;
+  word-break: normal;
   pointer-events: none;
   opacity: 0;
   animation: tooltip-fade-in 0.2s ease forwards;
@@ -39,7 +41,7 @@
 .tooltip-top {
   bottom: calc(100% + 8px);
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(calc(-50% + var(--tooltip-shift-x, 0px)));
 }
 
 .tooltip-top::after {
@@ -55,7 +57,7 @@
 .tooltip-bottom {
   top: calc(100% + 8px);
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(calc(-50% + var(--tooltip-shift-x, 0px)));
 }
 
 .tooltip-bottom::after {

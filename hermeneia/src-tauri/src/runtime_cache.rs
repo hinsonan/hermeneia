@@ -16,6 +16,8 @@ use sysinfo::System;
 use tokenizers::Tokenizer;
 
 const CACHE_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_WHISPER_CACHE_ENTRIES: usize = 1;
+const MAX_SPEAKER_CACHE_ENTRIES: usize = 1;
 
 #[derive(Debug, Clone)]
 pub struct CachePolicy {
@@ -78,12 +80,14 @@ struct WhisperCacheEntry {
     base_runtime: Arc<WhisperRuntime>,
     pool: Arc<RuntimePool<WhisperRuntime>>,
     loaded_at: Instant,
+    pending_checkouts: usize,
 }
 
 struct SpeakerCacheEntry {
     pool: Arc<RuntimePool<SpeakerRuntime>>,
     loaded_at: Instant,
     init_state: Arc<(Mutex<SpeakerInitState>, Condvar)>,
+    pending_checkouts: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -108,6 +112,38 @@ pub struct RuntimeCacheManager {
     policy: CachePolicy,
     whisper_pool_limit: usize,
     speaker_pool_limit: usize,
+}
+
+struct PendingWhisperCheckout<'a> {
+    cache: &'a RuntimeCacheManager,
+    key: WhisperRuntimeKey,
+    active: bool,
+}
+
+impl Drop for PendingWhisperCheckout<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.cache.release_whisper_checkout(&self.key);
+            self.active = false;
+        }
+    }
+}
+
+struct PendingSpeakerCheckout<'a> {
+    cache: &'a RuntimeCacheManager,
+    key: SpeakerRuntimeKey,
+    init_state: Arc<(Mutex<SpeakerInitState>, Condvar)>,
+    active: bool,
+}
+
+impl Drop for PendingSpeakerCheckout<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.cache
+                .release_speaker_checkout(&self.key, &self.init_state);
+            self.active = false;
+        }
+    }
 }
 
 static GLOBAL_RUNTIME_CACHE: Lazy<Arc<RuntimeCacheManager>> =
@@ -158,7 +194,7 @@ impl RuntimeCacheManager {
         L: FnOnce() -> Result<WhisperRuntime>,
         U: FnOnce(&mut WhisperRuntime) -> Result<R>,
     {
-        let (pool, base_runtime) = {
+        let (pool, base_runtime, pending_checkout) = {
             let mut entries = self
                 .whisper_entries
                 .lock()
@@ -167,10 +203,21 @@ impl RuntimeCacheManager {
                     details: format!("Whisper cache lock failed: {}", e),
                 })?;
 
-            if let Some(entry) = entries.get(&key) {
+            if let Some(entry) = entries.get_mut(&key) {
                 tracing::info!(model = %key.model.model_id(), "Whisper runtime cache hit");
-                (Arc::clone(&entry.pool), Arc::clone(&entry.base_runtime))
+                entry.pending_checkouts = entry.pending_checkouts.saturating_add(1);
+                (
+                    Arc::clone(&entry.pool),
+                    Arc::clone(&entry.base_runtime),
+                    PendingWhisperCheckout {
+                        cache: self,
+                        key,
+                        active: true,
+                    },
+                )
             } else {
+                self.evict_idle_whisper_entries_for_other_keys(&mut entries, &key);
+                self.ensure_whisper_cache_slot(&entries, &key)?;
                 self.ensure_whisper_capacity(&key)?;
 
                 let started = Instant::now();
@@ -187,6 +234,7 @@ impl RuntimeCacheManager {
                         base_runtime: Arc::clone(&base_runtime),
                         pool: Arc::clone(&pool),
                         loaded_at: Instant::now(),
+                        pending_checkouts: 1,
                     },
                 );
 
@@ -196,19 +244,30 @@ impl RuntimeCacheManager {
                     "Whisper runtime cache miss: loaded keyed pool"
                 );
 
-                (pool, base_runtime)
+                (
+                    pool,
+                    base_runtime,
+                    PendingWhisperCheckout {
+                        cache: self,
+                        key,
+                        active: true,
+                    },
+                )
             }
         };
 
-        let mut lease = pool
+        let lease_result = pool
             .checkout_cancellable(
                 || {
+                    self.ensure_whisper_capacity(&key)?;
                     let worker = base_runtime.clone_whisper_runtime()?;
                     Ok::<WhisperRuntime, AudioError>(worker)
                 },
                 || is_cancelled(cancel_flag),
             )
-            .map_err(map_pool_checkout_error)?;
+            .map_err(map_pool_checkout_error);
+        drop(pending_checkout);
+        let mut lease = lease_result?;
 
         let result = use_runtime(&mut lease);
         lease.reset_kv_cache();
@@ -240,22 +299,31 @@ impl RuntimeCacheManager {
         L: FnOnce() -> Result<SpeakerRuntime>,
         U: FnOnce(&mut SpeakerRuntime) -> Result<R>,
     {
-        let (pool, init_state, should_initialize) = {
+        let (pool, init_state, should_initialize, pending_checkout) = {
             let mut entries = self.speaker_entries.lock().map_err(|e| {
                 AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
             })?;
 
-            if let Some(entry) = entries.get(&key) {
+            if let Some(entry) = entries.get_mut(&key) {
                 tracing::info!(
                     provider = %key.device.provider_string(),
                     "Speaker runtime cache hit"
                 );
+                entry.pending_checkouts = entry.pending_checkouts.saturating_add(1);
                 (
                     Arc::clone(&entry.pool),
                     Arc::clone(&entry.init_state),
                     false,
+                    PendingSpeakerCheckout {
+                        cache: self,
+                        key: key.clone(),
+                        init_state: Arc::clone(&entry.init_state),
+                        active: true,
+                    },
                 )
             } else {
+                self.evict_idle_speaker_entries_for_other_keys(&mut entries, &key);
+                self.ensure_speaker_cache_slot(&entries, &key)?;
                 self.ensure_speaker_capacity(&key)?;
 
                 let pool = Arc::new(RuntimePool::new(self.speaker_pool_limit));
@@ -273,6 +341,7 @@ impl RuntimeCacheManager {
                         pool: Arc::clone(&pool),
                         loaded_at: Instant::now(),
                         init_state: Arc::clone(&init_state),
+                        pending_checkouts: 1,
                     },
                 );
 
@@ -282,7 +351,17 @@ impl RuntimeCacheManager {
                     "Speaker runtime cache miss: initialized keyed pool"
                 );
 
-                (Arc::clone(&pool), Arc::clone(&init_state), true)
+                (
+                    Arc::clone(&pool),
+                    Arc::clone(&init_state),
+                    true,
+                    PendingSpeakerCheckout {
+                        cache: self,
+                        key: key.clone(),
+                        init_state: Arc::clone(&init_state),
+                        active: true,
+                    },
+                )
             }
         };
 
@@ -290,6 +369,7 @@ impl RuntimeCacheManager {
             let mut bootstrap_load = Some(load);
             let mut lease = match pool.checkout_cancellable(
                 || {
+                    self.ensure_speaker_capacity(&key)?;
                     let loader = bootstrap_load.take().ok_or_else(|| {
                         AudioError::DiarizationFailed(
                             "Speaker loader already consumed during bootstrap".to_string(),
@@ -299,13 +379,18 @@ impl RuntimeCacheManager {
                 },
                 || is_cancelled(cancel_flag),
             ) {
-                Ok(lease) => lease,
+                Ok(lease) => {
+                    drop(pending_checkout);
+                    lease
+                }
                 Err(RuntimePoolCheckoutError::Worker(err)) => {
+                    drop(pending_checkout);
                     self.finish_speaker_initialization(&key, &init_state, false)?;
                     self.remove_speaker_entry(&key, &init_state)?;
                     return Err(err);
                 }
                 Err(RuntimePoolCheckoutError::Cancelled) => {
+                    drop(pending_checkout);
                     self.finish_speaker_initialization(&key, &init_state, false)?;
                     self.remove_speaker_entry(&key, &init_state)?;
                     return Err(AudioError::Cancelled);
@@ -319,9 +404,10 @@ impl RuntimeCacheManager {
         self.wait_for_speaker_initialization(&key, &init_state, cancel_flag)?;
 
         let mut load_opt = Some(load);
-        let mut lease = pool
+        let lease_result = pool
             .checkout_cancellable(
                 || {
+                    self.ensure_speaker_capacity(&key)?;
                     let loader = load_opt.take().ok_or_else(|| {
                         AudioError::DiarizationFailed("Speaker loader already consumed".to_string())
                     })?;
@@ -329,7 +415,9 @@ impl RuntimeCacheManager {
                 },
                 || is_cancelled(cancel_flag),
             )
-            .map_err(map_pool_checkout_error)?;
+            .map_err(map_pool_checkout_error);
+        drop(pending_checkout);
+        let mut lease = lease_result?;
 
         use_runtime(&mut lease)
     }
@@ -419,28 +507,92 @@ impl RuntimeCacheManager {
         Ok(())
     }
 
-    pub fn clear_whisper(&self) {
+    fn release_whisper_checkout(&self, key: &WhisperRuntimeKey) {
         if let Ok(mut entries) = self.whisper_entries.lock() {
-            for entry in entries.values() {
-                tracing::info!(model = %entry.key.model.model_id(), "Clearing Whisper runtime pool");
-                crate::gpu_cleanup::synchronize_device(&entry.base_runtime.device);
+            if let Some(entry) = entries.get_mut(key) {
+                entry.pending_checkouts = entry.pending_checkouts.saturating_sub(1);
             }
-            entries.clear();
         }
     }
 
-    pub fn clear_speaker(&self) {
+    fn release_speaker_checkout(
+        &self,
+        key: &SpeakerRuntimeKey,
+        init_state: &Arc<(Mutex<SpeakerInitState>, Condvar)>,
+    ) {
         if let Ok(mut entries) = self.speaker_entries.lock() {
-            if !entries.is_empty() {
-                tracing::info!(count = entries.len(), "Clearing speaker runtime pools");
+            if let Some(entry) = entries.get_mut(key) {
+                if Arc::ptr_eq(&entry.init_state, init_state) {
+                    entry.pending_checkouts = entry.pending_checkouts.saturating_sub(1);
+                }
             }
-            entries.clear();
         }
     }
 
-    pub fn clear_all(&self) {
-        self.clear_whisper();
-        self.clear_speaker();
+    pub fn clear_whisper(&self) -> Result<usize> {
+        let mut entries = self
+            .whisper_entries
+            .lock()
+            .map_err(|e| AudioError::ModelLoad {
+                model: "runtime cache".to_string(),
+                details: format!("Whisper cache lock failed: {}", e),
+            })?;
+
+        self.ensure_no_active_whisper_entries(&entries)?;
+
+        let cleared = entries.len();
+        for entry in entries.values() {
+            tracing::info!(model = %entry.key.model.model_id(), "Clearing Whisper runtime pool");
+            crate::gpu_cleanup::synchronize_device(&entry.base_runtime.device);
+        }
+        entries.clear();
+        Ok(cleared)
+    }
+
+    pub fn clear_speaker(&self) -> Result<usize> {
+        let mut entries = self.speaker_entries.lock().map_err(|e| {
+            AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
+        })?;
+
+        self.ensure_no_active_speaker_entries(&entries)?;
+
+        let cleared = entries.len();
+        if !entries.is_empty() {
+            tracing::info!(count = entries.len(), "Clearing speaker runtime pools");
+        }
+        entries.clear();
+        Ok(cleared)
+    }
+
+    pub fn clear_all(&self) -> Result<usize> {
+        let mut whisper_entries =
+            self.whisper_entries
+                .lock()
+                .map_err(|e| AudioError::ModelLoad {
+                    model: "runtime cache".to_string(),
+                    details: format!("Whisper cache lock failed: {}", e),
+                })?;
+        let mut speaker_entries = self.speaker_entries.lock().map_err(|e| {
+            AudioError::DiarizationFailed(format!("Speaker cache lock failed: {}", e))
+        })?;
+
+        self.ensure_no_active_whisper_entries(&whisper_entries)?;
+        self.ensure_no_active_speaker_entries(&speaker_entries)?;
+
+        let cleared = whisper_entries.len() + speaker_entries.len();
+        for entry in whisper_entries.values() {
+            tracing::info!(model = %entry.key.model.model_id(), "Clearing Whisper runtime pool");
+            crate::gpu_cleanup::synchronize_device(&entry.base_runtime.device);
+        }
+        if !speaker_entries.is_empty() {
+            tracing::info!(
+                count = speaker_entries.len(),
+                "Clearing speaker runtime pools"
+            );
+        }
+        whisper_entries.clear();
+        speaker_entries.clear();
+        Ok(cleared)
     }
 
     pub fn stats(&self) -> RuntimeCacheStats {
@@ -528,6 +680,57 @@ impl RuntimeCacheManager {
         Ok(())
     }
 
+    fn evict_idle_whisper_entries_for_other_keys(
+        &self,
+        entries: &mut HashMap<WhisperRuntimeKey, WhisperCacheEntry>,
+        key: &WhisperRuntimeKey,
+    ) {
+        entries.retain(|entry_key, entry| {
+            if entry_key == key || has_active_whisper_entry(entry) {
+                return true;
+            }
+
+            tracing::info!(
+                model = %entry.key.model.model_id(),
+                "Evicting idle Whisper runtime cache entry"
+            );
+            crate::gpu_cleanup::synchronize_device(&entry.base_runtime.device);
+            false
+        });
+    }
+
+    fn ensure_whisper_cache_slot(
+        &self,
+        entries: &HashMap<WhisperRuntimeKey, WhisperCacheEntry>,
+        key: &WhisperRuntimeKey,
+    ) -> Result<()> {
+        if entries.len() < MAX_WHISPER_CACHE_ENTRIES {
+            return Ok(());
+        }
+
+        Err(AudioError::ModelLoad {
+            model: key.model.model_id().to_string(),
+            details: "Whisper runtime cache is at capacity with active leases".to_string(),
+        })
+    }
+
+    fn ensure_no_active_whisper_entries(
+        &self,
+        entries: &HashMap<WhisperRuntimeKey, WhisperCacheEntry>,
+    ) -> Result<()> {
+        if let Some((key, _)) = entries
+            .iter()
+            .find(|(_, entry)| has_active_whisper_entry(entry))
+        {
+            return Err(AudioError::ModelLoad {
+                model: key.model.model_id().to_string(),
+                details: "Cannot clear Whisper runtime cache while leases are active".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
     fn ensure_speaker_capacity(&self, key: &SpeakerRuntimeKey) -> Result<()> {
         let (min_ram_gb, min_vram_gb) = speaker_runtime_requirements(&key.model, &key.device);
 
@@ -572,6 +775,82 @@ impl RuntimeCacheManager {
 
         Ok(())
     }
+
+    fn evict_idle_speaker_entries_for_other_keys(
+        &self,
+        entries: &mut HashMap<SpeakerRuntimeKey, SpeakerCacheEntry>,
+        key: &SpeakerRuntimeKey,
+    ) {
+        entries.retain(|entry_key, entry| {
+            if entry_key == key || has_active_speaker_entry(entry) {
+                return true;
+            }
+
+            tracing::info!(
+                model = %entry_key.model.display_name(),
+                provider = %entry_key.device.provider_string(),
+                "Evicting idle speaker runtime cache entry"
+            );
+            false
+        });
+    }
+
+    fn ensure_speaker_cache_slot(
+        &self,
+        entries: &HashMap<SpeakerRuntimeKey, SpeakerCacheEntry>,
+        key: &SpeakerRuntimeKey,
+    ) -> Result<()> {
+        if entries.len() < MAX_SPEAKER_CACHE_ENTRIES {
+            return Ok(());
+        }
+
+        Err(AudioError::DiarizationFailed(format!(
+            "Speaker runtime cache is at capacity with active leases for {}:{}",
+            key.model.display_name(),
+            key.device.provider_string()
+        )))
+    }
+
+    fn ensure_no_active_speaker_entries(
+        &self,
+        entries: &HashMap<SpeakerRuntimeKey, SpeakerCacheEntry>,
+    ) -> Result<()> {
+        if let Some((key, _)) = entries
+            .iter()
+            .find(|(_, entry)| has_active_speaker_entry(entry))
+        {
+            return Err(AudioError::DiarizationFailed(format!(
+                "Cannot clear speaker runtime cache while leases are active for {}:{}",
+                key.model.display_name(),
+                key.device.provider_string()
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+fn has_active_leases<T>(pool: &RuntimePool<T>) -> bool {
+    pool.total_workers() > pool.idle_workers()
+}
+
+fn has_active_whisper_entry(entry: &WhisperCacheEntry) -> bool {
+    entry.pending_checkouts > 0 || has_active_leases(&entry.pool)
+}
+
+fn has_active_speaker_entry(entry: &SpeakerCacheEntry) -> bool {
+    entry.pending_checkouts > 0
+        || speaker_entry_initializing(entry)
+        || has_active_leases(&entry.pool)
+}
+
+fn speaker_entry_initializing(entry: &SpeakerCacheEntry) -> bool {
+    entry
+        .init_state
+        .0
+        .lock()
+        .map(|state| state.initializing)
+        .unwrap_or(true)
 }
 
 fn is_cancelled(cancel_flag: Option<&AtomicBool>) -> bool {
@@ -695,7 +974,7 @@ mod tests {
     #[test]
     fn test_clear_all_on_empty_cache_is_noop() {
         let cache = RuntimeCacheManager::new(CachePolicy::default());
-        cache.clear_all();
+        cache.clear_all().unwrap();
 
         let stats = cache.stats();
         assert!(!stats.whisper_loaded);
@@ -801,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn test_speaker_cache_hit_skips_preflight_capacity_check() {
+    fn test_speaker_cache_hit_rechecks_preflight_before_worker_creation() {
         let cache = RuntimeCacheManager::new(CachePolicy {
             ram_headroom_gb: 1_000_000.0,
             vram_headroom_gb: 1_000_000.0,
@@ -826,6 +1105,7 @@ mod tests {
                         }),
                         Condvar::new(),
                     )),
+                    pending_checkouts: 0,
                 },
             );
         }
@@ -842,11 +1122,8 @@ mod tests {
             |_runtime| Ok(()),
         );
 
-        assert!(loader_called.load(Ordering::SeqCst));
-        assert!(matches!(
-            result,
-            Err(AudioError::DiarizationFailed(msg)) if msg.contains("loader invoked on cache hit")
-        ));
+        assert!(matches!(result, Err(AudioError::OutOfMemory { .. })));
+        assert!(!loader_called.load(Ordering::SeqCst));
     }
 
     #[test]

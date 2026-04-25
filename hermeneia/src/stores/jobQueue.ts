@@ -168,7 +168,47 @@ function schedulePersist() {
 
 let unlistenTranscription: UnlistenFn | null = null;
 let unlistenAnnotation: UnlistenFn | null = null;
+let initPromise: Promise<void> | null = null;
+let initGeneration = 0;
+let concurrencyLimitRefreshSeq = 0;
 let schedulerPaused = false;
+const removeWhenTerminal = new Set<string>();
+
+function isActiveStatus(status: JobStatus): boolean {
+  return status === "running" || status === "cancelling";
+}
+
+function hasActiveJob(jobId: string): boolean {
+  return state.jobs.some((job) => job.id === jobId && isActiveStatus(job.status));
+}
+
+function restoreFailedCancellation(jobId: string, previous: QueueJob): void {
+  removeWhenTerminal.delete(jobId);
+
+  const index = findJobIndex(jobId);
+  if (index < 0 || state.jobs[index].status !== "cancelling") return;
+
+  setState("jobs", index, (job) => ({
+    ...job,
+    status: previous.status,
+    progress: previous.progress,
+  }));
+}
+
+function removeJobIfClearPending(jobId: string): boolean {
+  if (!removeWhenTerminal.delete(jobId)) return false;
+
+  setState(
+    produce((draft) => {
+      draft.jobs = draft.jobs.filter((job) => job.id !== jobId);
+      if (draft.selectedJobId === jobId) {
+        draft.selectedJobId = draft.jobs[0]?.id ?? null;
+      }
+    })
+  );
+
+  return true;
+}
 
 function isCancelJobCommandUnavailable(err: unknown): boolean {
   const message = String(err).toLowerCase();
@@ -194,41 +234,77 @@ export async function initJobQueue(): Promise<void> {
     return;
   }
 
-  try {
-    const transcriptionUnlisten = await listen<TranscriptionProgress>("transcription-progress", (event) => {
-      const payload = event.payload;
-      if (!payload?.job_id) return;
-      updateJobProgress(payload.job_id, payload);
-    });
-
-    const annotationUnlisten = await listen<AnnotationProgress>("annotation-progress", (event) => {
-      const payload = event.payload;
-      if (!payload?.job_id) return;
-      updateJobProgress(payload.job_id, payload);
-    });
-
-    unlistenTranscription = transcriptionUnlisten;
-    unlistenAnnotation = annotationUnlisten;
-    setState("listenersInitialized", true);
-    setState("queueError", null);
-  } catch (err) {
-    if (unlistenTranscription) {
-      unlistenTranscription();
-      unlistenTranscription = null;
-    }
-    if (unlistenAnnotation) {
-      unlistenAnnotation();
-      unlistenAnnotation = null;
-    }
-    setState("listenersInitialized", false);
-    setState("queueError", `Queue initialization failed: ${String(err)}`);
-    return;
+  if (initPromise) {
+    return initPromise;
   }
 
-  await loadCapabilities();
+  const generation = initGeneration;
+  const promise = (async () => {
+    let transcriptionUnlisten: UnlistenFn | null = null;
+    let annotationUnlisten: UnlistenFn | null = null;
+
+    try {
+      transcriptionUnlisten = await listen<TranscriptionProgress>("transcription-progress", (event) => {
+        const payload = event.payload;
+        if (!payload?.job_id) return;
+        updateJobProgress(payload.job_id, payload);
+      });
+      if (generation !== initGeneration) {
+        transcriptionUnlisten();
+        return;
+      }
+      unlistenTranscription = transcriptionUnlisten;
+
+      annotationUnlisten = await listen<AnnotationProgress>("annotation-progress", (event) => {
+        const payload = event.payload;
+        if (!payload?.job_id) return;
+        updateJobProgress(payload.job_id, payload);
+      });
+      if (generation !== initGeneration) {
+        annotationUnlisten();
+        return;
+      }
+      unlistenAnnotation = annotationUnlisten;
+
+      setState("listenersInitialized", true);
+      setState("queueError", null);
+    } catch (err) {
+      if (unlistenTranscription) {
+        unlistenTranscription();
+        unlistenTranscription = null;
+      } else if (transcriptionUnlisten) {
+        transcriptionUnlisten();
+      }
+      if (unlistenAnnotation) {
+        unlistenAnnotation();
+        unlistenAnnotation = null;
+      } else if (annotationUnlisten) {
+        annotationUnlisten();
+      }
+      if (generation === initGeneration) {
+        setState("listenersInitialized", false);
+        setState("queueError", `Queue initialization failed: ${String(err)}`);
+      }
+      return;
+    }
+
+    if (generation === initGeneration) {
+      await loadCapabilities();
+    }
+  })().finally(() => {
+    if (initPromise === promise) {
+      initPromise = null;
+    }
+  });
+
+  initPromise = promise;
+
+  return initPromise;
 }
 
 export function teardownJobQueue() {
+  initGeneration += 1;
+  initPromise = null;
   if (unlistenTranscription) unlistenTranscription();
   if (unlistenAnnotation) unlistenAnnotation();
   unlistenTranscription = null;
@@ -323,10 +399,17 @@ export function setMaxConcurrency(n: number) {
 }
 
 async function refreshInferenceConcurrencyLimit(): Promise<void> {
+  const seq = ++concurrencyLimitRefreshSeq;
+  const model = state.defaults.model;
+
   const limits = await invoke<InferenceRuntimeLimits>("recommend_inference_concurrency", {
-    whisperModel: state.defaults.model,
+    whisperModel: model,
     whisperForceCpu: false,
   });
+
+  if (seq !== concurrencyLimitRefreshSeq || state.defaults.model !== model) {
+    return;
+  }
 
   const maxAllowed = Math.max(1, Math.min(4, limits.max_inference_concurrency | 0));
   setState("maxConcurrencyLimit", maxAllowed);
@@ -428,60 +511,50 @@ export async function cancelJob(jobId: string): Promise<void> {
   try {
     const cancelled = await invoke<boolean>("cancel_job", { jobId });
     if (!cancelled) {
-      throw new Error(`Job '${jobId}' is not active in backend cancel registry`);
+      await invoke("cancel_inference");
     }
-    setState("jobs", (job) => job.id === jobId, (job) => ({
-      ...job,
-      status: "cancelled" as JobStatus,
-      error: null,
-      progress: null,
-    }));
   } catch (err) {
     if (isCancelJobCommandUnavailable(err)) {
       try {
         await invoke("cancel_inference");
-        setState("jobs", (job) => job.id === jobId, (job) => ({
-          ...job,
-          status: "cancelled" as JobStatus,
-          error: null,
-          progress: null,
-        }));
       } catch (fallbackErr) {
-        setState("jobs", (job) => job.id === jobId, (job) => ({
-          ...job,
-          status: "running" as JobStatus,
-        }));
         setState("queueError", `Failed to cancel job '${jobId}': ${String(fallbackErr)}`);
+        restoreFailedCancellation(jobId, current);
       }
     } else {
-      setState("jobs", (job) => job.id === jobId, (job) => ({
-        ...job,
-        status: "running" as JobStatus,
-      }));
       setState("queueError", `Failed to cancel job '${jobId}': ${String(err)}`);
+      restoreFailedCancellation(jobId, current);
     }
   } finally {
     schedulePersist();
-    runScheduler();
+    if (!hasActiveJob(jobId)) {
+      runScheduler();
+    }
   }
 }
 
 export async function cancelAllRunning(): Promise<void> {
   await withSchedulerPaused(async () => {
-    const active = state.jobs.filter((job) => job.status === "running" || job.status === "cancelling");
+    const active = state.jobs.filter((job) => isActiveStatus(job.status));
     await Promise.allSettled(active.map((job) => cancelJob(job.id)));
   });
 }
 
 export async function cancelAllAndClear(): Promise<void> {
   await withSchedulerPaused(async () => {
-    const active = state.jobs.filter((job) => job.status === "running" || job.status === "cancelling");
+    const active = state.jobs.filter((job) => isActiveStatus(job.status));
+    const activeIds = new Set(active.map((job) => job.id));
+    activeIds.forEach((id) => removeWhenTerminal.add(id));
     await Promise.allSettled(active.map((job) => cancelJob(job.id)));
 
     setState(
       produce((draft) => {
-        draft.jobs = [];
-        draft.selectedJobId = null;
+        draft.jobs = draft.jobs.filter(
+          (job) => activeIds.has(job.id) && isActiveStatus(job.status)
+        );
+        if (!draft.jobs.find((job) => job.id === draft.selectedJobId)) {
+          draft.selectedJobId = draft.jobs[0]?.id ?? null;
+        }
         draft.startArmed = false;
       })
     );
@@ -566,7 +639,7 @@ export function retryFailedJobs(): void {
 
 export function removeJob(jobId: string): void {
   const target = state.jobs.find((job) => job.id === jobId);
-  if (!target || target.status === "running" || target.status === "cancelling") return;
+  if (!target || isActiveStatus(target.status)) return;
   setState(
     produce((draft) => {
       draft.jobs = draft.jobs.filter((job) => job.id !== jobId);
@@ -591,7 +664,7 @@ export function clearCompleted(): void {
 }
 
 export function clearAll(): void {
-  const running = state.jobs.filter((j) => j.status === "running" || j.status === "cancelling");
+  const running = state.jobs.filter((j) => isActiveStatus(j.status));
   if (running.length > 0) return; // caller should cancel running jobs first
   setState(
     produce((draft) => {
@@ -619,7 +692,7 @@ function runScheduler(): void {
   schedulerRunning = true;
   try {
     while (true) {
-      const runningCount = state.jobs.filter((job) => job.status === "running" || job.status === "cancelling").length;
+      const runningCount = state.jobs.filter((job) => isActiveStatus(job.status)).length;
       const slots = state.maxConcurrency - runningCount;
       if (slots <= 0) break;
       const next = state.jobs.find((job) => job.status === "queued");
@@ -628,7 +701,7 @@ function runScheduler(): void {
     }
 
     const hasQueued = state.jobs.some((job) => job.status === "queued");
-    const hasActive = state.jobs.some((job) => job.status === "running" || job.status === "cancelling");
+    const hasActive = state.jobs.some((job) => isActiveStatus(job.status));
     if (!hasQueued && !hasActive && state.startArmed) {
       setState("startArmed", false);
     }
@@ -688,6 +761,7 @@ async function runJob(jobId: string): Promise<void> {
             error: null,
             progress: null,
           }));
+          removeJobIfClearPending(jobId);
           return;
         }
 
@@ -730,6 +804,7 @@ async function runJob(jobId: string): Promise<void> {
             error: null,
             progress: null,
           }));
+          removeJobIfClearPending(jobId);
           return;
         }
 
@@ -756,9 +831,8 @@ async function runJob(jobId: string): Promise<void> {
     const freshIndex = findJobIndex(jobId);
     if (freshIndex < 0) return;
     const current = state.jobs[freshIndex];
-    // User-initiated cancel already set status=cancelled; don't overwrite.
-    if (current.status === "cancelled") {
-      // leave as cancelled
+    if (current.status === "cancelled" || current.status === "completed" || current.status === "failed") {
+      return;
     } else if (current.status === "cancelling") {
       setState("jobs", freshIndex, (c) => ({
         ...c,
@@ -766,19 +840,22 @@ async function runJob(jobId: string): Promise<void> {
         error: null,
         progress: null,
       }));
-    } else if (errStr.includes("cancelled") || errStr.includes("Operation cancelled")) {
+      removeJobIfClearPending(jobId);
+    } else if (current.status === "running" && (errStr.includes("cancelled") || errStr.includes("Operation cancelled"))) {
       setState("jobs", freshIndex, (c) => ({
         ...c,
         status: "cancelled" as JobStatus,
         error: null,
         progress: null,
       }));
-    } else {
+      removeJobIfClearPending(jobId);
+    } else if (current.status === "running") {
       setState("jobs", freshIndex, (c) => ({
         ...c,
         status: "failed" as JobStatus,
         error: errStr,
       }));
+      removeJobIfClearPending(jobId);
     }
   } finally {
     schedulePersist();

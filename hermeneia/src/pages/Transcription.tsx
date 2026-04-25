@@ -193,7 +193,7 @@ const getAnnotatedSegmentsWithNames = (job: QueueJob): AnnotatedResult["segments
   if (!job.annotatedResult) return [];
   return job.annotatedResult.segments.map((seg) => ({
     ...seg,
-    speaker_name: job.speakerNames[String(seg.speaker)] || seg.speaker_name || `Speaker ${seg.speaker}`,
+    speaker_name: job.speakerNames[String(seg.speaker)] ?? seg.speaker_name ?? `Speaker ${seg.speaker}`,
   }));
 };
 
@@ -666,7 +666,7 @@ const JobInspector: Component<JobInspectorProps> = (props) => {
           <label class="tx-speaker-row">
             <span>Speaker {id}</span>
             <input
-              value={job().speakerNames[String(id)] || `Speaker ${id}`}
+              value={job().speakerNames[String(id)] ?? `Speaker ${id}`}
               onInput={(e) => updateSpeakerName(job().id, id, e.currentTarget.value)}
             />
           </label>

@@ -99,6 +99,14 @@ function normalizeStatus(status: unknown): TranslationJobStatus {
   return "queued";
 }
 
+function isActiveTranslationStatus(status: TranslationJobStatus): boolean {
+  return status === "waiting_resources"
+    || status === "downloading_model"
+    || status === "loading_model"
+    || status === "running"
+    || status === "cancelling";
+}
+
 function normalizeFailureType(value: unknown): TranslationFailureType | null {
   if (
     value === "oom"
@@ -356,11 +364,15 @@ function schedulePersist() {
 
 let unlistenTranslation: UnlistenFn | null = null;
 let unlistenDownload: UnlistenFn | null = null;
+let initPromise: Promise<void> | null = null;
+let initGeneration = 0;
+let concurrencyLimitRefreshSeq = 0;
 
 let schedulerPaused = false;
 let schedulerRunning = false;
 
 const runControllers = new Map<string, AbortController>();
+const removeWhenTerminal = new Set<string>();
 
 interface DownloadWaiter {
   jobId: string;
@@ -383,6 +395,39 @@ function isCancelJobCommandUnavailable(err: unknown): boolean {
     || message.includes("unknown command: cancel_job")
     || message.includes("command cancel_job not found")
     || (message.includes("not found") && message.includes("cancel_job"));
+}
+
+function hasActiveTranslationJob(jobId: string): boolean {
+  return state.jobs.some((job) => job.id === jobId && isActiveTranslationStatus(job.status));
+}
+
+function restoreFailedCancellation(jobId: string, previous: TranslationQueueJob): void {
+  removeWhenTerminal.delete(jobId);
+
+  const index = findJobIndex(jobId);
+  if (index < 0 || state.jobs[index].status !== "cancelling") return;
+
+  setState("jobs", index, (job) => ({
+    ...job,
+    status: previous.status,
+    progress: previous.progress,
+    downloadProgress: previous.downloadProgress,
+  }));
+}
+
+function removeTranslationJobIfClearPending(jobId: string): boolean {
+  if (!removeWhenTerminal.delete(jobId)) return false;
+
+  setState(
+    produce((draft) => {
+      draft.jobs = draft.jobs.filter((job) => job.id !== jobId);
+      if (draft.selectedJobId === jobId) {
+        draft.selectedJobId = draft.jobs[0]?.id ?? null;
+      }
+    })
+  );
+
+  return true;
 }
 
 function isAbortError(err: unknown): boolean {
@@ -760,7 +805,8 @@ async function runJob(jobId: string): Promise<void> {
         progress: null,
         downloadProgress: null,
       }));
-    } else {
+      removeTranslationJobIfClearPending(jobId);
+    } else if (completedJob.status === "loading_model" || completedJob.status === "running") {
       setState("jobs", completedIndex, (job) => ({
         ...job,
         status: "completed",
@@ -783,7 +829,11 @@ async function runJob(jobId: string): Promise<void> {
     if (freshIndex < 0) return;
     const current = state.jobs[freshIndex];
 
-    if (current.status === "cancelled" || current.status === "cancelling" || failureType === "cancelled") {
+    if (current.status === "cancelled" || current.status === "completed" || current.status === "failed") {
+      return;
+    }
+
+    if (current.status === "cancelling" || (isActiveTranslationStatus(current.status) && failureType === "cancelled")) {
       setState("jobs", freshIndex, (job) => ({
         ...job,
         status: "cancelled",
@@ -792,7 +842,8 @@ async function runJob(jobId: string): Promise<void> {
         downloadProgress: null,
         lastFailureType: "cancelled",
       }));
-    } else if (isAbortError(err)) {
+      removeTranslationJobIfClearPending(jobId);
+    } else if (isActiveTranslationStatus(current.status) && isAbortError(err)) {
       setState("jobs", freshIndex, (job) => ({
         ...job,
         status: "cancelled",
@@ -801,7 +852,8 @@ async function runJob(jobId: string): Promise<void> {
         downloadProgress: null,
         lastFailureType: "cancelled",
       }));
-    } else {
+      removeTranslationJobIfClearPending(jobId);
+    } else if (isActiveTranslationStatus(current.status)) {
       setState("jobs", freshIndex, (job) => ({
         ...job,
         status: "failed",
@@ -810,6 +862,7 @@ async function runJob(jobId: string): Promise<void> {
         progress: job.progress,
         downloadProgress: null,
       }));
+      removeTranslationJobIfClearPending(jobId);
     }
   } finally {
     runControllers.delete(jobId);
@@ -821,57 +874,94 @@ async function runJob(jobId: string): Promise<void> {
 export async function initTranslationJobQueue(): Promise<void> {
   if (state.listenersInitialized) return;
 
-  try {
-    await refreshInferenceConcurrencyLimit();
+  if (initPromise) {
+    return initPromise;
+  }
 
-    const translationUnlisten = await listen<TranslationProgress>("translation-progress", (event) => {
-      const payload = event.payload;
-      if (!payload) return;
+  const generation = initGeneration;
+  const promise = (async () => {
+    let translationUnlisten: UnlistenFn | null = null;
+    let downloadUnlisten: UnlistenFn | null = null;
 
-      if (payload.job_id) {
-        updateTranslationProgress(payload.job_id, payload);
+    try {
+      await refreshInferenceConcurrencyLimit();
+      if (generation !== initGeneration) {
         return;
       }
 
-      const active = state.jobs.filter(
-        (job) =>
-          job.status === "loading_model"
-          || job.status === "running"
-          || job.status === "waiting_resources"
-      );
-      if (active.length === 1) {
-        updateTranslationProgress(active[0].id, {
-          ...payload,
-          job_id: active[0].id,
-        });
+      translationUnlisten = await listen<TranslationProgress>("translation-progress", (event) => {
+        const payload = event.payload;
+        if (!payload) return;
+
+        if (payload.job_id) {
+          updateTranslationProgress(payload.job_id, payload);
+          return;
+        }
+
+        const active = state.jobs.filter(
+          (job) =>
+            job.status === "loading_model"
+            || job.status === "running"
+            || job.status === "waiting_resources"
+        );
+        if (active.length === 1) {
+          updateTranslationProgress(active[0].id, {
+            ...payload,
+            job_id: active[0].id,
+          });
+        }
+      });
+      if (generation !== initGeneration) {
+        translationUnlisten();
+        return;
       }
-    });
+      unlistenTranslation = translationUnlisten;
 
-    const downloadUnlisten = await listen<DownloadProgress>("download-progress", (event) => {
-      const payload = event.payload;
-      if (!payload?.model_id) return;
-      updateDownloadProgress(payload);
-    });
+      downloadUnlisten = await listen<DownloadProgress>("download-progress", (event) => {
+        const payload = event.payload;
+        if (!payload?.model_id) return;
+        updateDownloadProgress(payload);
+      });
+      if (generation !== initGeneration) {
+        downloadUnlisten();
+        return;
+      }
+      unlistenDownload = downloadUnlisten;
 
-    unlistenTranslation = translationUnlisten;
-    unlistenDownload = downloadUnlisten;
-    setState("listenersInitialized", true);
-    setState("queueError", null);
-  } catch (err) {
-    if (unlistenTranslation) {
-      unlistenTranslation();
-      unlistenTranslation = null;
+      setState("listenersInitialized", true);
+      setState("queueError", null);
+    } catch (err) {
+      if (unlistenTranslation) {
+        unlistenTranslation();
+        unlistenTranslation = null;
+      } else if (translationUnlisten) {
+        translationUnlisten();
+      }
+      if (unlistenDownload) {
+        unlistenDownload();
+        unlistenDownload = null;
+      } else if (downloadUnlisten) {
+        downloadUnlisten();
+      }
+      if (generation === initGeneration) {
+        setState("listenersInitialized", false);
+        setState("queueError", `Translation queue initialization failed: ${String(err)}`);
+      }
     }
-    if (unlistenDownload) {
-      unlistenDownload();
-      unlistenDownload = null;
+  })().finally(() => {
+    if (initPromise === promise) {
+      initPromise = null;
     }
-    setState("listenersInitialized", false);
-    setState("queueError", `Translation queue initialization failed: ${String(err)}`);
-  }
+  });
+
+  initPromise = promise;
+
+  return initPromise;
 }
 
 export function teardownTranslationJobQueue() {
+  initGeneration += 1;
+  initPromise = null;
   if (unlistenTranslation) unlistenTranslation();
   if (unlistenDownload) unlistenDownload();
   unlistenTranslation = null;
@@ -896,17 +986,35 @@ export function setTranslationMaxConcurrency(n: number) {
 }
 
 async function refreshInferenceConcurrencyLimit(): Promise<void> {
-  const limits = await invoke<InferenceRuntimeLimits>("recommend_inference_concurrency", {
-    translationStrategy: state.defaults.strategy,
-    translationSourceLang: state.defaults.sourceLang,
-    translationTargetLang: state.defaults.targetLang,
-  });
+  const seq = ++concurrencyLimitRefreshSeq;
+  const snapshot = { ...state.defaults };
 
-  const maxAllowed = Math.max(1, Math.min(4, limits.max_inference_concurrency | 0));
-  setState("maxConcurrencyLimit", maxAllowed);
-  if (state.maxConcurrency > maxAllowed) {
-    setState("maxConcurrency", maxAllowed);
-    schedulePersist();
+  try {
+    const limits = await invoke<InferenceRuntimeLimits>("recommend_inference_concurrency", {
+      translationStrategy: snapshot.strategy,
+      translationSourceLang: snapshot.sourceLang,
+      translationTargetLang: snapshot.targetLang,
+    });
+
+    if (
+      seq !== concurrencyLimitRefreshSeq
+      || state.defaults.strategy !== snapshot.strategy
+      || state.defaults.sourceLang !== snapshot.sourceLang
+      || state.defaults.targetLang !== snapshot.targetLang
+    ) {
+      return;
+    }
+
+    const maxAllowed = Math.max(1, Math.min(4, limits.max_inference_concurrency | 0));
+    setState("maxConcurrencyLimit", maxAllowed);
+    if (state.maxConcurrency > maxAllowed) {
+      setState("maxConcurrency", maxAllowed);
+      schedulePersist();
+    }
+  } catch (err) {
+    if (seq === concurrencyLimitRefreshSeq) {
+      console.warn("Failed to refresh translation inference concurrency limit:", err);
+    }
   }
 }
 
@@ -1010,7 +1118,6 @@ export async function cancelTranslationJob(jobId: string): Promise<void> {
   schedulePersist();
 
   const controller = runControllers.get(jobId);
-  controller?.abort();
 
   const canUseBackendCancel =
     current.status === "loading_model"
@@ -1029,45 +1136,25 @@ export async function cancelTranslationJob(jobId: string): Promise<void> {
       }
     }
 
-    setState("jobs", (job) => job.id === jobId, (job) => ({
-      ...job,
-      status: "cancelled",
-      error: null,
-      progress: null,
-      downloadProgress: null,
-      lastFailureType: "cancelled",
-    }));
+    controller?.abort();
   } catch (err) {
     if (isCancelJobCommandUnavailable(err)) {
       try {
         await invoke("cancel_inference");
-        setState("jobs", (job) => job.id === jobId, (job) => ({
-          ...job,
-          status: "cancelled",
-          error: null,
-          progress: null,
-          downloadProgress: null,
-          lastFailureType: "cancelled",
-        }));
+        controller?.abort();
       } catch (fallbackErr) {
-        setState("jobs", (job) => job.id === jobId, (job) => ({
-          ...job,
-          status: "failed",
-          error: `Failed to cancel job: ${String(fallbackErr)}`,
-          lastFailureType: "transient",
-        }));
+        setState("queueError", `Failed to cancel job: ${String(fallbackErr)}`);
+        restoreFailedCancellation(jobId, current);
       }
     } else {
-      setState("jobs", (job) => job.id === jobId, (job) => ({
-        ...job,
-        status: "failed",
-        error: `Failed to cancel job: ${String(err)}`,
-        lastFailureType: "transient",
-      }));
+      setState("queueError", `Failed to cancel job: ${String(err)}`);
+      restoreFailedCancellation(jobId, current);
     }
   } finally {
     schedulePersist();
-    runScheduler();
+    if (!hasActiveTranslationJob(jobId)) {
+      runScheduler();
+    }
   }
 }
 
@@ -1082,12 +1169,18 @@ export async function clearAllTranslationJobs(): Promise<void> {
         || job.status === "cancelling"
     );
 
+    active.forEach((job) => removeWhenTerminal.add(job.id));
     await Promise.allSettled(active.map((job) => cancelTranslationJob(job.id)));
 
     setState(
       produce((draft) => {
-        draft.jobs = [];
-        draft.selectedJobId = null;
+        const activeIds = new Set(active.map((job) => job.id));
+        draft.jobs = draft.jobs.filter(
+          (job) => activeIds.has(job.id) && isActiveTranslationStatus(job.status)
+        );
+        if (!draft.jobs.find((job) => job.id === draft.selectedJobId)) {
+          draft.selectedJobId = draft.jobs[0]?.id ?? null;
+        }
         draft.startArmed = false;
       })
     );
@@ -1118,14 +1211,10 @@ export async function removeTranslationJob(jobId: string): Promise<void> {
   if (index < 0) return;
   const target = state.jobs[index];
 
-  if (
-    target.status === "waiting_resources"
-    || target.status === "downloading_model"
-    || target.status === "loading_model"
-    || target.status === "running"
-    || target.status === "cancelling"
-  ) {
-    await cancelTranslationJob(jobId);
+  if (isActiveTranslationStatus(target.status)) {
+    removeWhenTerminal.add(jobId);
+    void cancelTranslationJob(jobId);
+    return;
   }
 
   setState(

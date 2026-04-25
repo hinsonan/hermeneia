@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -32,7 +32,6 @@ import {
   setTranslationDefault,
   setTranslationMaxConcurrency,
   sortedTranslationJobs,
-  teardownTranslationJobQueue,
   translationActiveCount,
   translationCancelledCount,
   translationCompletedCount,
@@ -281,10 +280,6 @@ const Translation: Component = () => {
     void initTranslationJobQueue();
   });
 
-  onCleanup(() => {
-    teardownTranslationJobQueue();
-  });
-
   createEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -302,12 +297,23 @@ const Translation: Component = () => {
       return;
     }
 
+    const requestedSourceLang = src;
+    const requestedTargetLang = tgt;
+
     void invoke<boolean>("check_marian_pair_supported", {
-      sourceLang: src,
-      targetLang: tgt,
+      sourceLang: requestedSourceLang,
+      targetLang: requestedTargetLang,
     })
-      .then((supported) => setMarianSupported(supported))
-      .catch(() => setMarianSupported(false));
+      .then((supported) => {
+        if (defaults().sourceLang === requestedSourceLang && defaults().targetLang === requestedTargetLang) {
+          setMarianSupported(supported);
+        }
+      })
+      .catch(() => {
+        if (defaults().sourceLang === requestedSourceLang && defaults().targetLang === requestedTargetLang) {
+          setMarianSupported(false);
+        }
+      });
   });
 
   createEffect(() => {
@@ -712,7 +718,7 @@ const TranslationInspector: Component<TranslationInspectorProps> = (props) => {
           <Show when={canRetry()}>
             <button class="tx-btn" onClick={() => retryFailedTranslationJob(job().id)}>Retry</button>
           </Show>
-          <button class="tx-btn" onClick={() => void removeTranslationJob(job().id)} disabled={canCancel()}>
+          <button class="tx-btn" onClick={() => void removeTranslationJob(job().id)}>
             Remove
           </button>
         </div>
@@ -891,7 +897,12 @@ const TranslationSettingsPanel: Component<TranslationSettingsPanelProps> = (prop
         <label class="tx-field-label">
           Translation mode
           <InfoIcon
-            content="Auto (recommended) uses the fast model when available. Fast only runs only language pairs supported by the fast model. More languages (slower) always uses a larger, more general model."
+            content={(
+              <span class="trq-tooltip-compact">
+                Auto uses fast when possible. Fast only supports fewer language pairs. More languages (slower)
+                always uses the larger general model.
+              </span>
+            )}
             position="right"
           />
         </label>
