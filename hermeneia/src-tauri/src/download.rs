@@ -525,13 +525,8 @@ fn download_with_progress(
     let cancel_flag_for_thread = cancel_flag.clone();
 
     // Spawn the actual download in a thread (build a fresh Api+Repo inside to avoid lifetime issues)
-    let download_result = Arc::new(std::sync::Mutex::new(
-        None::<std::result::Result<PathBuf, String>>,
-    ));
-    let result_clone = download_result.clone();
-
-    let handle = std::thread::spawn(move || {
-        let res = (|| -> std::result::Result<PathBuf, String> {
+    let handle = std::thread::spawn(move || -> std::result::Result<PathBuf, String> {
+        (|| -> std::result::Result<PathBuf, String> {
             let api = ApiBuilder::new()
                 .with_progress(false)
                 .build()
@@ -562,14 +557,14 @@ fn download_with_progress(
 
             repo.download_with_progress(&file_name_owned, reporter)
                 .map_err(|e| format!("Failed to download {}: {}", file_name_owned, e))
-        })();
-        *result_clone.lock().unwrap() = Some(res);
+        })()
     });
 
-    // Monitor loop: keep cancellation responsive while download thread runs.
-    loop {
-        // Check cancellation
-        if cancel_flag.load(Ordering::SeqCst) {
+    let cancellation_requested = wait_for_download_thread_completion(
+        &handle,
+        cancel_flag.as_ref(),
+        std::time::Duration::from_millis(100),
+        || {
             let downloaded = file_downloaded.load(Ordering::Relaxed);
             let model_total = total_bytes.or_else(|| {
                 let file_total = file_total.load(Ordering::Relaxed);
@@ -593,38 +588,129 @@ fn download_with_progress(
                     phase: "cancelled".to_string(),
                 },
             );
-            return Err(AudioError::DownloadCancelled);
+        },
+    );
+
+    // Collect the result
+    let result = match handle.join() {
+        Ok(result) => result,
+        Err(_) => {
+            return Err(AudioError::ModelDownload {
+                model: model_id.to_string(),
+                details: "Download thread panicked".to_string(),
+            });
+        }
+    };
+
+    if cancellation_requested {
+        return Err(AudioError::DownloadCancelled);
+    }
+
+    match result {
+        Ok(_) => {
+            let downloaded = file_downloaded.load(Ordering::Relaxed);
+            Ok(downloaded)
+        }
+        Err(e) => Err(AudioError::ModelDownload {
+            model: model_id.to_string(),
+            details: e,
+        }),
+    }
+}
+
+fn wait_for_download_thread_completion(
+    handle: &std::thread::JoinHandle<std::result::Result<PathBuf, String>>,
+    cancel_flag: &AtomicBool,
+    poll_interval: std::time::Duration,
+    mut on_cancel: impl FnMut(),
+) -> bool {
+    let mut cancellation_requested = false;
+
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            if !cancellation_requested {
+                cancellation_requested = true;
+                on_cancel();
+            }
         }
 
-        // Check if download thread finished
         if handle.is_finished() {
             break;
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(poll_interval);
     }
 
-    // Collect the result
-    if handle.join().is_err() {
-        return Err(AudioError::ModelDownload {
-            model: model_id.to_string(),
-            details: "Download thread panicked".to_string(),
+    cancellation_requested
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_wait_for_download_thread_completion_waits_for_worker_after_cancel() {
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let worker_finished = Arc::new(AtomicBool::new(false));
+        let worker_finished_for_thread = worker_finished.clone();
+
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            worker_finished_for_thread.store(true, Ordering::SeqCst);
+            Ok::<PathBuf, String>(PathBuf::from("/tmp/mock"))
         });
+
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        cancel_flag.store(true, Ordering::SeqCst);
+
+        let cancel_events = Arc::new(AtomicUsize::new(0));
+        let cancel_events_for_closure = cancel_events.clone();
+
+        let cancelled = wait_for_download_thread_completion(
+            &handle,
+            cancel_flag.as_ref(),
+            std::time::Duration::from_millis(2),
+            || {
+                cancel_events_for_closure.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+
+        assert!(cancelled);
+        assert_eq!(cancel_events.load(Ordering::SeqCst), 1);
+        assert!(worker_finished.load(Ordering::SeqCst));
+
+        let joined = handle.join().expect("worker should not panic");
+        assert!(joined.is_ok());
     }
-    let result = download_result.lock().unwrap().take();
-    match result {
-        Some(Ok(_)) => {
-            let downloaded = file_downloaded.load(Ordering::Relaxed);
-            Ok(downloaded)
-        }
-        Some(Err(e)) => Err(AudioError::ModelDownload {
-            model: model_id.to_string(),
-            details: e,
-        }),
-        None => Err(AudioError::ModelDownload {
-            model: model_id.to_string(),
-            details: "Download thread completed without result".to_string(),
-        }),
+
+    #[test]
+    fn test_wait_for_download_thread_completion_reports_not_cancelled() {
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            Ok::<PathBuf, String>(PathBuf::from("/tmp/mock"))
+        });
+
+        let cancel_events = Arc::new(AtomicUsize::new(0));
+        let cancel_events_for_closure = cancel_events.clone();
+
+        let cancelled = wait_for_download_thread_completion(
+            &handle,
+            cancel_flag.as_ref(),
+            std::time::Duration::from_millis(2),
+            || {
+                cancel_events_for_closure.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+
+        assert!(!cancelled);
+        assert_eq!(cancel_events.load(Ordering::SeqCst), 0);
+
+        let joined = handle.join().expect("worker should not panic");
+        assert!(joined.is_ok());
     }
 }
 

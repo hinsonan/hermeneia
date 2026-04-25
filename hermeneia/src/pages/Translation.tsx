@@ -802,22 +802,24 @@ const TranslationInspector: Component<TranslationInspectorProps> = (props) => {
               </div>
 
               <div class="tx-panel">
-                <div class="tx-panel-head">
+                <div class="tx-panel-head trq-translated-head">
                   <h3>Translated ({getLanguageName(res().target_language)})</h3>
+                  <button
+                    class="tx-tab-download trq-translated-download"
+                    onClick={() => void exportJobResult(job())}
+                    title={`Download .${downloadExtension()}`}
+                    aria-label={`Download translated file as .${downloadExtension()}`}
+                  >
+                    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+                      <path d="M12 3v12" />
+                      <path d="M7 10l5 5 5-5" />
+                      <path d="M5 20h14" />
+                    </svg>
+                    <span>.{downloadExtension()}</span>
+                  </button>
                 </div>
                 <pre class="tx-transcript trq-text-output">{res().translated_text}</pre>
               </div>
-            </div>
-
-            <div class="trq-completed-actions">
-              <button class="tx-btn tx-btn-primary" onClick={() => void exportJobResult(job())}>
-                <svg viewBox="0 0 24 24" width="16" height="16">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <path d="M7 10l5 5 5-5" />
-                  <path d="M12 15V3" />
-                </svg>
-                <span>Download .{downloadExtension()}</span>
-              </button>
             </div>
           </>
         )}
