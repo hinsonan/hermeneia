@@ -12,6 +12,31 @@ use std::path::PathBuf;
 pub struct SpeakerModelManager;
 
 impl SpeakerModelManager {
+    fn repo_has_expected_file(base: &std::path::Path, repo_id: &str, expected_file: &str) -> bool {
+        let snapshots_dir = base
+            .join(format!("models--{}", repo_id.replace('/', "--")))
+            .join("snapshots");
+        if !snapshots_dir.is_dir() {
+            return false;
+        }
+
+        let Ok(entries) = std::fs::read_dir(&snapshots_dir) else {
+            return false;
+        };
+
+        for entry in entries.flatten() {
+            let candidate = entry.path().join(expected_file);
+            let Some(metadata) = candidate.metadata().ok() else {
+                continue;
+            };
+            if metadata.is_file() && metadata.len() >= 1_000_000 {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Ensure both ONNX model files are present locally.
     /// Downloads from HuggingFace on first use via hf-hub.
     /// Returns (segmentation_path, embedding_path).
@@ -52,13 +77,11 @@ impl SpeakerModelManager {
     pub fn is_cached(model: &SpeakerModel) -> bool {
         let base = hf_hub_cache_dir();
 
-        let (seg_repo, _) = model.segmentation_source();
-        let (emb_repo, _) = model.embedding_source();
+        let (seg_repo, seg_file) = model.segmentation_source();
+        let (emb_repo, emb_file) = model.embedding_source();
 
-        let seg_cache = base.join(format!("models--{}", seg_repo.replace('/', "--")));
-        let emb_cache = base.join(format!("models--{}", emb_repo.replace('/', "--")));
-
-        seg_cache.join("blobs").is_dir() && emb_cache.join("blobs").is_dir()
+        Self::repo_has_expected_file(&base, seg_repo, seg_file)
+            && Self::repo_has_expected_file(&base, emb_repo, emb_file)
     }
 }
 

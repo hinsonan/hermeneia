@@ -19,6 +19,7 @@ pub enum TranscriptionPhase {
 /// Progress event payload for Tauri events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptionProgress {
+    pub job_id: String,
     pub phase: TranscriptionPhase,
     pub current: Option<usize>,
     pub total: Option<usize>,
@@ -27,8 +28,9 @@ pub struct TranscriptionProgress {
 
 impl TranscriptionProgress {
     /// Create a "decoding audio" progress event (indeterminate).
-    pub fn decoding_audio() -> Self {
+    pub fn decoding_audio(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: TranscriptionPhase::DecodingAudio,
             current: None,
             total: None,
@@ -37,22 +39,24 @@ impl TranscriptionProgress {
     }
 
     /// Create a "decoding audio" progress event with known progress.
-    pub fn decoding_audio_progress(current: usize, total: usize) -> Self {
+    pub fn decoding_audio_progress(job_id: &str, current: usize, total: usize) -> Self {
         if total > 0 {
             Self {
+                job_id: job_id.to_string(),
                 phase: TranscriptionPhase::DecodingAudio,
                 current: Some(current.min(total)),
                 total: Some(total),
                 message: "Decoding audio...".to_string(),
             }
         } else {
-            Self::decoding_audio()
+            Self::decoding_audio(job_id)
         }
     }
 
     /// Create a "preparing audio" progress event.
-    pub fn preparing_audio() -> Self {
+    pub fn preparing_audio(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: TranscriptionPhase::PreparingAudio,
             current: None,
             total: None,
@@ -61,8 +65,9 @@ impl TranscriptionProgress {
     }
 
     /// Create a "loading model" progress event
-    pub fn loading_model() -> Self {
+    pub fn loading_model(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: TranscriptionPhase::LoadingModel,
             current: None,
             total: None,
@@ -71,13 +76,14 @@ impl TranscriptionProgress {
     }
 
     /// Create a "transcribing" progress event
-    pub fn transcribing(current: usize, total: usize) -> Self {
+    pub fn transcribing(job_id: &str, current: usize, total: usize) -> Self {
         let percentage = if total > 0 {
             (current as f64 / total as f64 * 100.0) as usize
         } else {
             0
         };
         Self {
+            job_id: job_id.to_string(),
             phase: TranscriptionPhase::Transcribing,
             current: Some(current),
             total: Some(total),
@@ -86,8 +92,9 @@ impl TranscriptionProgress {
     }
 
     /// Create a "completed" progress event
-    pub fn completed() -> Self {
+    pub fn completed(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: TranscriptionPhase::Completed,
             current: Some(100),
             total: Some(100),
@@ -118,7 +125,7 @@ impl ProgressReporter for NoProgress {
 }
 
 /// Whisper model size variants
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WhisperModel {
     Tiny,
     TinyEn,
@@ -251,5 +258,12 @@ mod tests {
         reporter.report(50, 100);
         reporter.start();
         reporter.finish();
+    }
+
+    #[test]
+    fn test_transcription_progress_serializes_job_id() {
+        let progress = TranscriptionProgress::loading_model("job-123");
+        let value = serde_json::to_value(progress).unwrap();
+        assert_eq!(value["job_id"], "job-123");
     }
 }

@@ -10,6 +10,7 @@ export type TranscriptionPhase =
   | 'completed';
 
 export interface TranscriptionProgress {
+  job_id: string;
   phase: TranscriptionPhase;
   current: number | null;
   total: number | null;
@@ -59,6 +60,10 @@ export interface SystemCapabilities {
   gpu_info: GpuInfo | null;
 }
 
+export interface InferenceRuntimeLimits {
+  max_inference_concurrency: number;
+}
+
 export interface ModelValidation {
   status: 'ok' | 'warning' | 'error';
   messages: string[];
@@ -82,6 +87,7 @@ export type AnnotationPhase =
   | 'completed';
 
 export interface AnnotationProgress {
+  job_id: string;
   phase: AnnotationPhase;
   current: number | null;
   total: number | null;

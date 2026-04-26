@@ -1,8 +1,10 @@
-use crate::audio::{decode_audio_file_with_progress, prepare_speech_audio, DecodeProgressCallback};
+use crate::audio::{
+    decode_audio_file_with_progress, prepare_speech_audio_owned, DecodeProgressCallback,
+};
 use crate::error::{AudioError, Result};
 use crate::runtime_cache::{global_runtime_cache, RuntimeCacheManager};
 use crate::speaker::{
-    diarize_prepared_audio_with_callbacks_cached, validate_diarize_params, DiarizationResult,
+    diarize_prepared_audio_with_callbacks_cached_owned, validate_diarize_params, DiarizationResult,
     DiarizeCallbacks, DiarizeParams, DiarizeStage, SpeakerDevice, SpeakerModel,
 };
 use crate::transcribe::{
@@ -65,6 +67,7 @@ pub enum AnnotationPhase {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnnotationProgress {
+    pub job_id: String,
     pub phase: AnnotationPhase,
     pub current: Option<usize>,
     pub total: Option<usize>,
@@ -73,8 +76,9 @@ pub struct AnnotationProgress {
 }
 
 impl AnnotationProgress {
-    pub fn starting() -> Self {
+    pub fn starting(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::Starting,
             current: None,
             total: None,
@@ -83,8 +87,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn decoding_audio() -> Self {
+    pub fn decoding_audio(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::DecodingAudio,
             current: None,
             total: None,
@@ -93,9 +98,10 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn decoding_audio_progress(current: usize, total: usize) -> Self {
+    pub fn decoding_audio_progress(job_id: &str, current: usize, total: usize) -> Self {
         if total > 0 {
             Self {
+                job_id: job_id.to_string(),
                 phase: AnnotationPhase::DecodingAudio,
                 current: Some(current),
                 total: Some(total),
@@ -103,12 +109,13 @@ impl AnnotationProgress {
                 indeterminate: false,
             }
         } else {
-            Self::decoding_audio()
+            Self::decoding_audio(job_id)
         }
     }
 
-    pub fn preparing_audio() -> Self {
+    pub fn preparing_audio(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::PreparingAudio,
             current: None,
             total: None,
@@ -117,8 +124,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn loading_speaker_model() -> Self {
+    pub fn loading_speaker_model(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::LoadingSpeakerModel,
             current: None,
             total: None,
@@ -127,8 +135,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn ensuring_speaker_models() -> Self {
+    pub fn ensuring_speaker_models(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::EnsuringSpeakerModels,
             current: None,
             total: None,
@@ -137,8 +146,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn initializing_speaker_runtime() -> Self {
+    pub fn initializing_speaker_runtime(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::InitializingSpeakerRuntime,
             current: None,
             total: None,
@@ -147,8 +157,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn diarizing(current: usize, total: usize) -> Self {
+    pub fn diarizing(job_id: &str, current: usize, total: usize) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::Diarizing,
             current: Some(current),
             total: Some(total),
@@ -157,8 +168,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn loading_transcription_model() -> Self {
+    pub fn loading_transcription_model(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::LoadingTranscriptionModel,
             current: None,
             total: None,
@@ -167,8 +179,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn transcribing(current: usize, total: usize) -> Self {
+    pub fn transcribing(job_id: &str, current: usize, total: usize) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::Transcribing,
             current: Some(current),
             total: Some(total),
@@ -177,8 +190,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn merging() -> Self {
+    pub fn merging(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::Merging,
             current: None,
             total: None,
@@ -187,8 +201,9 @@ impl AnnotationProgress {
         }
     }
 
-    pub fn completed() -> Self {
+    pub fn completed(job_id: &str) -> Self {
         Self {
+            job_id: job_id.to_string(),
             phase: AnnotationPhase::Completed,
             current: Some(100),
             total: Some(100),
@@ -290,17 +305,23 @@ pub fn speaker_label(id: i32, names: &HashMap<i32, String>) -> String {
 
 struct TranscribeProgressAdapter {
     reporter: Arc<dyn AnnotationProgressReporter>,
+    job_id: String,
 }
 
 impl ProgressReporter for TranscribeProgressAdapter {
     fn start(&self) {
         self.reporter
-            .report(AnnotationProgress::loading_transcription_model());
+            .report(AnnotationProgress::loading_transcription_model(
+                &self.job_id,
+            ));
     }
 
     fn report(&self, current: usize, total: usize) {
-        self.reporter
-            .report(AnnotationProgress::transcribing(current, total));
+        self.reporter.report(AnnotationProgress::transcribing(
+            &self.job_id,
+            current,
+            total,
+        ));
     }
 }
 
@@ -319,12 +340,14 @@ pub fn annotate_audio_with_reporter(
     audio_path: &str,
     params: AnnotateParams,
     reporter: Arc<dyn AnnotationProgressReporter>,
+    job_id: &str,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<AnnotatedResult> {
     annotate_audio_with_reporter_cached(
         audio_path,
         params,
         reporter,
+        job_id,
         cancel_flag,
         Some(global_runtime_cache()),
     )
@@ -334,10 +357,12 @@ pub fn annotate_audio_with_reporter_cached(
     audio_path: &str,
     params: AnnotateParams,
     reporter: Arc<dyn AnnotationProgressReporter>,
+    job_id: &str,
     cancel_flag: Option<Arc<AtomicBool>>,
     runtime_cache: Option<Arc<RuntimeCacheManager>>,
 ) -> Result<AnnotatedResult> {
     validate_diarize_params(&params.diarize)?;
+    let job_id = job_id.to_string();
 
     let start = Instant::now();
     if !params.transcribe.timestamps {
@@ -346,16 +371,21 @@ pub fn annotate_audio_with_reporter_cached(
         );
     }
 
-    reporter.report(AnnotationProgress::starting());
+    reporter.report(AnnotationProgress::starting(&job_id));
 
     check_cancelled(&cancel_flag)?;
 
-    reporter.report(AnnotationProgress::decoding_audio());
+    reporter.report(AnnotationProgress::decoding_audio(&job_id));
     tracing::info!("Decoding audio once for annotation: {}", audio_path);
     let reporter_for_decode = reporter.clone();
     let cancel_for_decode = cancel_flag.clone();
+    let decode_job_id = job_id.clone();
     let decode_progress: DecodeProgressCallback = Box::new(move |current, total| {
-        reporter_for_decode.report(AnnotationProgress::decoding_audio_progress(current, total));
+        reporter_for_decode.report(AnnotationProgress::decoding_audio_progress(
+            &decode_job_id,
+            current,
+            total,
+        ));
         !cancel_for_decode
             .as_ref()
             .map(|flag| flag.load(Ordering::SeqCst))
@@ -364,30 +394,54 @@ pub fn annotate_audio_with_reporter_cached(
     let audio = decode_audio_file_with_progress(audio_path, Some(decode_progress))?;
     check_cancelled(&cancel_flag)?;
 
-    reporter.report(AnnotationProgress::preparing_audio());
-    let speech_audio = prepare_speech_audio(&audio)?;
-    drop(audio);
+    reporter.report(AnnotationProgress::preparing_audio(&job_id));
+    let speech_audio = prepare_speech_audio_owned(audio)?;
     check_cancelled(&cancel_flag)?;
 
-    reporter.report(AnnotationProgress::loading_speaker_model());
+    let adapter = TranscribeProgressAdapter {
+        reporter: reporter.clone(),
+        job_id: job_id.clone(),
+    };
+
+    // Ensure loading_model phase is emitted in annotate flow.
+    adapter.start();
+
+    let transcript = transcribe_prepared_audio_with_reporter_cached(
+        &speech_audio,
+        params.transcribe.clone(),
+        Arc::new(adapter),
+        cancel_flag.clone(),
+        runtime_cache.clone(),
+    )?;
+
+    check_cancelled(&cancel_flag)?;
+
+    reporter.report(AnnotationProgress::loading_speaker_model(&job_id));
 
     let reporter_for_diarize_stage = reporter.clone();
+    let diarize_job_id = job_id.clone();
     let diarize_stage_progress = Arc::new(
         move |stage_progress: crate::speaker::DiarizeStageProgress| match stage_progress.stage {
             DiarizeStage::EnsuringModels => {
-                reporter_for_diarize_stage.report(AnnotationProgress::ensuring_speaker_models());
+                reporter_for_diarize_stage
+                    .report(AnnotationProgress::ensuring_speaker_models(&diarize_job_id));
             }
             DiarizeStage::InitializingRuntime => {
-                reporter_for_diarize_stage
-                    .report(AnnotationProgress::initializing_speaker_runtime());
+                reporter_for_diarize_stage.report(
+                    AnnotationProgress::initializing_speaker_runtime(&diarize_job_id),
+                );
             }
             DiarizeStage::Diarizing => {
                 if let (Some(current), Some(total)) = (stage_progress.current, stage_progress.total)
                 {
-                    reporter_for_diarize_stage
-                        .report(AnnotationProgress::diarizing(current, total));
+                    reporter_for_diarize_stage.report(AnnotationProgress::diarizing(
+                        &diarize_job_id,
+                        current,
+                        total,
+                    ));
                 } else {
                     reporter_for_diarize_stage.report(AnnotationProgress {
+                        job_id: diarize_job_id.to_string(),
                         phase: AnnotationPhase::Diarizing,
                         current: None,
                         total: None,
@@ -398,6 +452,7 @@ pub fn annotate_audio_with_reporter_cached(
             }
             DiarizeStage::Finalizing => {
                 reporter_for_diarize_stage.report(AnnotationProgress {
+                    job_id: diarize_job_id.to_string(),
                     phase: AnnotationPhase::Diarizing,
                     current: None,
                     total: None,
@@ -408,39 +463,22 @@ pub fn annotate_audio_with_reporter_cached(
         },
     );
 
-    let diarization = diarize_prepared_audio_with_callbacks_cached(
-        &speech_audio,
+    let diarization = diarize_prepared_audio_with_callbacks_cached_owned(
+        speech_audio,
         params.diarize.clone(),
         DiarizeCallbacks {
             chunk_progress: None,
             stage_progress: Some(diarize_stage_progress),
         },
         cancel_flag.clone(),
-        runtime_cache.clone(),
-    )?;
-
-    check_cancelled(&cancel_flag)?;
-
-    let adapter = TranscribeProgressAdapter {
-        reporter: reporter.clone(),
-    };
-
-    // Ensure loading_model phase is emitted in annotate flow.
-    adapter.start();
-
-    let transcript = transcribe_prepared_audio_with_reporter_cached(
-        &speech_audio,
-        params.transcribe.clone(),
-        &adapter,
-        cancel_flag.clone(),
         runtime_cache,
     )?;
 
     check_cancelled(&cancel_flag)?;
 
-    reporter.report(AnnotationProgress::merging());
+    reporter.report(AnnotationProgress::merging(&job_id));
     let result = merge_annotation_result(&transcript, &diarization, &params.speaker_names, &params);
-    reporter.report(AnnotationProgress::completed());
+    reporter.report(AnnotationProgress::completed(&job_id));
 
     Ok(AnnotatedResult {
         total_inference_time: start.elapsed().as_secs_f64(),
@@ -453,6 +491,7 @@ pub fn annotate_audio(audio_path: &str, params: AnnotateParams) -> Result<Annota
         audio_path,
         params,
         Arc::new(NoAnnotationProgress),
+        "annotate-cli",
         None,
         Some(global_runtime_cache()),
     )
@@ -697,5 +736,12 @@ mod tests {
             ..DiarizeParams::default()
         };
         assert!(validate_diarize_params(&invalid_speakers).is_err());
+    }
+
+    #[test]
+    fn test_annotation_progress_serializes_job_id() {
+        let progress = AnnotationProgress::starting("job-annotate-1");
+        let value = serde_json::to_value(progress).unwrap();
+        assert_eq!(value["job_id"], "job-annotate-1");
     }
 }

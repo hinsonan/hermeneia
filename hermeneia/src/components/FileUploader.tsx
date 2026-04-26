@@ -4,58 +4,100 @@ import { open } from "@tauri-apps/plugin-dialog";
 import "./FileUploader.css";
 
 interface FileUploaderProps {
-  onFileSelected: (filePath: string) => void;
+  onFileSelected?: (filePath: string) => void;
+  onFilesSelected?: (filePaths: string[]) => void;
+  multiple?: boolean;
 }
 
 const FileUploader: Component<FileUploaderProps> = (props) => {
   const [isDragging, setIsDragging] = createSignal(false);
   let unlistenDrop: (() => void) | undefined;
   let unlistenHover: (() => void) | undefined;
+  let unlistenEnter: (() => void) | undefined;
+  let unlistenLeave: (() => void) | undefined;
 
   onMount(async () => {
     const appWindow = getCurrentWindow();
 
     // Listen for file drop events
-    unlistenDrop = await appWindow.listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
-      console.log('File dropped:', event.payload);
+    unlistenDrop = await appWindow.listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      console.log("File dropped:", event.payload);
       if (event.payload.paths && event.payload.paths.length > 0) {
         setIsDragging(false);
-        props.onFileSelected(event.payload.paths[0]);
+        if (props.onFilesSelected) {
+          props.onFilesSelected(event.payload.paths);
+        } else {
+          props.onFileSelected?.(event.payload.paths[0]);
+        }
       }
     });
 
-    // Listen for drag hover events
-    unlistenHover = await appWindow.listen('tauri://drag', () => {
-      console.log('Drag hover detected');
+    // Listen for drag hover events (legacy + current names for compatibility)
+    unlistenHover = await appWindow.listen("tauri://drag", () => {
+      console.log("Drag hover detected");
       setIsDragging(true);
     });
 
-    // Note: There's no drag-cancelled event in Tauri 2, we handle it in drop
+    unlistenEnter = await appWindow.listen("tauri://drag-enter", () => {
+      setIsDragging(true);
+    });
+
+    unlistenLeave = await appWindow.listen("tauri://drag-leave", () => {
+      setIsDragging(false);
+    });
+
+    // Fallback cleanup when focus changes without drop/leave delivery.
+    window.addEventListener("blur", handleWindowBlur);
   });
+
+  const handleWindowBlur = () => {
+    setIsDragging(false);
+  };
 
   onCleanup(() => {
     if (unlistenDrop) unlistenDrop();
     if (unlistenHover) unlistenHover();
+    if (unlistenEnter) unlistenEnter();
+    if (unlistenLeave) unlistenLeave();
+    window.removeEventListener("blur", handleWindowBlur);
   });
 
   // Handle click to open file picker
   const handleClick = async () => {
-    console.log('FileUploader clicked');
+    console.log("FileUploader clicked");
     try {
       const selected = await open({
-        multiple: false,
+        multiple: props.multiple ?? false,
         filters: [{
           name: "Audio Files",
           extensions: ["mp3", "wav", "flac", "m4a", "ogg"],
         }],
       });
 
-      console.log('File selected:', selected);
-      if (selected && typeof selected === "string") {
-        props.onFileSelected(selected);
+      console.log("File selected:", selected);
+      if (!selected) {
+        return;
+      }
+
+      if (Array.isArray(selected)) {
+        if (selected.length === 0) {
+          return;
+        }
+        if (props.onFilesSelected) {
+          props.onFilesSelected(selected);
+        } else {
+          props.onFileSelected?.(selected[0]);
+        }
+        return;
+      }
+
+      if (props.onFilesSelected) {
+        props.onFilesSelected([selected]);
+      } else {
+        props.onFileSelected?.(selected);
       }
     } catch (err) {
-      console.error('Error opening file picker:', err);
+      console.error("Error opening file picker:", err);
     }
   };
 
@@ -71,7 +113,7 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
           <line x1="12" y1="3" x2="12" y2="15" />
         </svg>
       </div>
-      <h3>Drop Audio File Here or Click to Browse</h3>
+      <h3>{props.multiple ? "Drop Audio Files Here or Click to Browse" : "Drop Audio File Here or Click to Browse"}</h3>
       <p>Supports MP3, WAV, FLAC, M4A, OGG</p>
     </div>
   );

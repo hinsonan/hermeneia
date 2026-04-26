@@ -1,10 +1,11 @@
 use crate::audio::{
-    decode_audio_file, decode_audio_file_with_progress, prepare_speech_audio,
+    decode_audio_file, decode_audio_file_with_progress, prepare_speech_audio_owned,
     DecodeProgressCallback, SpeechAudio,
 };
 use crate::error::{AudioError, Result};
 use crate::runtime_cache::{
-    global_runtime_cache, RuntimeCacheManager, WhisperRuntime, WhisperRuntimeKey,
+    global_runtime_cache, load_whisper_runtime_by_key, RuntimeCacheManager, WhisperRuntime,
+    WhisperRuntimeKey,
 };
 use crate::transcribe::{
     decoder::Decoder,
@@ -54,27 +55,18 @@ fn build_whisper_runtime_key(params: &TranscribeParams) -> WhisperRuntimeKey {
 }
 
 fn load_whisper_runtime(params: &TranscribeParams) -> Result<WhisperRuntime> {
-    let model_manager = ModelManager::new()?;
-    let model_files = model_manager.ensure_model(params.model, params.use_quantized)?;
-    let device = get_device(params.force_cpu)?;
-    tracing::info!("Using device: {}", device_name(&device));
-
-    let (config, tokenizer, model) =
-        load_model(&model_files, &device).map_err(|e| enrich_oom_error(e, params.model))?;
-
-    Ok(WhisperRuntime {
-        config,
-        tokenizer,
-        model,
-        device,
-    })
+    let key = build_whisper_runtime_key(params);
+    let runtime =
+        load_whisper_runtime_by_key(key).map_err(|e| enrich_oom_error(e, params.model))?;
+    tracing::info!("Using device: {}", device_name(&runtime.device));
+    Ok(runtime)
 }
 
-fn run_with_whisper_runtime<P: ProgressReporter>(
+fn run_with_whisper_runtime<P: ProgressReporter + 'static>(
     runtime: &mut WhisperRuntime,
     speech_audio: &SpeechAudio,
     params: &TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<(Vec<crate::transcribe::TranscriptSegment>, String)> {
     check_cancelled(&cancel_flag)?;
@@ -116,31 +108,25 @@ fn run_with_whisper_runtime<P: ProgressReporter>(
         }
     };
 
-    let reporter_ptr = reporter as *const P as usize;
-    let callback: ProgressCallback = Box::new(move |current, total| unsafe {
-        let reporter_ref = &*(reporter_ptr as *const P);
-        reporter_ref.report(current, total);
+    let reporter_for_callback = Arc::clone(&reporter);
+    let callback: ProgressCallback = Box::new(move |current, total| {
+        reporter_for_callback.report(current, total);
     });
 
-    let mut params_with_token = params.clone();
-    params_with_token.language = None;
     let mut decoder = Decoder::new_with_language_token(
         &mut runtime.model,
         &runtime.tokenizer,
         &runtime.config,
         &runtime.device,
-        &params_with_token,
+        params.task,
+        params.timestamps,
         language_token,
     )?;
 
     let raw_segments = decoder.run(&mel, Some(callback), cancel_flag)?;
     let segments = decoder.extract_segments(raw_segments);
 
-    let text = segments
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text = join_segments_with_space(&segments);
 
     crate::gpu_cleanup::synchronize_device(&runtime.device);
 
@@ -159,7 +145,7 @@ pub fn transcribe_audio_with_progress(
     progress_callback: Option<ProgressCallback>,
 ) -> Result<TranscriptResult> {
     let audio_data = decode_audio_file(file_path)?;
-    let speech_audio = prepare_speech_audio(&audio_data)?;
+    let speech_audio = prepare_speech_audio_owned(audio_data)?;
     transcribe_prepared_audio_with_progress(&speech_audio, params, progress_callback)
 }
 
@@ -217,14 +203,13 @@ pub fn transcribe_prepared_audio_with_progress(
         };
 
         // Run inference with full decoder
-        let mut params_with_token = params.clone();
-        params_with_token.language = None; // Clear language string, we'll use token directly
         let mut decoder = Decoder::new_with_language_token(
             &mut model,
             &tokenizer,
             &config,
             &device,
-            &params_with_token,
+            params.task,
+            params.timestamps,
             language_token,
         )?;
         let raw_segments = decoder.run(&mel, progress_callback, None)?;
@@ -248,11 +233,7 @@ pub fn transcribe_prepared_audio_with_progress(
             tracing::info!("Extracted segment {}: text='{}'", seg.id, seg.text);
         }
 
-        let text = segments
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let text = join_segments_with_space(&segments);
 
         // Sync GPU before model/mel/decoder drop at end of scope
         crate::gpu_cleanup::synchronize_device(&device);
@@ -271,20 +252,30 @@ pub fn transcribe_prepared_audio_with_progress(
     })
 }
 
+fn join_segments_with_space(segments: &[crate::transcribe::TranscriptSegment]) -> String {
+    let mut text = String::new();
+    for (idx, segment) in segments.iter().enumerate() {
+        if idx > 0 {
+            text.push(' ');
+        }
+        text.push_str(segment.text.as_str());
+    }
+    text
+}
+
 /// Main transcription function with progress reporter trait
-pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
+pub fn transcribe_audio_with_reporter<P: ProgressReporter + 'static>(
     file_path: &str,
     params: TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranscriptResult> {
     check_cancelled(&cancel_flag)?;
 
-    let reporter_ptr = reporter as *const P as usize;
+    let reporter_for_decode = Arc::clone(&reporter);
     let cancel_for_decode = cancel_flag.clone();
-    let decode_progress: DecodeProgressCallback = Box::new(move |current, total| unsafe {
-        let reporter_ref = &*(reporter_ptr as *const P);
-        reporter_ref.report(current, total);
+    let decode_progress: DecodeProgressCallback = Box::new(move |current, total| {
+        reporter_for_decode.report(current, total);
 
         !cancel_for_decode
             .as_ref()
@@ -295,18 +286,17 @@ pub fn transcribe_audio_with_reporter<P: ProgressReporter>(
     let audio_data = decode_audio_file_with_progress(file_path, Some(decode_progress))?;
     check_cancelled(&cancel_flag)?;
 
-    let speech_audio = prepare_speech_audio(&audio_data)?;
-    drop(audio_data);
+    let speech_audio = prepare_speech_audio_owned(audio_data)?;
     check_cancelled(&cancel_flag)?;
 
     transcribe_prepared_audio_with_reporter(&speech_audio, params, reporter, cancel_flag)
 }
 
 /// Transcribe already-preprocessed mono 16kHz speech audio with progress reporter.
-pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter>(
+pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter + 'static>(
     speech_audio: &SpeechAudio,
     params: TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<TranscriptResult> {
     transcribe_prepared_audio_with_reporter_cached(
@@ -318,10 +308,10 @@ pub fn transcribe_prepared_audio_with_reporter<P: ProgressReporter>(
     )
 }
 
-pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
+pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter + 'static>(
     speech_audio: &SpeechAudio,
     params: TranscribeParams,
-    reporter: &P,
+    reporter: Arc<P>,
     cancel_flag: Option<Arc<AtomicBool>>,
     runtime_cache: Option<Arc<RuntimeCacheManager>>,
 ) -> Result<TranscriptResult> {
@@ -333,7 +323,7 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
     let (segments, text) = if let Some(cache) = runtime_cache {
         let key = build_whisper_runtime_key(&params);
 
-        cache.with_whisper_runtime(
+        cache.with_whisper_runtime_cancellable(
             key,
             || load_whisper_runtime(&params),
             |runtime| {
@@ -341,10 +331,11 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
                     runtime,
                     speech_audio,
                     &params,
-                    reporter,
+                    Arc::clone(&reporter),
                     cancel_flag.clone(),
                 )
             },
+            cancel_flag.as_deref(),
         )?
     } else {
         let mut runtime = load_whisper_runtime(&params)?;
@@ -352,7 +343,7 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
             &mut runtime,
             speech_audio,
             &params,
-            reporter,
+            Arc::clone(&reporter),
             cancel_flag.clone(),
         )?
     };
@@ -367,44 +358,6 @@ pub fn transcribe_prepared_audio_with_reporter_cached<P: ProgressReporter>(
         model: params.model,
         inference_time: start_time.elapsed().as_secs_f64(),
     })
-}
-
-/// Load config, tokenizer, and model
-fn load_model(
-    files: &ModelFiles,
-    device: &Device,
-) -> Result<(Config, Tokenizer, m::model::Whisper)> {
-    if files.is_quantized {
-        return Err(AudioError::ModelLoad {
-            model: "quantized".to_string(),
-            details: "Quantized models not yet supported".to_string(),
-        });
-    }
-
-    // Load config
-    let config_str = std::fs::read_to_string(&files.config).map_err(|e| AudioError::ModelLoad {
-        model: "config".to_string(),
-        details: e.to_string(),
-    })?;
-    let config: Config = serde_json::from_str(&config_str).map_err(|e| AudioError::ModelLoad {
-        model: "config".to_string(),
-        details: e.to_string(),
-    })?;
-
-    // Load tokenizer
-    let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| AudioError::ModelLoad {
-        model: "tokenizer".to_string(),
-        details: e.to_string(),
-    })?;
-
-    // Load model weights (platform-safe: buffered on Windows, mmap on Linux/macOS)
-    let vb = crate::gpu_cleanup::load_safetensors_varbuilder(&files.weights, m::DTYPE, device)
-        .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, "weights"))?;
-
-    let model = m::model::Whisper::load(&vb, config.clone())
-        .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, device, "whisper"))?;
-
-    Ok((config, tokenizer, model))
 }
 
 /// Enrich OOM errors with model-specific information
@@ -432,6 +385,41 @@ fn enrich_oom_error(error: AudioError, model: crate::transcribe::WhisperModel) -
         }
         other => other,
     }
+}
+
+/// Load config, tokenizer, and model
+fn load_model(
+    files: &ModelFiles,
+    device: &Device,
+) -> Result<(Config, Tokenizer, m::model::Whisper)> {
+    if files.is_quantized {
+        return Err(AudioError::ModelLoad {
+            model: "quantized".to_string(),
+            details: "Quantized models not yet supported".to_string(),
+        });
+    }
+
+    let config_str = std::fs::read_to_string(&files.config).map_err(|e| AudioError::ModelLoad {
+        model: "config".to_string(),
+        details: e.to_string(),
+    })?;
+    let config: Config = serde_json::from_str(&config_str).map_err(|e| AudioError::ModelLoad {
+        model: "config".to_string(),
+        details: e.to_string(),
+    })?;
+
+    let tokenizer = Tokenizer::from_file(&files.tokenizer).map_err(|e| AudioError::ModelLoad {
+        model: "tokenizer".to_string(),
+        details: e.to_string(),
+    })?;
+
+    let vb = crate::gpu_cleanup::load_safetensors_varbuilder(&files.weights, m::DTYPE, device)
+        .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, "weights"))?;
+
+    let model = m::model::Whisper::load(&vb, config.clone())
+        .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, device, "whisper"))?;
+
+    Ok((config, tokenizer, model))
 }
 
 #[cfg(test)]
