@@ -6,6 +6,7 @@ import { useTheme } from "../utils/theme";
 import DownloadProgressBar from "../components/DownloadProgressBar";
 import ConfirmDialog from "../components/ConfirmDialog";
 import type { ModelInfo, DownloadProgress } from "../types/models";
+import "./Transcription.css";
 import "./ModelLibrary.css";
 
 function formatSize(mb: number): string {
@@ -230,14 +231,16 @@ const ModelLibrary: Component = () => {
 
         <main class="parchment">
           {/* Header */}
-          <header class="page-header">
-            <button class="back-button" onClick={() => navigate("/")}>
-              <svg viewBox="0 0 24 24" width="20" height="20">
+          <header class="tx-header">
+            <button class="tx-back" onClick={() => navigate("/")}>
+              <svg viewBox="0 0 24 24" width="18" height="18">
                 <path d="M19 12H5M12 19l-7-7 7-7" />
               </svg>
               <span>Home</span>
             </button>
-            <h1>Model Library</h1>
+            <div class="tx-title">
+              <h1>Model Library</h1>
+            </div>
           </header>
 
           {/* Cache Summary */}
