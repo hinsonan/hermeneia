@@ -474,7 +474,7 @@ jobs:
   # Job 4: Windows CUDA
   # ===========================================================================
   windows-cuda:
-    runs-on: windows-latest
+    runs-on: windows-2025:20260413.84.1
     timeout-minutes: 120
     if: startsWith(github.ref, 'refs/tags/v') || inputs.build_target == 'all' || inputs.build_target == 'cuda-both' || inputs.build_target == 'cuda-windows'
     steps:
