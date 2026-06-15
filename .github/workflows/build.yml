@@ -476,6 +476,9 @@ jobs:
   windows-cuda:
     runs-on: windows-2022
     timeout-minutes: 120
+    env:
+      SHERPA_ONNX_VERSION: '1.12.28'
+      SHERPA_ONNX_SHA256: 'db77faa78e6e326239354563c21eb84a57f22f0f72ebb3be5d61086232afcb8b'
     if: startsWith(github.ref, 'refs/tags/v') || inputs.build_target == 'all' || inputs.build_target == 'cuda-both' || inputs.build_target == 'cuda-windows'
     steps:
       - uses: actions/checkout@v4
@@ -502,6 +505,13 @@ jobs:
           cargo clean --manifest-path src-tauri/Cargo.toml -p sherpa-rs-sys
           Remove-Item "$env:LOCALAPPDATA\sherpa-rs" -Recurse -Force -ErrorAction SilentlyContinue
 
+      - name: Cache pre-built sherpa-onnx CUDA runtime (Windows)
+        id: sherpa-cuda-cache
+        uses: actions/cache@v4
+        with:
+          path: hermeneia/.sherpa-runtime/win-cuda/sherpa-onnx-v${{ env.SHERPA_ONNX_VERSION }}-cuda-12.x-cudnn-9.x-win-x64-cuda
+          key: sherpa-win-cuda-${{ runner.os }}-${{ env.SHERPA_ONNX_VERSION }}-${{ env.SHERPA_ONNX_SHA256 }}
+
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
@@ -510,29 +520,75 @@ jobs:
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "nvrtc", "nvrtc_dev", "curand", "curand_dev", "cufft", "cufft_dev", "visual_studio_integration"]'
 
       - name: Download pre-built sherpa-onnx with CUDA 12.x + cuDNN 9.x
+        if: steps.sherpa-cuda-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        env:
-          SHERPA_ONNX_VERSION: '1.12.28'
-          SHERPA_ONNX_SHA256: 'db77faa78e6e326239354563c21eb84a57f22f0f72ebb3be5d61086232afcb8b'
         run: |
           $archiveName = "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2"
+          $archiveBaseDir = "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-cuda-12.x-cudnn-9.x-win-x64-cuda"
           $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$env:SHERPA_ONNX_VERSION/$archiveName"
+          $runtimeRoot = ".sherpa-runtime\win-cuda"
+
+          $downloadStart = Get-Date
           Write-Host "Downloading $url ..."
           Invoke-WebRequest -Uri $url -OutFile $archiveName
+          $downloadSeconds = ((Get-Date) - $downloadStart).TotalSeconds
+          Write-Host ("Download completed in {0:N1}s" -f $downloadSeconds)
+
           $actualSha256 = (Get-FileHash -Path $archiveName -Algorithm SHA256).Hash.ToLowerInvariant()
           $expectedSha256 = $env:SHERPA_ONNX_SHA256.ToLowerInvariant()
           if ($actualSha256 -ne $expectedSha256) {
             throw "SHA256 mismatch for $archiveName. Expected $expectedSha256 but got $actualSha256"
           }
           Write-Host "SHA256 verified: $actualSha256"
+
+          Remove-Item $runtimeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+
+          $extractStart = Get-Date
           Write-Host "Extracting..."
-          tar -xjf $archiveName
-          Remove-Item $archiveName
-          $extractedDir = "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-cuda-12.x-cudnn-9.x-win-x64-cuda"
+
+          $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
+          if ($sevenZip) {
+            Write-Host "Using 7z two-stage selective extraction"
+            $sevenZipExe = $sevenZip.Source
+            $extractCmd = '"' + $sevenZipExe + '" x -so "' + $archiveName + '" | "' + $sevenZipExe + '" x -si -ttar -y -o"' + $runtimeRoot + '" "' + $archiveBaseDir + '/lib/*" "' + $archiveBaseDir + '/bin/*" "' + $archiveBaseDir + '/include/*"'
+            cmd /c $extractCmd
+            if ($LASTEXITCODE -ne 0) {
+              throw "7z extraction failed with exit code $LASTEXITCODE"
+            }
+          }
+          else {
+            Write-Host "7z not found; using tar for selective extraction"
+            tar -xjf $archiveName -C $runtimeRoot "$archiveBaseDir/lib" "$archiveBaseDir/bin" "$archiveBaseDir/include"
+          }
+
+          $extractSeconds = ((Get-Date) - $extractStart).TotalSeconds
+          Write-Host ("Extraction completed in {0:N1}s" -f $extractSeconds)
+
+          Remove-Item $archiveName -Force
+
+      - name: Resolve sherpa-onnx CUDA runtime path
+        shell: pwsh
+        run: |
+          $runtimeRoot = ".sherpa-runtime\win-cuda"
+          $extractedDir = Join-Path $runtimeRoot "sherpa-onnx-v$env:SHERPA_ONNX_VERSION-cuda-12.x-cudnn-9.x-win-x64-cuda"
+          $requiredPaths = @(
+            (Join-Path $extractedDir "lib\sherpa-onnx-c-api.lib"),
+            (Join-Path $extractedDir "lib\sherpa-onnx-c-api.dll"),
+            (Join-Path $extractedDir "lib\onnxruntime.dll")
+          )
+
+          foreach ($required in $requiredPaths) {
+            if (-not (Test-Path $required)) {
+              throw "Missing required sherpa runtime file: $required"
+            }
+          }
+
           Write-Host "Sherpa libs at: $extractedDir"
-          Get-ChildItem "$extractedDir/lib/" | Select-Object Name, Length
-          # Set SHERPA_LIB_PATH so sherpa-rs-sys uses pre-built libs (skips cmake)
-          echo "SHERPA_LIB_PATH=${{ github.workspace }}/hermeneia/$extractedDir" >> $env:GITHUB_ENV
+          Get-ChildItem (Join-Path $extractedDir "lib") | Select-Object Name, Length
+
+          $resolvedSherpaPath = (Resolve-Path $extractedDir).Path
+          echo "SHERPA_LIB_PATH=$resolvedSherpaPath" >> $env:GITHUB_ENV
 
       - name: Download cuDNN runtime from NVIDIA PyPI
         shell: pwsh
