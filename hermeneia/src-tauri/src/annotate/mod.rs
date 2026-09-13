@@ -217,13 +217,6 @@ pub trait AnnotationProgressReporter: Send + Sync {
     fn report(&self, progress: AnnotationProgress);
 }
 
-#[derive(Debug, Clone)]
-pub struct NoAnnotationProgress;
-
-impl AnnotationProgressReporter for NoAnnotationProgress {
-    fn report(&self, _progress: AnnotationProgress) {}
-}
-
 pub fn parse_whisper_model(s: &str) -> Result<WhisperModel> {
     match s.to_lowercase().as_str() {
         "tiny" => Ok(WhisperModel::Tiny),
@@ -484,17 +477,6 @@ pub fn annotate_audio_with_reporter_cached(
         total_inference_time: start.elapsed().as_secs_f64(),
         ..result
     })
-}
-
-pub fn annotate_audio(audio_path: &str, params: AnnotateParams) -> Result<AnnotatedResult> {
-    annotate_audio_with_reporter_cached(
-        audio_path,
-        params,
-        Arc::new(NoAnnotationProgress),
-        "annotate-cli",
-        None,
-        Some(global_runtime_cache()),
-    )
 }
 
 fn merge_annotation_result(

@@ -30,7 +30,6 @@ impl WhisperModel {
     /// These are conservative estimates. Actual requirements may vary based on:
     /// - Audio file length (longer files need more memory for KV cache)
     /// - Batch size and beam search parameters
-    /// - Quantization (when supported, reduces requirements by ~50%)
     pub fn requirements(&self) -> ModelRequirements {
         match self {
             // Tiny models: ~39M parameters

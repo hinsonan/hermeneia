@@ -4,7 +4,7 @@
 //! Provides warnings for suboptimal configurations and errors for impossible ones.
 
 use super::WhisperModel;
-use crate::system_info::{get_system_capabilities, GpuDeviceType, SystemCapabilities};
+use crate::system_info::{get_system_capabilities, SystemCapabilities};
 
 /// Result of model validation
 #[derive(Debug, Clone)]
@@ -58,7 +58,12 @@ impl ModelValidator {
             // GPU path validation
             let gpu = self.capabilities.gpu_info.as_ref().unwrap();
 
-            if matches!(gpu.device_type, GpuDeviceType::AppleMetal) {
+            #[cfg(all(target_os = "macos", feature = "metal"))]
+            let uses_unified_memory = matches!(gpu.device_type, GpuDeviceType::AppleMetal);
+            #[cfg(not(all(target_os = "macos", feature = "metal")))]
+            let uses_unified_memory = false;
+
+            if uses_unified_memory {
                 // Metal uses unified memory -- validate against system RAM
                 if self.capabilities.available_ram_gb < reqs.min_ram_gb {
                     return ValidationResult::Error(format!(

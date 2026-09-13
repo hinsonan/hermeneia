@@ -1,7 +1,7 @@
 use crate::error::{AudioError, Result};
 use crate::translate::logits_processor::LogitsProcessor;
 use crate::translate::types::ProgressCallback;
-use candle_core::{Device, IndexOp, Tensor};
+use candle_core::{IndexOp, Tensor};
 use candle_transformers::models::t5;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -52,6 +52,7 @@ impl Generator {
     ///
     /// This is a simplified generation loop for encoder-decoder models.
     /// The actual implementation will depend on the model architecture.
+    #[allow(clippy::too_many_arguments)]
     pub fn generate(
         &mut self,
         model: &mut t5::T5ForConditionalGeneration,
@@ -132,61 +133,6 @@ impl Generator {
                 );
                 break;
             }
-        }
-
-        Ok(tokens)
-    }
-
-    /// Generate translation with custom encoder-decoder architecture
-    ///
-    /// This is a more generic version that works with any encoder-decoder model
-    /// by accepting encoder/decoder functions as closures.
-    #[allow(dead_code)]
-    pub fn generate_generic<E, D>(
-        &mut self,
-        encode: E,
-        decode: D,
-        decoder_start_token_id: u32,
-        eos_token_id: u32,
-        device: &Device,
-        progress_callback: Option<&ProgressCallback>,
-    ) -> Result<Vec<u32>>
-    where
-        E: Fn() -> Result<Tensor>,
-        D: Fn(&Tensor) -> Result<Tensor>,
-    {
-        // Encode input
-        let _encoder_output = encode()?;
-
-        let mut tokens = vec![decoder_start_token_id];
-
-        for step in 0..self.config.max_length {
-            // Report progress
-            if let Some(callback) = progress_callback {
-                callback(step + 1, self.config.max_length);
-            }
-
-            // Prepare decoder input
-            let decoder_input_ids = Tensor::new(&tokens[..], device).map_err(|e| {
-                AudioError::TranslationFailed(format!("Failed to create decoder input: {}", e))
-            })?;
-
-            // Forward pass
-            let logits = decode(&decoder_input_ids)?;
-
-            // Get last token logits
-            let next_token_logits = logits.i((0, tokens.len() - 1)).map_err(|e| {
-                AudioError::TranslationFailed(format!("Failed to extract logits: {}", e))
-            })?;
-
-            // Sample next token
-            let next_token = self.logits_processor.sample(&next_token_logits, &tokens)?;
-
-            if next_token == eos_token_id {
-                break;
-            }
-
-            tokens.push(next_token);
         }
 
         Ok(tokens)

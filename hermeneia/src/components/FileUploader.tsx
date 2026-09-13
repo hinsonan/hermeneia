@@ -12,7 +12,6 @@ interface FileUploaderProps {
 const FileUploader: Component<FileUploaderProps> = (props) => {
   const [isDragging, setIsDragging] = createSignal(false);
   let unlistenDrop: (() => void) | undefined;
-  let unlistenHover: (() => void) | undefined;
   let unlistenEnter: (() => void) | undefined;
   let unlistenLeave: (() => void) | undefined;
 
@@ -21,7 +20,6 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
 
     // Listen for file drop events
     unlistenDrop = await appWindow.listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
-      console.log("File dropped:", event.payload);
       if (event.payload.paths && event.payload.paths.length > 0) {
         setIsDragging(false);
         if (props.onFilesSelected) {
@@ -30,12 +28,6 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
           props.onFileSelected?.(event.payload.paths[0]);
         }
       }
-    });
-
-    // Listen for drag hover events (legacy + current names for compatibility)
-    unlistenHover = await appWindow.listen("tauri://drag", () => {
-      console.log("Drag hover detected");
-      setIsDragging(true);
     });
 
     unlistenEnter = await appWindow.listen("tauri://drag-enter", () => {
@@ -56,7 +48,6 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
 
   onCleanup(() => {
     if (unlistenDrop) unlistenDrop();
-    if (unlistenHover) unlistenHover();
     if (unlistenEnter) unlistenEnter();
     if (unlistenLeave) unlistenLeave();
     window.removeEventListener("blur", handleWindowBlur);
@@ -64,7 +55,6 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
 
   // Handle click to open file picker
   const handleClick = async () => {
-    console.log("FileUploader clicked");
     try {
       const selected = await open({
         multiple: props.multiple ?? false,
@@ -74,7 +64,6 @@ const FileUploader: Component<FileUploaderProps> = (props) => {
         }],
       });
 
-      console.log("File selected:", selected);
       if (!selected) {
         return;
       }

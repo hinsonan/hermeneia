@@ -7,9 +7,11 @@ use crate::error::{AudioError, Result};
 use crate::hf_cache::hf_hub_cache_dir;
 use crate::transcribe::WhisperModel;
 use crate::translate::catalog::{load_model_catalog, CatalogModel, ModelFamily};
+use hf_hub::api::sync::ApiRepo;
 use hf_hub::api::Progress;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -71,6 +73,23 @@ fn has_nontrivial_cached_file(path: &std::path::Path, min_bytes: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// Check whether a snapshot directory contains sharded safetensors files.
+fn has_cached_shards(dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        name.starts_with("model-")
+            && name.ends_with(".safetensors")
+            && entry
+                .metadata()
+                .map(|m| m.is_file() && m.len() >= 1_000_000)
+                .unwrap_or(false)
+    })
+}
+
 /// Check whether a model appears to be cached by looking for weight files in snapshots.
 /// Uses metadata() to follow symlinks and verify the target file actually exists.
 /// We check for weight files (not just config.json) to avoid treating partially-downloaded
@@ -88,8 +107,7 @@ fn is_model_cached_on_disk(model_id: &str) -> bool {
                 // Check for weight files - the large files that actually matter
                 let has_weights =
                     has_nontrivial_cached_file(&dir.join("model.safetensors"), 1_000_000)
-                        || has_nontrivial_cached_file(&dir.join("pytorch_model.bin"), 1_000_000)
-                        || has_nontrivial_cached_file(&dir.join("model-q8_0.gguf"), 1_000_000);
+                        || has_cached_shards(&dir);
                 if has_weights {
                     return true;
                 }
@@ -265,7 +283,7 @@ pub fn download_model(
         .and_then(|c| c.iter().find(|m| m.model_id == model_id));
 
     let total_bytes = expected_model_bytes(model_id, catalog_entry);
-    let (files_to_download, revision) = determine_files(model_id, catalog_entry);
+    let revision = determine_revision(model_id, catalog_entry);
 
     let api = ApiBuilder::new()
         .with_progress(false)
@@ -275,15 +293,7 @@ pub fn download_model(
             details: format!("API init failed: {}", e),
         })?;
 
-    let repo = if let Some(rev) = &revision {
-        api.repo(Repo::with_revision(
-            model_id.to_string(),
-            RepoType::Model,
-            rev.to_string(),
-        ))
-    } else {
-        api.repo(Repo::new(model_id.to_string(), RepoType::Model))
-    };
+    let (repo, revision, files_to_download) = resolve_download_plan(&api, model_id, revision)?;
 
     let total_files = files_to_download.len();
     let mut cumulative_downloaded = 0u64;
@@ -323,9 +333,7 @@ pub fn download_model(
         );
 
         // For large weight files, download in a separate thread and monitor
-        let is_large_file = file_name.ends_with(".safetensors")
-            || file_name.ends_with(".bin")
-            || file_name.ends_with(".gguf");
+        let is_large_file = file_name.ends_with(".safetensors") || file_name.ends_with(".bin");
 
         if is_large_file {
             let downloaded_for_file = download_with_progress(
@@ -387,6 +395,7 @@ struct TauriDownloadProgressReporter {
 }
 
 impl TauriDownloadProgressReporter {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         app_handle: tauri::AppHandle,
         model_id: &str,
@@ -499,6 +508,7 @@ impl Progress for TauriDownloadProgressReporter {
 }
 
 /// Download a large file using hf-hub progress callbacks.
+#[allow(clippy::too_many_arguments)]
 fn download_with_progress(
     model_id: &str,
     revision: Option<&str>,
@@ -627,11 +637,9 @@ fn wait_for_download_thread_completion(
     let mut cancellation_requested = false;
 
     loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            if !cancellation_requested {
-                cancellation_requested = true;
-                on_cancel();
-            }
+        if cancel_flag.load(Ordering::SeqCst) && !cancellation_requested {
+            cancellation_requested = true;
+            on_cancel();
         }
 
         if handle.is_finished() {
@@ -644,11 +652,211 @@ fn wait_for_download_thread_completion(
     cancellation_requested
 }
 
+/// Determine the catalog-selected revision for a model (None = default branch).
+fn determine_revision(model_id: &str, catalog_entry: Option<&CatalogModel>) -> Option<String> {
+    if model_id.starts_with("openai/whisper") {
+        return None;
+    }
+    catalog_entry
+        .and_then(|entry| entry.revision.clone())
+        .filter(|revision| revision != "main")
+}
+
+fn build_repo(api: &hf_hub::api::sync::Api, model_id: &str, revision: Option<&str>) -> ApiRepo {
+    match revision {
+        Some(rev) if rev != "main" => api.repo(Repo::with_revision(
+            model_id.to_string(),
+            RepoType::Model,
+            rev.to_string(),
+        )),
+        _ => api.repo(Repo::new(model_id.to_string(), RepoType::Model)),
+    }
+}
+
+/// Resolve the repository, revision, and file list to download.
+///
+/// Falls back to the default branch when the catalog revision is unavailable,
+/// mirroring the inference resolver in `translate::model`.
+fn resolve_download_plan(
+    api: &hf_hub::api::sync::Api,
+    model_id: &str,
+    revision: Option<String>,
+) -> Result<(ApiRepo, Option<String>, Vec<String>)> {
+    let primary = build_repo(api, model_id, revision.as_deref());
+    match determine_files(&primary, model_id) {
+        Ok(files) => Ok((primary, revision, files)),
+        Err(primary_err) => {
+            if revision.as_deref().is_some_and(|rev| rev != "main") {
+                tracing::warn!(
+                    model = model_id,
+                    revision = revision.as_deref().unwrap_or("main"),
+                    error = %primary_err,
+                    "Catalog revision unavailable; retrying download on the default branch"
+                );
+                let fallback = build_repo(api, model_id, None);
+                let files = determine_files(&fallback, model_id)?;
+                Ok((fallback, None, files))
+            } else {
+                Err(primary_err)
+            }
+        }
+    }
+}
+
+/// Determine which files need downloading for a given model.
+fn determine_files(repo: &ApiRepo, model_id: &str) -> Result<Vec<String>> {
+    let is_whisper = model_id.starts_with("openai/whisper");
+    let is_madlad = model_id.contains("madlad");
+
+    let mut files = vec!["config.json".to_string()];
+    if is_whisper || is_madlad {
+        files.push("tokenizer.json".to_string());
+    } else {
+        files.push("vocab.json".to_string());
+        files.push("source.spm".to_string());
+    }
+
+    files.extend(resolve_weight_files(repo, model_id)?);
+    Ok(files)
+}
+
+/// Pick the weight files published by the repository, preferring safetensors.
+///
+/// Sharded checkpoints contribute their index plus every shard listed in the
+/// weight map.
+fn resolve_weight_files(repo: &ApiRepo, model_id: &str) -> Result<Vec<String>> {
+    let info = repo.info().map_err(|e| AudioError::ModelDownload {
+        model: model_id.to_string(),
+        details: format!("Failed to list repository files: {}", e),
+    })?;
+    let names: HashSet<&str> = info
+        .siblings
+        .iter()
+        .map(|sibling| sibling.rfilename.as_str())
+        .collect();
+
+    if names.contains("model.safetensors") {
+        return Ok(vec!["model.safetensors".to_string()]);
+    }
+
+    if names.contains("model.safetensors.index.json") {
+        let index_path =
+            repo.get("model.safetensors.index.json")
+                .map_err(|e| AudioError::ModelDownload {
+                    model: model_id.to_string(),
+                    details: format!("Failed to download model.safetensors.index.json: {}", e),
+                })?;
+        let shards = crate::translate::model::shard_names_from_index(&index_path, model_id)?;
+        let mut files = vec!["model.safetensors.index.json".to_string()];
+        files.extend(
+            shards
+                .into_iter()
+                .filter(|shard| names.contains(shard.as_str())),
+        );
+        return Ok(files);
+    }
+
+    Err(AudioError::ModelDownload {
+        model: model_id.to_string(),
+        details: "No safetensors weights found (tried model.safetensors and model.safetensors.index.json)".to_string(),
+    })
+}
+
+// ============================================================================
+// Cache management
+// ============================================================================
+
+/// Check if a single model is cached.
+pub fn check_model_cached(model_id: &str) -> bool {
+    is_model_cached_on_disk(model_id)
+}
+
+/// Delete a model's cache directory.
+pub fn delete_model_cache(model_id: &str) -> Result<()> {
+    let cache_path = model_cache_path(model_id);
+    if !cache_path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&cache_path).map_err(|e| AudioError::ModelDelete {
+        model: model_id.to_string(),
+        details: e.to_string(),
+    })?;
+    Ok(())
+}
+
+/// Get total size of all cached HuggingFace models in bytes.
+pub fn total_cache_size() -> u64 {
+    dir_size(&hf_cache_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    fn catalog_entry(name: &str, model_id: &str, revision: Option<&str>) -> CatalogModel {
+        CatalogModel {
+            name: name.to_string(),
+            model_id: model_id.to_string(),
+            family: ModelFamily::Marian,
+            source: Some("en".to_string()),
+            target: Some("es".to_string()),
+            size_mb: 298,
+            revision: revision.map(|value| value.to_string()),
+            description: None,
+        }
+    }
+
+    #[test]
+    fn test_determine_revision_uses_catalog_and_normalizes_main() {
+        let pr = catalog_entry(
+            "marian-en-es",
+            "Helsinki-NLP/opus-mt-en-es",
+            Some("refs/pr/4"),
+        );
+        assert_eq!(
+            determine_revision("Helsinki-NLP/opus-mt-en-es", Some(&pr)),
+            Some("refs/pr/4".to_string())
+        );
+
+        let main = catalog_entry("marian-en-es", "Helsinki-NLP/opus-mt-en-es", Some("main"));
+        assert_eq!(
+            determine_revision("Helsinki-NLP/opus-mt-en-es", Some(&main)),
+            None
+        );
+
+        let unspecified = catalog_entry("marian-en-es", "Helsinki-NLP/opus-mt-en-es", None);
+        assert_eq!(
+            determine_revision("Helsinki-NLP/opus-mt-en-es", Some(&unspecified)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_determine_revision_ignores_catalog_for_whisper() {
+        let entry = catalog_entry("whisper", "openai/whisper-tiny", Some("refs/pr/4"));
+        assert_eq!(
+            determine_revision("openai/whisper-tiny", Some(&entry)),
+            None
+        );
+    }
+
+    /// Network smoke test: MADLAD-7B publishes an index plus shards, not a
+    /// monolithic `model.safetensors`. Run with:
+    /// `cargo test -- --ignored test_resolve_weight_files_sharded_madlad`
+    #[test]
+    #[ignore = "network: verifies shard resolution against jbochi/madlad400-7b-mt"]
+    fn test_resolve_weight_files_sharded_madlad() {
+        let api = ApiBuilder::new().with_progress(false).build().expect("api");
+        let repo = build_repo(&api, "jbochi/madlad400-7b-mt", None);
+        let files = resolve_weight_files(&repo, "jbochi/madlad400-7b-mt").expect("weight files");
+
+        assert!(files.contains(&"model.safetensors.index.json".to_string()));
+        assert!(files
+            .iter()
+            .any(|file| file.ends_with(".safetensors") && file != "model.safetensors"));
+    }
 
     #[test]
     fn test_wait_for_download_thread_completion_waits_for_worker_after_cancel() {
@@ -712,101 +920,4 @@ mod tests {
         let joined = handle.join().expect("worker should not panic");
         assert!(joined.is_ok());
     }
-}
-
-/// Determine which files need downloading for a given model.
-fn determine_files(
-    model_id: &str,
-    catalog_entry: Option<&CatalogModel>,
-) -> (Vec<&'static str>, Option<String>) {
-    // Whisper models
-    if model_id.starts_with("openai/whisper") {
-        return (
-            vec!["config.json", "tokenizer.json", "model.safetensors"],
-            None,
-        );
-    }
-
-    // MADLAD models
-    if model_id.contains("madlad") {
-        return (
-            vec!["config.json", "tokenizer.json", "model.safetensors"],
-            None,
-        );
-    }
-
-    // MarianMT models
-    if let Some(entry) = catalog_entry {
-        let revision = entry.revision.clone();
-        if entry.has_safetensors {
-            return (
-                vec![
-                    "config.json",
-                    "vocab.json",
-                    "source.spm",
-                    "model.safetensors",
-                ],
-                revision,
-            );
-        } else {
-            return (
-                vec![
-                    "config.json",
-                    "vocab.json",
-                    "source.spm",
-                    "pytorch_model.bin",
-                ],
-                revision,
-            );
-        }
-    }
-
-    // Default for Helsinki-NLP MarianMT
-    if model_id.starts_with("Helsinki-NLP/") {
-        let is_tc_big = model_id.contains("tc-big");
-        let revision = if is_tc_big {
-            None
-        } else {
-            Some("refs/pr/4".to_string())
-        };
-        return (
-            vec![
-                "config.json",
-                "vocab.json",
-                "source.spm",
-                "model.safetensors",
-            ],
-            revision,
-        );
-    }
-
-    // Fallback
-    (vec!["config.json", "model.safetensors"], None)
-}
-
-// ============================================================================
-// Cache management
-// ============================================================================
-
-/// Check if a single model is cached.
-pub fn check_model_cached(model_id: &str) -> bool {
-    is_model_cached_on_disk(model_id)
-}
-
-/// Delete a model's cache directory.
-pub fn delete_model_cache(model_id: &str) -> Result<()> {
-    let cache_path = model_cache_path(model_id);
-    if !cache_path.exists() {
-        return Ok(());
-    }
-    std::fs::remove_dir_all(&cache_path).map_err(|e| AudioError::ModelDelete {
-        model: model_id.to_string(),
-        details: e.to_string(),
-    })?;
-    Ok(())
-}
-
-/// Get total size of all cached HuggingFace models in bytes.
-pub fn total_cache_size() -> u64 {
-    dir_size(&hf_cache_dir())
 }

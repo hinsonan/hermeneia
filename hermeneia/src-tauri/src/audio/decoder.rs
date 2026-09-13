@@ -42,7 +42,7 @@ fn emit_decode_progress(
                 false
             }
         }
-        _ => force || packet_counter % 200 == 0,
+        _ => force || packet_counter.is_multiple_of(200),
     };
 
     if !should_emit {
@@ -230,13 +230,8 @@ pub fn decode_audio_file_with_progress<P: AsRef<Path>>(
     let channels = channels_opt
         .ok_or_else(|| AudioError::DecodeFailed("Could not determine channel count".to_string()))?;
 
-    loop {
-        // Get next packet
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(_) => break, // End of stream
-        };
-
+    // Get next packet until the stream ends
+    while let Ok(packet) = format.next_packet() {
         // Skip packets from other tracks (e.g., video, album art)
         if packet.track_id() != track_id {
             continue;
@@ -355,12 +350,7 @@ pub fn get_audio_info<P: AsRef<Path>>(path: P) -> Result<AudioInfo> {
             .map_err(|e| AudioError::DecodeFailed(format!("Failed to create decoder: {}", e)))?;
 
         // Find and decode first audio packet
-        loop {
-            let packet = match format.next_packet() {
-                Ok(p) => p,
-                Err(_) => break, // Couldn't read packet, leave channels as 0
-            };
-
+        while let Ok(packet) = format.next_packet() {
             if packet.track_id() != track_id {
                 continue;
             }
@@ -632,7 +622,7 @@ mod tests {
         // All samples should be in valid f32 range [-1.0, 1.0]
         for &sample in &audio.samples {
             assert!(
-                sample >= -1.0 && sample <= 1.0,
+                (-1.0..=1.0).contains(&sample),
                 "Sample {} out of range",
                 sample
             );

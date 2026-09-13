@@ -148,7 +148,6 @@ fn build_translate_params_for_strategy(
         preferred_model,
         fallback_enabled,
         force_cpu: false,
-        use_quantized: false,
         max_length: Some(512),
         temperature: Some(0.0),
         top_p: None,
@@ -445,6 +444,7 @@ async fn trim_audio_file(
 /// * `language` - Language code (optional)
 /// * `timestamps` - Include timestamp information
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn transcribe_audio_file(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -488,7 +488,6 @@ async fn transcribe_audio_file(
             language,
             timestamps,
             force_cpu: false,
-            use_quantized: false,
         };
 
         // Create progress reporter
@@ -544,6 +543,7 @@ async fn transcribe_audio_file(
 
 /// Run full speaker annotation pipeline (diarize + transcribe + merge).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn annotate_audio_file(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -592,7 +592,6 @@ async fn annotate_audio_file(
                 language,
                 timestamps,
                 force_cpu: false,
-                use_quantized: false,
             },
             diarize: speaker::DiarizeParams {
                 model: speaker_model_enum,
@@ -989,6 +988,7 @@ pub struct TextTranslationResult {
 /// * `source_lang` - Source language code (e.g., "en")
 /// * `target_lang` - Target language code (e.g., "es")
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn translate_text_file(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,

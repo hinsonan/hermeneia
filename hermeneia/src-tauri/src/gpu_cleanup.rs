@@ -1,7 +1,6 @@
 use crate::error::AudioError;
 use candle_core::Device;
 use candle_nn::VarBuilder;
-use std::path::Path;
 
 /// Synchronize the GPU device to ensure all pending operations complete
 /// before model tensors are dropped.
@@ -87,23 +86,42 @@ pub fn device_memory_label(device: &Device) -> &'static str {
 
 /// Load safetensors weights with platform-appropriate strategy.
 ///
-/// On Windows, uses buffered (in-memory) loading to avoid mmap file handle leaks.
-/// On Linux/macOS, uses memory-mapped loading for efficiency.
+/// Accepts one or more shard paths; `VarBuilder` resolves variables across all
+/// of them, which is required for sharded checkpoints (e.g. MADLAD-7B/10B).
+///
+/// On Windows, a single file uses buffered (in-memory) loading to avoid mmap
+/// file handle leaks. Multiple shards fall back to mmap because the buffered
+/// loader accepts only one file. On Linux/macOS, memory-mapped loading is used.
 pub fn load_safetensors_varbuilder(
-    weights_path: &Path,
+    weights_paths: &[std::path::PathBuf],
     dtype: candle_core::DType,
     device: &Device,
 ) -> std::result::Result<VarBuilder<'static>, candle_core::Error> {
+    if weights_paths.is_empty() {
+        return Err(candle_core::Error::Msg(
+            "No safetensors weight files provided".to_string(),
+        ));
+    }
+
     #[cfg(target_os = "windows")]
     {
-        tracing::info!("Using buffered safetensors loading (Windows)");
-        let data = std::fs::read(weights_path)
-            .map_err(|e| candle_core::Error::Msg(format!("Failed to read weights file: {}", e)))?;
-        VarBuilder::from_buffered_safetensors(data, dtype, device)
+        if weights_paths.len() == 1 {
+            tracing::info!("Using buffered safetensors loading (Windows)");
+            let data = std::fs::read(&weights_paths[0]).map_err(|e| {
+                candle_core::Error::Msg(format!("Failed to read weights file: {}", e))
+            })?;
+            VarBuilder::from_buffered_safetensors(data, dtype, device)
+        } else {
+            tracing::info!(
+                shards = weights_paths.len(),
+                "Using mmap safetensors loading for sharded checkpoint (Windows)"
+            );
+            unsafe { VarBuilder::from_mmaped_safetensors(weights_paths, dtype, device) }
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
-        unsafe { VarBuilder::from_mmaped_safetensors(&[weights_path.to_path_buf()], dtype, device) }
+        unsafe { VarBuilder::from_mmaped_safetensors(weights_paths, dtype, device) }
     }
 }
 

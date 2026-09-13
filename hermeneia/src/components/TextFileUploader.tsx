@@ -11,7 +11,8 @@ interface TextFileUploaderProps {
 const TextFileUploader: Component<TextFileUploaderProps> = (props) => {
   const [isDragging, setIsDragging] = createSignal(false);
   let unlistenDrop: (() => void) | undefined;
-  let unlistenHover: (() => void) | undefined;
+  let unlistenEnter: (() => void) | undefined;
+  let unlistenLeave: (() => void) | undefined;
 
   const emitSelectedFiles = (paths: string[]) => {
     const filtered = paths.filter((filePath) => {
@@ -27,26 +28,39 @@ const TextFileUploader: Component<TextFileUploaderProps> = (props) => {
     }
   };
 
+  const handleWindowBlur = () => {
+    setIsDragging(false);
+  };
+
   onMount(async () => {
     const appWindow = getCurrentWindow();
 
     // Listen for file drop events
-    unlistenDrop = await appWindow.listen<{ paths: string[] }>('tauri://drag-drop', (event) => {
+    unlistenDrop = await appWindow.listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+      setIsDragging(false);
       if (event.payload.paths && event.payload.paths.length > 0) {
-        setIsDragging(false);
         emitSelectedFiles(event.payload.paths);
       }
     });
 
-    // Listen for drag hover events
-    unlistenHover = await appWindow.listen('tauri://drag', () => {
+    // Highlight while a drag hovers over the window
+    unlistenEnter = await appWindow.listen("tauri://drag-enter", () => {
       setIsDragging(true);
     });
+
+    unlistenLeave = await appWindow.listen("tauri://drag-leave", () => {
+      setIsDragging(false);
+    });
+
+    // Fallback cleanup when focus changes without drop/leave delivery.
+    window.addEventListener("blur", handleWindowBlur);
   });
 
   onCleanup(() => {
     if (unlistenDrop) unlistenDrop();
-    if (unlistenHover) unlistenHover();
+    if (unlistenEnter) unlistenEnter();
+    if (unlistenLeave) unlistenLeave();
+    window.removeEventListener("blur", handleWindowBlur);
   });
 
   // Handle click to open file picker
