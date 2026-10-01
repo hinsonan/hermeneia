@@ -106,14 +106,14 @@ The release profile uses `opt-level = 3`, fat LTO, and single codegen unit for m
 
 ## CUDA Builds (Docker)
 
-CUDA builds compile inside Docker so you don't need a local CUDA toolkit -- only NVIDIA drivers on the host machine. The build targets CUDA 12.8 with PTX compilation for compute capability 7.5+, which covers RTX 20-series through 50-series and datacenter GPUs (A100, H100).
+CUDA builds compile inside Docker so you don't need a local CUDA toolkit -- only NVIDIA drivers on the host machine. The build targets CUDA 12.8 with PTX compilation for compute capability 6.1 (Pascal) and up, so a single binary covers older Quadro P-series/GTX 10-series cards through RTX 50-series and datacenter GPUs (A100, H100). GPUs newer than the target architecture JIT-compile the embedded PTX at load time. Requires an NVIDIA driver >= 525.
 
 ### Initial Setup (one-time)
 
 Extract CUDA runtime libraries from the official NVIDIA Docker image:
 
 ```bash
-cd src-tauri && docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs
+cd src-tauri && docker compose -f docker-compose.cuda.yml run --rm extract-cuda-libs
 ```
 
 This copies `libcudart`, `libcublas`, `libcublasLt`, `libnvrtc`, and `libcurand` shared objects into `src-tauri/cuda-libs/`.
@@ -157,9 +157,9 @@ The `src-tauri/docker-compose.cuda.yml` defines these services:
 
 | Service | Purpose | Command |
 |---------|---------|---------|
-| `extract-cuda-libs` | One-time extraction of CUDA 12.8 runtime libs | `docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs` |
-| `build-dev` | Incremental dev builds with Cargo caching | `docker-compose -f docker-compose.cuda.yml run --rm build-dev` |
-| `bundle-cuda` | Full app bundles (.deb/.rpm/.AppImage) with CUDA | `docker-compose -f docker-compose.cuda.yml run --rm bundle-cuda` |
+| `extract-cuda-libs` | One-time extraction of CUDA 12.8 runtime libs | `docker compose -f docker-compose.cuda.yml run --rm extract-cuda-libs` |
+| `build-dev` | Incremental dev builds with Cargo caching | `docker compose -f docker-compose.cuda.yml run --rm build-dev` |
+| `bundle-cuda` | Full app bundles (.deb/.rpm/.AppImage) with CUDA | `docker compose -f docker-compose.cuda.yml run --rm bundle-cuda` |
 
 ---
 
