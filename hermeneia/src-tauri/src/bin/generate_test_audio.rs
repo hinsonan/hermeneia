@@ -6,7 +6,7 @@
 use clap::Parser;
 use hound::{SampleFormat, WavSpec, WavWriter};
 use std::f32::consts::PI;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Parser, Debug)]
@@ -49,7 +49,7 @@ enum OutputFormat {
     Flac,
 }
 
-fn detect_format(path: &PathBuf) -> OutputFormat {
+fn detect_format(path: &Path) -> OutputFormat {
     match path.extension().and_then(|e| e.to_str()) {
         Some("mp3") => OutputFormat::Mp3,
         Some("flac") => OutputFormat::Flac,

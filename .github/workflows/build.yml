@@ -736,7 +736,7 @@ jobs:
 
       - name: Build Tauri (CUDA)
         env:
-          CUDA_COMPUTE_CAP: '75'
+          CUDA_COMPUTE_CAP: '61'
         run: npx tauri build --no-bundle --config src-tauri/tauri.cuda.windows.conf.json -- --no-default-features --features cuda
 
       - name: Validate runtime imports with dumpbin

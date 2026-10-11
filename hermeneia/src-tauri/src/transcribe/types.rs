@@ -188,7 +188,6 @@ pub struct TranscribeParams {
     pub language: Option<String>,
     pub timestamps: bool,
     pub force_cpu: bool,
-    pub use_quantized: bool,
 }
 
 impl Default for TranscribeParams {
@@ -199,7 +198,6 @@ impl Default for TranscribeParams {
             language: None,
             timestamps: true,
             force_cpu: false,
-            use_quantized: false,
         }
     }
 }
@@ -230,7 +228,6 @@ pub struct ModelFiles {
     pub config: PathBuf,
     pub tokenizer: PathBuf,
     pub weights: PathBuf,
-    pub is_quantized: bool,
 }
 
 #[cfg(test)]

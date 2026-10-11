@@ -73,12 +73,3 @@ export function parseTime(timeStr: string): number | null {
 
   return seconds;
 }
-
-/**
- * Validate time string format
- * @param timeStr - Time string to validate
- * @returns True if valid format
- */
-export function isValidTimeFormat(timeStr: string): boolean {
-  return parseTime(timeStr) !== null;
-}

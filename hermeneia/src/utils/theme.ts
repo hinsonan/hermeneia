@@ -10,7 +10,7 @@ const [theme, setTheme] = createSignal<Theme>('light');
 /**
  * Initialize theme from localStorage or system preference
  */
-export function initTheme(): void {
+function initTheme(): void {
   const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) as Theme | null;
 
   if (savedTheme && (savedTheme === 'light' || savedTheme === 'dark')) {
@@ -42,7 +42,7 @@ export function toggleTheme(): void {
 /**
  * Get current theme
  */
-export function getTheme() {
+function getTheme() {
   return theme;
 }
 

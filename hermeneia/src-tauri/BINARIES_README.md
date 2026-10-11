@@ -535,7 +535,7 @@ Extract CUDA 12.8 runtime libraries from Docker:
 
 ```bash
 cd src-tauri
-docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs
+docker compose -f docker-compose.cuda.yml run --rm extract-cuda-libs
 ```
 
 This creates `src-tauri/cuda-libs/` with the necessary CUDA libraries.
@@ -548,13 +548,13 @@ Build any binary with CUDA support:
 cd src-tauri
 
 # Development build
-docker-compose -f docker-compose.cuda.yml run --rm build-dev
+docker compose -f docker-compose.cuda.yml run --rm build-dev
 
 # Release build (inside Docker)
-docker-compose -f docker-compose.cuda.yml run --rm build-dev sh -c "cargo build --release --features cuda --bin transcribe"
+docker compose -f docker-compose.cuda.yml run --rm build-dev sh -c "cargo build --release --features cuda --bin transcribe"
 
 # Build annotate with CUDA
-docker-compose -f docker-compose.cuda.yml run --rm build-dev sh -c "cargo build --no-default-features --features cuda --bin annotate"
+docker compose -f docker-compose.cuda.yml run --rm build-dev sh -c "cargo build --no-default-features --features cuda --bin annotate"
 ```
 
 Binaries are output to `src-tauri/target-cuda/debug/` or `src-tauri/target-cuda/release/`.
@@ -646,8 +646,8 @@ LD_LIBRARY_PATH=./cuda-libs:./target-cuda/debug ./target-cuda/debug/annotate \
 
 ### Requirements
 
-- **Development**: NVIDIA drivers only (no CUDA toolkit installation needed)
-- **GPU**: NVIDIA GPU with compute capability ≥ 7.5 (RTX 20-series or newer)
+- **Development**: NVIDIA drivers only (no CUDA toolkit installation needed); driver >= 525 for the CUDA 12.8 runtime
+- **GPU**: NVIDIA GPU with compute capability >= 6.1 (Pascal; Quadro P-series / GTX 10-series or newer)
 - **CUDA**: Libraries extracted from Docker (via `extract-cuda-libs` command)
 
 ### Why LD_LIBRARY_PATH?

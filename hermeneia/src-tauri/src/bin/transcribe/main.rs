@@ -179,7 +179,6 @@ fn main() -> anyhow::Result<()> {
         language: args.language,
         timestamps: args.timestamps,
         force_cpu: args.cpu,
-        use_quantized: false,
     };
 
     let progress = TranscriptionProgress::new();
@@ -210,7 +209,7 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", srt);
             }
         }
-        "text" | _ => {
+        _ => {
             if let Some(output_path) = args.output {
                 std::fs::write(output_path, &result.text)?;
             } else {

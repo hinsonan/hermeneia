@@ -1,5 +1,4 @@
 use crate::error::{AudioError, Result};
-use crate::hf_cache::hf_hub_cache_dir;
 use crate::transcribe::types::{ModelFiles, WhisperModel};
 use candle_core::Device;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -23,7 +22,7 @@ impl ModelManager {
     }
 
     /// Download model if not cached, return paths to required files
-    pub fn ensure_model(&self, model: WhisperModel, quantized: bool) -> Result<ModelFiles> {
+    pub fn ensure_model(&self, model: WhisperModel) -> Result<ModelFiles> {
         let repo_id = model.model_id();
         let repo = self
             .api
@@ -44,41 +43,18 @@ impl ModelManager {
                 details: e.to_string(),
             })?;
 
-        let (weights, is_quantized) = if quantized {
-            // Try quantized first, fall back to normal
-            match repo.get("model-q8_0.gguf") {
-                Ok(w) => (w, true),
-                Err(_) => {
-                    let w =
-                        repo.get("model.safetensors")
-                            .map_err(|e| AudioError::ModelDownload {
-                                model: repo_id.to_string(),
-                                details: e.to_string(),
-                            })?;
-                    (w, false)
-                }
-            }
-        } else {
-            let w = repo
-                .get("model.safetensors")
-                .map_err(|e| AudioError::ModelDownload {
-                    model: repo_id.to_string(),
-                    details: e.to_string(),
-                })?;
-            (w, false)
-        };
+        let weights = repo
+            .get("model.safetensors")
+            .map_err(|e| AudioError::ModelDownload {
+                model: repo_id.to_string(),
+                details: e.to_string(),
+            })?;
 
         Ok(ModelFiles {
             config,
             tokenizer,
             weights,
-            is_quantized,
         })
-    }
-
-    /// Get cache directory path
-    pub fn cache_dir(&self) -> std::path::PathBuf {
-        hf_hub_cache_dir()
     }
 }
 

@@ -67,10 +67,6 @@ interface ResolveTranslationModelMetadata {
   user_hint?: unknown;
 }
 
-type ResolveTranslationModelResponse =
-  | [string, string]
-  | ResolveTranslationModelMetadata;
-
 function makeId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -227,23 +223,9 @@ function normalizeJobSettings(settings: unknown): TranslationJobSettings {
 }
 
 function normalizeResolvedModel(
-  response: ResolveTranslationModelResponse,
+  response: ResolveTranslationModelMetadata,
   strategy: TranslationStrategy
 ): { modelId: string; modelName: string; engine: TranslationEngineMetadata } {
-  if (Array.isArray(response)) {
-    const modelId = typeof response[0] === "string" ? response[0] : "";
-    const modelName = typeof response[1] === "string" ? response[1] : modelId;
-    if (!modelId) {
-      throw new Error("resolve_translation_model returned invalid model metadata");
-    }
-    const tier = inferEngineTier(modelId, modelName, strategy);
-    return {
-      modelId,
-      modelName,
-      engine: createEngineMetadata(tier, modelId, modelName),
-    };
-  }
-
   const modelId = typeof response.modelId === "string"
     ? response.modelId
     : typeof response.model_id === "string"
@@ -389,14 +371,6 @@ function findJobIndex(jobId: string): number {
   return state.jobs.findIndex((job) => job.id === jobId);
 }
 
-function isCancelJobCommandUnavailable(err: unknown): boolean {
-  const message = String(err).toLowerCase();
-  return message.includes("unknown command `cancel_job`")
-    || message.includes("unknown command: cancel_job")
-    || message.includes("command cancel_job not found")
-    || (message.includes("not found") && message.includes("cancel_job"));
-}
-
 function hasActiveTranslationJob(jobId: string): boolean {
   return state.jobs.some((job) => job.id === jobId && isActiveTranslationStatus(job.status));
 }
@@ -407,7 +381,7 @@ function restoreFailedCancellation(jobId: string, previous: TranslationQueueJob)
   const index = findJobIndex(jobId);
   if (index < 0 || state.jobs[index].status !== "cancelling") return;
 
-  setState("jobs", index, (job) => ({
+  setState("jobs", index, (job): Partial<TranslationQueueJob> => ({
     ...job,
     status: previous.status,
     progress: previous.progress,
@@ -492,7 +466,7 @@ function updateTranslationProgress(jobId: string, progress: TranslationProgress)
   const current = state.jobs[index];
   if (isTerminalStatus(current.status) || current.status === "cancelling") return;
 
-  setState("jobs", index, (job) => ({
+  setState("jobs", index, (job): Partial<TranslationQueueJob> => ({
     ...job,
     progress,
     status: progress.phase === "waiting_resources"
@@ -516,7 +490,7 @@ function updateDownloadProgress(payload: DownloadProgress) {
   const current = state.jobs[index];
   if (isTerminalStatus(current.status) || current.status === "cancelling") return;
 
-  setState("jobs", index, (job) => ({
+  setState("jobs", index, (job): Partial<TranslationQueueJob> => ({
     ...job,
     status: payload.phase === "downloading" ? "downloading_model" : job.status,
     downloadProgress: payload.phase === "complete" ? null : payload,
@@ -616,7 +590,7 @@ async function ensureModelDownloaded(
 
   const waitingIndex = findJobIndex(jobId);
   if (waitingIndex >= 0) {
-    setState("jobs", waitingIndex, (job) => ({
+    setState("jobs", waitingIndex, (job): Partial<TranslationQueueJob> => ({
       ...job,
       status: "waiting_resources",
       progress: {
@@ -639,7 +613,7 @@ async function ensureModelDownloaded(
 
     const index = findJobIndex(jobId);
     if (index >= 0) {
-      setState("jobs", index, (job) => ({
+      setState("jobs", index, (job): Partial<TranslationQueueJob> => ({
         ...job,
         status: "downloading_model",
         progress: {
@@ -713,7 +687,7 @@ async function runJob(jobId: string): Promise<void> {
   const controller = new AbortController();
   runControllers.set(jobId, controller);
 
-  setState("jobs", index, (job) => ({
+  setState("jobs", index, (job): Partial<TranslationQueueJob> => ({
     ...job,
     status: "waiting_resources",
     error: null,
@@ -735,7 +709,7 @@ async function runJob(jobId: string): Promise<void> {
     if (freshIndex < 0) return;
     const current = state.jobs[freshIndex];
 
-    const resolvedModel = await invoke<ResolveTranslationModelResponse>("resolve_translation_model", {
+    const resolvedModel = await invoke<ResolveTranslationModelMetadata>("resolve_translation_model", {
       sourceLang: current.settings.sourceLang,
       targetLang: current.settings.targetLang,
       strategy: current.settings.strategy,
@@ -746,7 +720,7 @@ async function runJob(jobId: string): Promise<void> {
 
     const resolvedIndex = findJobIndex(jobId);
     if (resolvedIndex >= 0) {
-      setState("jobs", resolvedIndex, (job) => ({
+      setState("jobs", resolvedIndex, (job): Partial<TranslationQueueJob> => ({
         ...job,
         engine,
       }));
@@ -765,7 +739,7 @@ async function runJob(jobId: string): Promise<void> {
 
     const loadingIndex = findJobIndex(jobId);
     if (loadingIndex >= 0) {
-      setState("jobs", loadingIndex, (job) => ({
+      setState("jobs", loadingIndex, (job): Partial<TranslationQueueJob> => ({
         ...job,
         status: "loading_model",
         progress: {
@@ -798,7 +772,7 @@ async function runJob(jobId: string): Promise<void> {
     const completedJob = state.jobs[completedIndex];
 
     if (completedJob.status === "cancelling" || completedJob.status === "cancelled") {
-      setState("jobs", completedIndex, (job) => ({
+      setState("jobs", completedIndex, (job): Partial<TranslationQueueJob> => ({
         ...job,
         status: "cancelled",
         error: null,
@@ -807,7 +781,7 @@ async function runJob(jobId: string): Promise<void> {
       }));
       removeTranslationJobIfClearPending(jobId);
     } else if (completedJob.status === "loading_model" || completedJob.status === "running") {
-      setState("jobs", completedIndex, (job) => ({
+      setState("jobs", completedIndex, (job): Partial<TranslationQueueJob> => ({
         ...job,
         status: "completed",
         result,
@@ -834,7 +808,7 @@ async function runJob(jobId: string): Promise<void> {
     }
 
     if (current.status === "cancelling" || (isActiveTranslationStatus(current.status) && failureType === "cancelled")) {
-      setState("jobs", freshIndex, (job) => ({
+      setState("jobs", freshIndex, (job): Partial<TranslationQueueJob> => ({
         ...job,
         status: "cancelled",
         error: null,
@@ -844,7 +818,7 @@ async function runJob(jobId: string): Promise<void> {
       }));
       removeTranslationJobIfClearPending(jobId);
     } else if (isActiveTranslationStatus(current.status) && isAbortError(err)) {
-      setState("jobs", freshIndex, (job) => ({
+      setState("jobs", freshIndex, (job): Partial<TranslationQueueJob> => ({
         ...job,
         status: "cancelled",
         error: null,
@@ -854,7 +828,7 @@ async function runJob(jobId: string): Promise<void> {
       }));
       removeTranslationJobIfClearPending(jobId);
     } else if (isActiveTranslationStatus(current.status)) {
-      setState("jobs", freshIndex, (job) => ({
+      setState("jobs", freshIndex, (job): Partial<TranslationQueueJob> => ({
         ...job,
         status: "failed",
         error: errorMessage,
@@ -957,16 +931,6 @@ export async function initTranslationJobQueue(): Promise<void> {
   initPromise = promise;
 
   return initPromise;
-}
-
-export function teardownTranslationJobQueue() {
-  initGeneration += 1;
-  initPromise = null;
-  if (unlistenTranslation) unlistenTranslation();
-  if (unlistenDownload) unlistenDownload();
-  unlistenTranslation = null;
-  unlistenDownload = null;
-  setState("listenersInitialized", false);
 }
 
 export function setTranslationDefault<K extends keyof TranslationJobSettings>(
@@ -1086,7 +1050,7 @@ export async function cancelTranslationJob(jobId: string): Promise<void> {
   if (current.status === "cancelling") return;
 
   if (current.status === "queued" || current.status === "failed") {
-    setState("jobs", index, (job) => ({
+    setState("jobs", index, (job): Partial<TranslationQueueJob> => ({
       ...job,
       status: "cancelled",
       error: null,
@@ -1099,7 +1063,7 @@ export async function cancelTranslationJob(jobId: string): Promise<void> {
     return;
   }
 
-  setState("jobs", index, (job) => ({
+  setState("jobs", index, (job): Partial<TranslationQueueJob> => ({
     ...job,
     status: "cancelling",
     progress: job.progress
@@ -1121,8 +1085,7 @@ export async function cancelTranslationJob(jobId: string): Promise<void> {
 
   const canUseBackendCancel =
     current.status === "loading_model"
-    || current.status === "running"
-    || current.status === "cancelling";
+    || current.status === "running";
 
   try {
     if (current.status === "downloading_model" && downloadLockOwnerJobId === jobId) {
@@ -1138,18 +1101,8 @@ export async function cancelTranslationJob(jobId: string): Promise<void> {
 
     controller?.abort();
   } catch (err) {
-    if (isCancelJobCommandUnavailable(err)) {
-      try {
-        await invoke("cancel_inference");
-        controller?.abort();
-      } catch (fallbackErr) {
-        setState("queueError", `Failed to cancel job: ${String(fallbackErr)}`);
-        restoreFailedCancellation(jobId, current);
-      }
-    } else {
-      setState("queueError", `Failed to cancel job: ${String(err)}`);
-      restoreFailedCancellation(jobId, current);
-    }
+    setState("queueError", `Failed to cancel job: ${String(err)}`);
+    restoreFailedCancellation(jobId, current);
   } finally {
     schedulePersist();
     if (!hasActiveTranslationJob(jobId)) {

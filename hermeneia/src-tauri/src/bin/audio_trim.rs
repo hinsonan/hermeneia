@@ -23,10 +23,6 @@ struct Args {
     /// End time in seconds
     #[arg(short, long)]
     end: f64,
-
-    /// Show detailed information
-    #[arg(short, long)]
-    verbose: bool,
 }
 
 fn main() -> anyhow::Result<()> {

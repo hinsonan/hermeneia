@@ -5,8 +5,9 @@ use crate::translate::language::get_marian_for_pair;
 use crate::translate::types::TranslateParams;
 use crate::translate::types::TranslationModel;
 use candle_core::Device;
+use hf_hub::api::sync::ApiRepo;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Paths to translation model files
 #[derive(Debug, Clone)]
@@ -14,8 +15,7 @@ pub struct ModelFiles {
     pub config: PathBuf,
     pub tokenizer: PathBuf,
     pub spm_model: Option<PathBuf>, // SentencePiece model for MarianMT
-    pub weights: PathBuf,
-    pub is_quantized: bool,
+    pub weights: Vec<PathBuf>,      // One path, or all shards for sharded checkpoints
 }
 
 /// Model manager for downloading and caching translation models
@@ -94,234 +94,121 @@ impl ModelManager {
         Ok(TranslationModel::Madlad3B)
     }
 
-    /// Check if a model is already cached locally
-    pub fn is_model_cached(&self, model: TranslationModel) -> Result<bool> {
-        let repo_id = model.model_id();
-
-        // Different model families use different revisions for safetensors
-        let repo = if let Some(revision) = model.safetensors_revision() {
-            self.api.repo(Repo::with_revision(
+    /// Build a repository handle for a model at the given revision.
+    ///
+    /// `None` or `"main"` selects the repository's default branch.
+    fn repo_for(&self, repo_id: &str, revision: Option<&str>) -> ApiRepo {
+        match revision {
+            Some(rev) if rev != "main" => self.api.repo(Repo::with_revision(
                 repo_id.to_string(),
                 RepoType::Model,
-                revision.to_string(),
-            ))
-        } else {
-            self.api
-                .repo(Repo::new(repo_id.to_string(), RepoType::Model))
-        };
+                rev.to_string(),
+            )),
+            _ => self
+                .api
+                .repo(Repo::new(repo_id.to_string(), RepoType::Model)),
+        }
+    }
 
-        // Try to get the config file - if it's cached, the model is available
+    fn config_cached_at(&self, repo_id: &str, revision: Option<&str>) -> Result<bool> {
+        let repo = self.repo_for(repo_id, revision);
         match repo.get("config.json") {
             Ok(path) => Ok(path.exists()),
             Err(_) => Ok(false),
         }
+    }
+
+    /// Check if a model is already cached locally
+    pub fn is_model_cached(&self, model: TranslationModel) -> Result<bool> {
+        let repo_id = model.model_id();
+        let revision = model.catalog_revision();
+
+        if self.config_cached_at(repo_id, revision.as_deref())? {
+            return Ok(true);
+        }
+
+        // The catalog revision may have been removed; try the default branch.
+        if revision.as_deref().is_some_and(|rev| rev != "main") {
+            return self.config_cached_at(repo_id, None);
+        }
+
+        Ok(false)
     }
 
     /// Check if a catalog model entry is cached locally
     pub fn is_catalog_model_cached(&self, model: &CatalogModel) -> Result<bool> {
-        let repo = if let Some(revision) = model.revision.as_deref() {
-            self.api.repo(Repo::with_revision(
-                model.model_id.to_string(),
-                RepoType::Model,
-                revision.to_string(),
-            ))
-        } else {
-            self.api
-                .repo(Repo::new(model.model_id.to_string(), RepoType::Model))
-        };
+        let revision = model.revision.as_deref();
 
-        match repo.get("config.json") {
-            Ok(path) => Ok(path.exists()),
-            Err(_) => Ok(false),
+        if self.config_cached_at(&model.model_id, revision)? {
+            return Ok(true);
         }
+
+        if revision.is_some_and(|rev| rev != "main") {
+            return self.config_cached_at(&model.model_id, None);
+        }
+
+        Ok(false)
     }
 
     /// Download model if not cached, return paths to required files
-    pub fn ensure_model(&self, model: TranslationModel, quantized: bool) -> Result<ModelFiles> {
+    ///
+    /// The revision is driven by the catalog. When a catalog revision is no
+    /// longer available, the resolver retries the default branch (main), which
+    /// keeps models reachable even if a PR ref is deleted.
+    pub fn ensure_model(&self, model: TranslationModel) -> Result<ModelFiles> {
         let repo_id = model.model_id();
-
-        // Different model families use different revisions for safetensors
-        let repo = if let Some(revision) = model.safetensors_revision() {
-            tracing::info!("Using revision '{}' for safetensors support", revision);
-            self.api.repo(Repo::with_revision(
-                repo_id.to_string(),
-                RepoType::Model,
-                revision.to_string(),
-            ))
-        } else {
-            self.api
-                .repo(Repo::new(repo_id.to_string(), RepoType::Model))
-        };
+        let revision = model.catalog_revision();
 
         tracing::info!("Loading model: {} ({})", model.display_name(), repo_id);
 
-        // Download required files
-        let config = repo
-            .get("config.json")
-            .map_err(|e| AudioError::ModelDownload {
-                model: repo_id.to_string(),
-                details: e.to_string(),
-            })?;
+        match self.ensure_model_at_revision(model, revision.as_deref()) {
+            Ok(files) => Ok(files),
+            Err(primary_err) => {
+                if revision.as_deref().is_some_and(|rev| rev != "main") {
+                    tracing::warn!(
+                        repo = repo_id,
+                        revision = revision.as_deref().unwrap_or("main"),
+                        error = %primary_err,
+                        "Catalog revision unavailable; retrying on the default branch"
+                    );
+                    self.ensure_model_at_revision(model, None)
+                } else {
+                    Err(primary_err)
+                }
+            }
+        }
+    }
+
+    fn ensure_model_at_revision(
+        &self,
+        model: TranslationModel,
+        revision: Option<&str>,
+    ) -> Result<ModelFiles> {
+        let repo_id = model.model_id();
+        let repo = self.repo_for(repo_id, revision);
+
+        let config = get_required(&repo, repo_id, "config.json")?;
 
         // Different model families have different tokenizer file names
         let (tokenizer, spm_model) = if model.is_marian() {
-            // MarianMT uses vocab.json + source.spm
-            let vocab = repo
-                .get("vocab.json")
-                .map_err(|e| AudioError::ModelDownload {
-                    model: repo_id.to_string(),
-                    details: format!("Failed to download vocab.json: {}", e),
-                })?;
-            let spm = repo
-                .get("source.spm")
-                .map_err(|e| AudioError::ModelDownload {
-                    model: repo_id.to_string(),
-                    details: format!("Failed to download source.spm: {}", e),
-                })?;
+            let vocab = get_required(&repo, repo_id, "vocab.json")?;
+            let spm = get_required(&repo, repo_id, "source.spm")?;
             (vocab, Some(spm))
         } else {
-            // MADLAD models use tokenizer.json from main repo
-            let tok = repo
-                .get("tokenizer.json")
-                .map_err(|e| AudioError::ModelDownload {
-                    model: repo_id.to_string(),
-                    details: format!("Failed to download tokenizer.json: {}", e),
-                })?;
-            (tok, None)
+            let tokenizer = get_required(&repo, repo_id, "tokenizer.json")?;
+            (tokenizer, None)
         };
 
-        // Download model weights
-        let (weights, is_quantized) = if quantized {
-            // Try quantized first, fall back to normal
-            match repo.get("model-q8_0.gguf") {
-                Ok(w) => (w, true),
-                Err(_) => {
-                    tracing::warn!("Quantized model not available, using full precision");
-                    let w =
-                        repo.get("model.safetensors")
-                            .map_err(|e| AudioError::ModelDownload {
-                                model: repo_id.to_string(),
-                                details: e.to_string(),
-                            })?;
-                    (w, false)
-                }
-            }
-        } else {
-            // For non-quantized models, prefer safetensors
-            match repo.get("model.safetensors") {
-                Ok(w) => {
-                    tracing::info!("Using safetensors format");
-                    (w, false)
-                }
-                Err(_) => {
-                    // Try pytorch_model.bin as fallback, but warn that it may not work
-                    tracing::warn!(
-                        "SafeTensors not available, trying PyTorch bin (may fail for some models)"
-                    );
-                    match repo.get("pytorch_model.bin") {
-                        Ok(w) => (w, false),
-                        Err(e) => {
-                            return Err(AudioError::ModelDownload {
-                                model: repo_id.to_string(),
-                                details: format!("No compatible model format found. Tried: model.safetensors, pytorch_model.bin. Last error: {}", e),
-                            });
-                        }
-                    }
-                }
-            }
-        };
+        let weights = download_weights(&repo, repo_id)?;
 
-        tracing::info!("Model loaded successfully (quantized: {})", is_quantized);
+        tracing::info!("Model files resolved successfully");
 
         Ok(ModelFiles {
             config,
             tokenizer,
             spm_model,
             weights,
-            is_quantized,
         })
-    }
-
-    /// List all cached translation models
-    pub fn list_cached_models(&self) -> Result<Vec<(TranslationModel, u64)>> {
-        let mut cached = Vec::new();
-
-        // Check all known models
-        let all_models = [
-            TranslationModel::Madlad3B,
-            TranslationModel::Madlad7B,
-            TranslationModel::Madlad10B,
-            TranslationModel::MarianEnEs,
-            TranslationModel::MarianEsEn,
-            TranslationModel::MarianEnFr,
-            TranslationModel::MarianFrEn,
-            TranslationModel::MarianEnDe,
-            TranslationModel::MarianDeEn,
-            TranslationModel::MarianEnPt,
-            TranslationModel::MarianPtEn,
-            TranslationModel::MarianEnIt,
-            TranslationModel::MarianItEn,
-            TranslationModel::MarianEnRo,
-            TranslationModel::MarianRoEn,
-            TranslationModel::MarianEnNl,
-            TranslationModel::MarianNlEn,
-            TranslationModel::MarianEnSv,
-            TranslationModel::MarianSvEn,
-            TranslationModel::MarianEnDa,
-            TranslationModel::MarianDaEn,
-            TranslationModel::MarianEnNo,
-            TranslationModel::MarianNoEn,
-            TranslationModel::MarianEnRu,
-            TranslationModel::MarianRuEn,
-            TranslationModel::MarianEnPl,
-            TranslationModel::MarianPlEn,
-            TranslationModel::MarianEnCs,
-            TranslationModel::MarianCsEn,
-            TranslationModel::MarianEnUk,
-            TranslationModel::MarianUkEn,
-            TranslationModel::MarianEnZh,
-            TranslationModel::MarianZhEn,
-            TranslationModel::MarianEnJa,
-            TranslationModel::MarianJaEn,
-            TranslationModel::MarianEnKo,
-            TranslationModel::MarianKoEn,
-            TranslationModel::MarianEnVi,
-            TranslationModel::MarianViEn,
-            TranslationModel::MarianEnTh,
-            TranslationModel::MarianThEn,
-            TranslationModel::MarianEnId,
-            TranslationModel::MarianIdEn,
-            TranslationModel::MarianEnAr,
-            TranslationModel::MarianArEn,
-            TranslationModel::MarianEnHe,
-            TranslationModel::MarianHeEn,
-            TranslationModel::MarianEnFa,
-            TranslationModel::MarianFaEn,
-            TranslationModel::MarianEnTr,
-            TranslationModel::MarianTrEn,
-            TranslationModel::MarianEnHi,
-            TranslationModel::MarianHiEn,
-            TranslationModel::MarianEnBn,
-            TranslationModel::MarianBnEn,
-            TranslationModel::MarianEnUr,
-            TranslationModel::MarianUrEn,
-            TranslationModel::MarianEnHu,
-            TranslationModel::MarianHuEn,
-            TranslationModel::MarianEnFi,
-            TranslationModel::MarianFiEn,
-            TranslationModel::MarianEnEl,
-            TranslationModel::MarianElEn,
-            TranslationModel::MarianEnSw,
-            TranslationModel::MarianSwEn,
-        ];
-
-        for model in all_models {
-            if self.is_model_cached(model)? {
-                cached.push((model, model.approx_size_mb()));
-            }
-        }
-
-        Ok(cached)
     }
 
     /// List models from the catalog with cache status
@@ -341,6 +228,83 @@ impl ModelManager {
     pub fn cache_dir(&self) -> PathBuf {
         hf_hub_cache_dir()
     }
+}
+
+fn get_required(repo: &ApiRepo, repo_id: &str, file: &str) -> Result<PathBuf> {
+    repo.get(file).map_err(|e| AudioError::ModelDownload {
+        model: repo_id.to_string(),
+        details: format!("Failed to download {}: {}", file, e),
+    })
+}
+
+/// Download model weights.
+///
+/// Safetensors is the only supported checkpoint format. Handles sharded
+/// checkpoints: when a monolithic `model.safetensors` is not published, the
+/// `model.safetensors.index.json` weight map is resolved and every shard is
+/// downloaded.
+fn download_weights(repo: &ApiRepo, repo_id: &str) -> Result<Vec<PathBuf>> {
+    if let Ok(path) = repo.get("model.safetensors") {
+        tracing::info!("Using safetensors format");
+        return Ok(vec![path]);
+    }
+
+    if let Ok(index_path) = repo.get("model.safetensors.index.json") {
+        let shards = shard_names_from_index(&index_path, repo_id)?;
+        tracing::info!(shards = shards.len(), "Using sharded safetensors format");
+        let mut paths = Vec::with_capacity(shards.len());
+        for shard in shards {
+            paths.push(repo.get(&shard).map_err(|e| AudioError::ModelDownload {
+                model: repo_id.to_string(),
+                details: format!("Failed to download shard {}: {}", shard, e),
+            })?);
+        }
+        return Ok(paths);
+    }
+
+    Err(AudioError::ModelDownload {
+        model: repo_id.to_string(),
+        details: "No safetensors weights found (tried model.safetensors and model.safetensors.index.json)".to_string(),
+    })
+}
+
+/// Read a safetensors index file and return its unique shard file names.
+pub(crate) fn shard_names_from_index(index_path: &Path, repo_id: &str) -> Result<Vec<String>> {
+    let raw = std::fs::read_to_string(index_path).map_err(|e| AudioError::ModelLoad {
+        model: repo_id.to_string(),
+        details: format!("Failed to read safetensors index: {}", e),
+    })?;
+
+    let index: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| AudioError::ModelLoad {
+            model: repo_id.to_string(),
+            details: format!("Failed to parse safetensors index: {}", e),
+        })?;
+
+    let weight_map = index
+        .get("weight_map")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| AudioError::ModelLoad {
+            model: repo_id.to_string(),
+            details: "safetensors index is missing a weight_map object".to_string(),
+        })?;
+
+    let mut shards: Vec<String> = weight_map
+        .values()
+        .filter_map(|value| value.as_str())
+        .map(|name| name.to_string())
+        .collect();
+    shards.sort();
+    shards.dedup();
+
+    if shards.is_empty() {
+        return Err(AudioError::ModelLoad {
+            model: repo_id.to_string(),
+            details: "safetensors index contains no shard files".to_string(),
+        });
+    }
+
+    Ok(shards)
 }
 
 /// Get compute device (CPU, CUDA, or Metal)
@@ -406,12 +370,8 @@ mod tests {
         };
 
         let selected = manager.select_model(&params).unwrap();
-        // Should select either MarianEnFr (if specialized) or Madlad3B as fallback
-        assert!(
-            selected == TranslationModel::MarianEnFr || selected == TranslationModel::Madlad3B,
-            "Expected MarianEnFr or Madlad3B, got {:?}",
-            selected
-        );
+        // en->fr has no safetensors Marian model, so it falls back to MADLAD
+        assert_eq!(selected, TranslationModel::Madlad3B);
     }
 
     #[test]
@@ -431,5 +391,59 @@ mod tests {
             result.unwrap_err(),
             AudioError::UnsupportedLanguagePair { .. }
         ));
+    }
+
+    fn write_index(content: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "hermeneia-shard-index-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let index_path = dir.join("model.safetensors.index.json");
+        std::fs::write(&index_path, content).unwrap();
+        (dir, index_path)
+    }
+
+    #[test]
+    fn test_shard_names_from_index_dedups_and_sorts() {
+        let (dir, index_path) = write_index(
+            r#"{"metadata":{},"weight_map":{
+                "a":"model-00002-of-00002.safetensors",
+                "b":"model-00001-of-00002.safetensors",
+                "c":"model-00001-of-00002.safetensors"
+            }}"#,
+        );
+
+        let shards = shard_names_from_index(&index_path, "test/model").unwrap();
+        assert_eq!(
+            shards,
+            vec![
+                "model-00001-of-00002.safetensors".to_string(),
+                "model-00002-of-00002.safetensors".to_string()
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_shard_names_from_index_rejects_missing_weight_map() {
+        let (dir, index_path) = write_index(r#"{"metadata":{}}"#);
+
+        let result = shard_names_from_index(&index_path, "test/model");
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_shard_names_from_index_rejects_empty_weight_map() {
+        let (dir, index_path) = write_index(r#"{"weight_map":{}}"#);
+
+        let result = shard_names_from_index(&index_path, "test/model");
+        assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

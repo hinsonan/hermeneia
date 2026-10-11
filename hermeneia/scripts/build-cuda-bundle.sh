@@ -6,7 +6,7 @@ set -e
 # Ensure CUDA libs are extracted (one-time setup)
 if [ ! -d "src-tauri/cuda-libs" ] || [ -z "$(ls -A src-tauri/cuda-libs 2>/dev/null)" ]; then
     echo "CUDA libraries not found. Extracting from Docker image..."
-    cd src-tauri && docker-compose -f docker-compose.cuda.yml run --rm extract-cuda-libs && cd ..
+    cd src-tauri && docker compose -f docker-compose.cuda.yml run --rm extract-cuda-libs && cd ..
     echo ""
 fi
 
@@ -18,8 +18,8 @@ export HOST_GID=$(id -g)
 echo "Building CUDA bundles (.deb, .rpm, .AppImage)..."
 echo ""
 cd src-tauri && \
-    docker-compose -f docker-compose.cuda.yml build bundle-cuda && \
-    docker-compose -f docker-compose.cuda.yml run --rm bundle-cuda && \
+    docker compose -f docker-compose.cuda.yml build bundle-cuda && \
+    docker compose -f docker-compose.cuda.yml run --rm bundle-cuda && \
     cd ..
 
 echo ""

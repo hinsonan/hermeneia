@@ -18,7 +18,6 @@ struct MadladToml {
     size_mb: u64,
     revision: Option<String>,
     description: Option<String>,
-    has_safetensors: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +29,6 @@ struct MarianToml {
     size_mb: u64,
     revision: Option<String>,
     description: Option<String>,
-    bleu_score: Option<f32>,
-    has_safetensors: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +56,6 @@ pub struct CatalogModel {
     pub size_mb: u64,
     pub revision: Option<String>,
     pub description: Option<String>,
-    pub bleu_score: Option<f32>,
-    pub has_safetensors: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,8 +80,6 @@ pub fn load_model_catalog() -> Result<Vec<CatalogModel>> {
             size_mb: madlad.size_mb,
             revision: madlad.revision,
             description: madlad.description,
-            bleu_score: None,
-            has_safetensors: madlad.has_safetensors.unwrap_or(true),
         });
     }
 
@@ -100,8 +93,6 @@ pub fn load_model_catalog() -> Result<Vec<CatalogModel>> {
             size_mb: marian.size_mb,
             revision: marian.revision,
             description: marian.description,
-            bleu_score: marian.bleu_score,
-            has_safetensors: marian.has_safetensors.unwrap_or(false),
         });
     }
 
