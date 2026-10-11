@@ -106,7 +106,9 @@ The release profile uses `opt-level = 3`, fat LTO, and single codegen unit for m
 
 ## CUDA Builds (Docker)
 
-CUDA builds compile inside Docker so you don't need a local CUDA toolkit -- only NVIDIA drivers on the host machine. The build targets CUDA 12.8 with PTX compilation for compute capability 6.1 (Pascal) and up, so a single binary covers older Quadro P-series/GTX 10-series cards through RTX 50-series and datacenter GPUs (A100, H100). GPUs newer than the target architecture JIT-compile the embedded PTX at load time. Requires an NVIDIA driver >= 525.
+CUDA builds compile inside Docker so you don't need a local CUDA toolkit -- only NVIDIA drivers on the host machine. The build targets CUDA 12.8 and compiles PTX for compute capability 6.1 (Pascal) as the lowest architecture, so a single binary runs on Pascal and newer via PTX JIT (older Quadro P-series/GTX 10-series through RTX 50-series and datacenter A100/H100/B100/B200). GPUs newer than the target architecture JIT-compile the embedded PTX at load time. Requires an NVIDIA driver >= 525.
+
+> **Note:** GPU acceleration is split across two backends with different minimum hardware requirements. Transcription/translation runs on Pascal and newer, but GPU **speaker diarization** requires Turing or newer. See [NVIDIA GPU Hardware Support](#nvidia-gpu-hardware-support) for the full matrix.
 
 ### Initial Setup (one-time)
 
@@ -324,6 +326,34 @@ The app detects your GPU at startup and applies optimizations automatically:
 - **Linux**: Detects NVIDIA GPUs via `lspci`, applies PRIME offload for hybrid laptops
 - **macOS**: Metal GPU acceleration via Candle's `metal` feature
 - **Windows**: GPU acceleration works automatically
+
+### NVIDIA GPU Hardware Support
+
+CUDA builds use two independent GPU backends that have different minimum hardware requirements:
+
+| Feature | Backend | Minimum GPU |
+|---------|---------|-------------|
+| Transcription (Whisper) & translation (Marian/MADLAD) | Candle | **Pascal** — compute capability 6.1 (GTX 10-series, Quadro P-series) |
+| Speaker diarization | sherpa-onnx (ONNX Runtime + cuDNN) | **Turing** — compute capability 7.5 (RTX 20-series, GTX 16-series, Quadro RTX/T-series, Tesla T4) |
+
+- **Oldest fully supported GPU (including diarization):** Turing (2018).
+- **Oldest for GPU transcription/translation only:** Pascal (2016). On Pascal and Volta, GPU diarization is unavailable and diarization must run on CPU. Tesla P100 / Quadro GP100 (compute capability 6.0) are **not** supported.
+- **Newest supported:** Blackwell (2025) — RTX 50-series and B100/B200 datacenter GPUs. Newer architectures run via forward-compatible PTX JIT.
+- **Driver requirement:** NVIDIA driver >= 525 (Linux) / ~527 (Windows) for CUDA 12.x minor-version compatibility.
+
+Supported compute capabilities, oldest to newest:
+
+| Architecture | Compute capability | Example GPUs | Full GPU support |
+|--------------|--------------------|--------------|------------------|
+| Pascal | 6.1 | GTX 10-series, Quadro P-series | Transcription/translation only |
+| Volta | 7.0 | V100, Titan V, Quadro GV100 | Transcription/translation only |
+| Turing | 7.5 | RTX 20-series, GTX 16-series, T4, Quadro RTX | Yes |
+| Ampere | 8.0 / 8.6 | A100, RTX 30-series, A10, A30 | Yes |
+| Ada Lovelace | 8.9 | RTX 40-series, L4, L40 | Yes |
+| Hopper | 9.0 | H100, H200 | Yes |
+| Blackwell | 10.0 / 12.0 | B100, B200, RTX 50-series | Yes |
+
+> GPU diarization uses a pinned cuDNN release that no longer ships Pascal or Volta kernels, which is why diarization requires Turing even though the rest of the GPU stack runs on Pascal.
 
 ### Cargo Feature Flags
 

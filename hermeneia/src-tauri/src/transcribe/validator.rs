@@ -59,7 +59,8 @@ impl ModelValidator {
             let gpu = self.capabilities.gpu_info.as_ref().unwrap();
 
             #[cfg(all(target_os = "macos", feature = "metal"))]
-            let uses_unified_memory = matches!(gpu.device_type, GpuDeviceType::AppleMetal);
+            let uses_unified_memory =
+                matches!(gpu.device_type, crate::system_info::GpuDeviceType::AppleMetal);
             #[cfg(not(all(target_os = "macos", feature = "metal")))]
             let uses_unified_memory = false;
 
