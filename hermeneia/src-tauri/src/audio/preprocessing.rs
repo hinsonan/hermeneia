@@ -3,24 +3,6 @@ use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolat
 use crate::audio::types::{AudioData, SpeechAudio};
 use crate::error::{AudioError, Result};
 
-/// Prepare decoded audio for speech models (Whisper + diarization):
-/// mono + 16kHz.
-pub fn prepare_speech_audio(audio: &AudioData) -> Result<SpeechAudio> {
-    if audio.sample_rate == 0 {
-        return Err(AudioError::AudioPreprocessing(
-            "Sample rate cannot be zero".to_string(),
-        ));
-    }
-
-    let mono = convert_to_mono(&audio.samples, audio.channels);
-    let samples_16k_mono = resample_to_16khz(&mono, audio.sample_rate)?;
-
-    Ok(SpeechAudio {
-        samples_16k_mono,
-        duration_seconds: audio.duration_seconds(),
-    })
-}
-
 /// Prepare decoded audio for speech models while consuming owned audio.
 ///
 /// This avoids extra full-buffer copies for mono/16kHz passthrough paths.
@@ -41,18 +23,6 @@ pub fn prepare_speech_audio_owned(audio: AudioData) -> Result<SpeechAudio> {
     })
 }
 
-/// Convert interleaved multi-channel PCM to mono by averaging channels.
-pub fn convert_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    if channels <= 1 {
-        return samples.to_vec();
-    }
-
-    samples
-        .chunks(channels as usize)
-        .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
-        .collect()
-}
-
 /// Convert interleaved multi-channel PCM to mono by averaging channels,
 /// consuming owned input.
 pub fn convert_to_mono_owned(samples: Vec<f32>, channels: u16) -> Vec<f32> {
@@ -66,8 +36,8 @@ pub fn convert_to_mono_owned(samples: Vec<f32>, channels: u16) -> Vec<f32> {
         .collect()
 }
 
-/// Resample mono PCM from `source_rate` to 16kHz.
-pub fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> {
+/// Resample mono PCM from `source_rate` to 16kHz, consuming owned input.
+pub fn resample_to_16khz_owned(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
     if source_rate == 0 {
         return Err(AudioError::AudioPreprocessing(
             "Source sample rate cannot be zero".to_string(),
@@ -75,7 +45,7 @@ pub fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> 
     }
 
     if source_rate == 16000 || samples.is_empty() {
-        return Ok(samples.to_vec());
+        return Ok(samples);
     }
 
     let params = SincInterpolationParameters {
@@ -91,7 +61,7 @@ pub fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> 
             .map_err(|e| AudioError::AudioPreprocessing(format!("Resampler init: {}", e)))?;
 
     let mut wave_out = resampler.output_buffer_allocate(true);
-    let wave_in = [samples];
+    let wave_in = [samples.as_slice()];
     let (_, output_frames) = resampler
         .process_into_buffer(&wave_in, &mut wave_out, None)
         .map_err(|e| AudioError::AudioPreprocessing(format!("Resampling: {}", e)))?;
@@ -101,21 +71,6 @@ pub fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Result<Vec<f32>> 
     Ok(output)
 }
 
-/// Resample mono PCM from `source_rate` to 16kHz, consuming owned input.
-pub fn resample_to_16khz_owned(samples: Vec<f32>, source_rate: u32) -> Result<Vec<f32>> {
-    if source_rate == 0 {
-        return Err(AudioError::AudioPreprocessing(
-            "Source sample rate cannot be zero".to_string(),
-        ));
-    }
-
-    if source_rate == 16000 || samples.is_empty() {
-        return Ok(samples);
-    }
-
-    resample_to_16khz(&samples, source_rate)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,14 +78,14 @@ mod tests {
     #[test]
     fn test_convert_to_mono_passthrough() {
         let samples = vec![0.1, 0.2, 0.3];
-        let mono = convert_to_mono(&samples, 1);
+        let mono = convert_to_mono_owned(samples.clone(), 1);
         assert_eq!(mono, samples);
     }
 
     #[test]
     fn test_convert_to_mono_stereo() {
         let samples = vec![0.0f32, 1.0, 0.2, 0.6];
-        let mono = convert_to_mono(&samples, 2);
+        let mono = convert_to_mono_owned(samples, 2);
         assert_eq!(mono.len(), 2);
         assert!((mono[0] - 0.5).abs() < 1e-6);
         assert!((mono[1] - 0.4).abs() < 1e-6);
@@ -139,7 +94,7 @@ mod tests {
     #[test]
     fn test_resample_passthrough() {
         let samples = vec![0.1f32, 0.2, 0.3];
-        let out = resample_to_16khz(&samples, 16000).unwrap();
+        let out = resample_to_16khz_owned(samples.clone(), 16000).unwrap();
         assert_eq!(out, samples);
     }
 
@@ -151,7 +106,7 @@ mod tests {
             channels: 1,
         };
 
-        let speech = prepare_speech_audio(&audio).unwrap();
+        let speech = prepare_speech_audio_owned(audio).unwrap();
         assert!((speech.duration_seconds - 1.0).abs() < 1e-6);
         assert!(!speech.samples_16k_mono.is_empty());
     }

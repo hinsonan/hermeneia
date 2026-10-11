@@ -26,9 +26,8 @@ pub struct GpuInfo {
 #[derive(Debug, Clone, Serialize)]
 pub enum GpuDeviceType {
     NvidiaCuda,
-    AmdRocm,
+    #[cfg(all(target_os = "macos", feature = "metal"))]
     AppleMetal,
-    None,
 }
 
 /// Complete system capability information

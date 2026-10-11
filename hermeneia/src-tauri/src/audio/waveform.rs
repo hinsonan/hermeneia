@@ -251,7 +251,7 @@ pub fn extract_waveform_peaks<P: AsRef<Path>>(
     // - Medium files (5-30min): ~30-50 groups
     // - Long files (30min+): ~100 groups (cap to avoid too many seeks)
     let num_seek_groups = calculate_seek_groups(duration_seconds, num_peaks);
-    let peaks_per_group = (num_peaks + num_seek_groups - 1) / num_seek_groups;
+    let peaks_per_group = num_peaks.div_ceil(num_seek_groups);
     let time_per_group = duration_seconds / num_seek_groups as f64;
 
     for group_idx in 0..num_seek_groups {
@@ -499,6 +499,7 @@ fn process_packet_peaks(
 /// - Uses incremental boundary tracking instead of per-frame division (635M divisions → ~few hundred)
 /// - Batch processes frames in peak segments for better cache locality
 /// - Supports frame skipping for very long files (adaptive sampling)
+#[allow(clippy::too_many_arguments)]
 fn process_samples_generic<T, F>(
     planes: &[&[T]],
     channels: u16,
@@ -584,8 +585,8 @@ fn process_samples_generic<T, F>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::encoder::encode_wav;
     use crate::audio::types::AudioData;
+    use hound::{SampleFormat, WavSpec, WavWriter};
     use std::path::PathBuf;
 
     /// Helper to create synthetic audio data for testing
@@ -612,8 +613,18 @@ mod tests {
     fn create_test_wav_file(audio: &AudioData, name: &str) -> PathBuf {
         let temp_path = std::env::temp_dir().join(format!("hermeneia_test_{}.wav", name));
 
-        // Encode to WAV
-        encode_wav(audio, &temp_path).expect("Failed to encode WAV");
+        // Encode to 32-bit float WAV
+        let spec = WavSpec {
+            channels: audio.channels,
+            sample_rate: audio.sample_rate,
+            bits_per_sample: 32,
+            sample_format: SampleFormat::Float,
+        };
+        let mut writer = WavWriter::create(&temp_path, spec).expect("Failed to create WAV");
+        for &sample in &audio.samples {
+            writer.write_sample(sample).expect("Failed to write sample");
+        }
+        writer.finalize().expect("Failed to finalize WAV");
 
         temp_path
     }
@@ -659,11 +670,19 @@ mod tests {
 
         // All peaks should be in valid amplitude range [-1.0, 1.0]
         for &min in &peaks.min_peaks {
-            assert!(min >= -1.0 && min <= 1.0, "Min peak out of range: {}", min);
+            assert!(
+                (-1.0..=1.0).contains(&min),
+                "Min peak out of range: {}",
+                min
+            );
         }
 
         for &max in &peaks.max_peaks {
-            assert!(max >= -1.0 && max <= 1.0, "Max peak out of range: {}", max);
+            assert!(
+                (-1.0..=1.0).contains(&max),
+                "Max peak out of range: {}",
+                max
+            );
         }
 
         cleanup_test_file(&temp_file);
@@ -698,7 +717,7 @@ mod tests {
         // Test with different peak counts
         for num_peaks in [10, 100, 500, 1000, 2000] {
             let peaks = extract_waveform_peaks(&temp_file, Some(num_peaks))
-                .expect(&format!("Failed with {} peaks", num_peaks));
+                .unwrap_or_else(|e| panic!("Failed with {} peaks: {}", num_peaks, e));
 
             assert_eq!(peaks.num_peaks, num_peaks);
             assert_eq!(peaks.min_peaks.len(), num_peaks);
@@ -769,8 +788,8 @@ mod tests {
 
         // Middle third is loud (0.8 amplitude)
         let third = total_samples / 3;
-        for i in third..(2 * third) {
-            samples[i] = 0.8;
+        for sample in samples.iter_mut().take(2 * third).skip(third) {
+            *sample = 0.8;
         }
 
         let audio = AudioData {

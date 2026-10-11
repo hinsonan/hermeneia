@@ -687,8 +687,9 @@ const TranslationInspector: Component<TranslationInspectorProps> = (props) => {
   const canRetry = createMemo(() => job().status === "failed");
 
   const downloadExtension = createMemo(() => {
-    if (!job().result) return "txt";
-    return job().result.is_subtitle ? "srt" : "txt";
+    const result = job().result;
+    if (!result) return "txt";
+    return result.is_subtitle ? "srt" : "txt";
   });
 
   const speedChipLabel = createMemo(() => strategyChipLabel(

@@ -16,7 +16,6 @@ pub struct DecodingResult {
     pub text: String,
     pub avg_logprob: f64,
     pub no_speech_prob: f64,
-    pub _temperature: f64,
     pub compression_ratio: f64,
 }
 
@@ -35,7 +34,6 @@ pub struct Decoder<'a> {
     task: TranscriptionTask,
     timestamps: bool,
     max_initial_timestamp_index: Option<u32>,
-    _verbose: bool,
     tokenizer: &'a Tokenizer,
     suppress_tokens: Tensor,
     sot_token: u32,
@@ -48,8 +46,6 @@ pub struct Decoder<'a> {
     // Progress tracking
     progress_callback: Option<ProgressCallback>,
     total_frames: usize,
-    current_segment_start: usize,
-    current_segment_size: usize,
 }
 
 impl<'a> Decoder<'a> {
@@ -97,7 +93,6 @@ impl<'a> Decoder<'a> {
             task,
             timestamps,
             max_initial_timestamp_index: None,
-            _verbose: false,
             suppress_tokens,
             sot_token,
             transcribe_token,
@@ -108,8 +103,6 @@ impl<'a> Decoder<'a> {
             no_timestamps_token,
             progress_callback: None,
             total_frames: 0,
-            current_segment_start: 0,
-            current_segment_size: 0,
         })
     }
 
@@ -292,7 +285,6 @@ impl<'a> Decoder<'a> {
             text,
             avg_logprob,
             no_speech_prob,
-            _temperature: temperature,
             compression_ratio: f64::NAN,
         })
     }
@@ -352,24 +344,22 @@ impl<'a> Decoder<'a> {
                 false
             };
 
-            if last_was_timestamp {
-                if penultimate_was_timestamp {
-                    // Two timestamps in a row (end of segment + start of next)
-                    // Force non-timestamp (text) for the next token
-                    for i in 0..vocab_size {
-                        mask_buffer[i as usize] = if i >= timestamp_begin {
-                            f32::NEG_INFINITY
-                        } else {
-                            0.0
-                        };
-                    }
-                    masks.push(Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
-                        AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
-                    })?);
+            if last_was_timestamp && penultimate_was_timestamp {
+                // Two timestamps in a row (end of segment + start of next)
+                // Force non-timestamp (text) for the next token
+                for i in 0..vocab_size {
+                    mask_buffer[i as usize] = if i >= timestamp_begin {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.0
+                    };
                 }
-                // After a single timestamp (start of segment), allow text tokens
-                // Don't mask anything - let the model generate text naturally
+                masks.push(Tensor::new(mask_buffer.as_slice(), &device).map_err(|e| {
+                    AudioError::TranscriptionFailed(format!("Tensor creation: {}", e))
+                })?);
             }
+            // After a single timestamp (start of segment), allow text tokens
+            // Don't mask anything - let the model generate text naturally
 
             // Rule 2: Non-decreasing timestamp constraint
             let timestamp_tokens: Vec<u32> = sampled_tokens
@@ -543,10 +533,6 @@ impl<'a> Decoder<'a> {
                 .narrow(2, seek, segment_size)
                 .map_err(|e| AudioError::TranscriptionFailed(format!("Narrow: {}", e)))?;
             let segment_duration = (segment_size * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
-
-            // Store segment info for progress tracking
-            self.current_segment_start = seek;
-            self.current_segment_size = segment_size;
 
             let dr = self.decode_with_fallback(&mel_segment)?;
             seek += segment_size;

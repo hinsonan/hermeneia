@@ -64,12 +64,17 @@ pub struct AudioPlayer {
     state: Arc<SharedPlaybackState>,
     decoder_thread: Mutex<Option<JoinHandle<()>>>,
     playback_thread: Mutex<Option<JoinHandle<()>>>,
-    loaded_file: Mutex<Option<PathBuf>>,
 }
 
 // AudioPlayer is Send + Sync because all fields are thread-safe
 unsafe impl Send for AudioPlayer {}
 unsafe impl Sync for AudioPlayer {}
+
+impl Default for AudioPlayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AudioPlayer {
     pub fn new() -> Self {
@@ -77,7 +82,6 @@ impl AudioPlayer {
             state: Arc::new(SharedPlaybackState::new()),
             decoder_thread: Mutex::new(None),
             playback_thread: Mutex::new(None),
-            loaded_file: Mutex::new(None),
         }
     }
 
@@ -89,9 +93,6 @@ impl AudioPlayer {
 
         let path = path.as_ref().to_path_buf();
         let state = Arc::clone(&self.state);
-
-        // Store the loaded file path
-        *self.loaded_file.lock().unwrap() = Some(path.clone());
 
         // Probe the file FIRST to get metadata before starting threads
         // This prevents race conditions where playback thread reads stale values
@@ -216,9 +217,6 @@ impl AudioPlayer {
         self.state.sample_rate.store(44100, Ordering::SeqCst); // Reset to default
         self.state.device_sample_rate.store(44100, Ordering::SeqCst); // Reset to default
         self.state.channels.store(2, Ordering::SeqCst); // Reset to default
-
-        // Clear loaded file
-        *self.loaded_file.lock().unwrap() = None;
 
         tracing::debug!("AudioPlayer::stop - Complete");
     }
@@ -489,7 +487,7 @@ fn run_decoder(
             // Helper to create TimeStamp seek target
             let make_seek_ts = || SeekTo::TimeStamp {
                 ts: seek_frame,
-                track_id: track_id,
+                track_id,
             };
 
             // Helper to create Time seek target
@@ -675,11 +673,10 @@ fn run_decoder(
                 Ok(waves_out) => {
                     // Re-interleave the output
                     resample_buffer.clear();
-                    let out_frames = waves_out[0].len();
-                    resample_buffer.reserve(out_frames * 2);
-                    for i in 0..out_frames {
-                        resample_buffer.push(waves_out[0][i]);
-                        resample_buffer.push(waves_out[1][i]);
+                    resample_buffer.reserve(waves_out[0].len() * 2);
+                    for (left, right) in waves_out[0].iter().zip(waves_out[1].iter()) {
+                        resample_buffer.push(*left);
+                        resample_buffer.push(*right);
                     }
                     &resample_buffer[..]
                 }
@@ -937,7 +934,7 @@ fn run_playback_stream(
                 let available = consumer_guard.occupied_len();
                 let to_read = data.len().min(available);
 
-                if count < 5 || count % 100 == 0 {
+                if count < 5 || count.is_multiple_of(100) {
                     tracing::debug!(
                         "Callback #{}: playing={}, available={}, to_read={}",
                         count,

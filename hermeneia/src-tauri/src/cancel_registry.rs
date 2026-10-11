@@ -129,24 +129,6 @@ impl CancelRegistry {
             .retain(|_, created_at| now.duration_since(*created_at) <= PENDING_CANCEL_TTL);
     }
 
-    pub fn cancel_batch(&self, batch_id: &str) -> usize {
-        let state = self.state.lock().expect("CancelRegistry mutex poisoned");
-        let Some(job_ids) = state.batches.get(batch_id) else {
-            return 0;
-        };
-
-        let mut cancelled = 0;
-        for job_id in job_ids {
-            if let Some(meta) = state.jobs.get(job_id) {
-                meta.cancel_flag
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                meta.cancel_notify.notify_waiters();
-                cancelled += 1;
-            }
-        }
-        cancelled
-    }
-
     pub fn cancel_all(&self) -> usize {
         let state = self.state.lock().expect("CancelRegistry mutex poisoned");
         let mut cancelled = 0;
@@ -240,29 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn test_cancel_batch_only_affects_batch_members() {
-        let registry = Arc::new(CancelRegistry::new());
-        let job_a = registry.register_job("job-a".to_string(), Some("batch-1".to_string()));
-        let job_b = registry.register_job("job-b".to_string(), Some("batch-1".to_string()));
-        let job_c = registry.register_job("job-c".to_string(), Some("batch-2".to_string()));
-
-        assert_eq!(registry.cancel_batch("batch-1"), 2);
-        assert!(job_a.cancel_flag().load(Ordering::SeqCst));
-        assert!(job_b.cancel_flag().load(Ordering::SeqCst));
-        assert!(!job_c.cancel_flag().load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn test_drop_registration_cleans_job_and_batch_entries() {
+    fn test_drop_registration_cleans_job_entries() {
         let registry = Arc::new(CancelRegistry::new());
         {
             let _job = registry.register_job("job-a".to_string(), Some("batch-1".to_string()));
             assert_eq!(registry.active_jobs(), 1);
-            assert_eq!(registry.cancel_batch("batch-1"), 1);
         }
 
         assert_eq!(registry.active_jobs(), 0);
-        assert_eq!(registry.cancel_batch("batch-1"), 0);
     }
 
     #[test]
@@ -275,7 +242,7 @@ mod tests {
         drop(old);
 
         assert_eq!(registry.active_jobs(), 1);
-        assert_eq!(registry.cancel_batch("batch-1"), 1);
+        assert!(registry.cancel_job("job-a"));
         assert!(new.cancel_flag().load(Ordering::SeqCst));
     }
 

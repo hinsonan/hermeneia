@@ -3,9 +3,7 @@ mod model;
 pub mod types;
 
 pub use inference::{
-    diarize_audio, diarize_audio_with_progress, diarize_prepared_audio,
-    diarize_prepared_audio_with_callbacks, diarize_prepared_audio_with_callbacks_cached,
-    diarize_prepared_audio_with_callbacks_cached_owned, diarize_prepared_audio_with_progress,
+    diarize_audio_with_progress, diarize_prepared_audio_with_callbacks_cached_owned,
     DiarizeCallbacks, DiarizeProgressCallback, DiarizeStage, DiarizeStageProgress,
     DiarizeStageProgressCallback,
 };

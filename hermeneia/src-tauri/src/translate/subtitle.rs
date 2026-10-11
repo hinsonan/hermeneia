@@ -89,31 +89,6 @@ impl SubtitleFile {
         out
     }
 
-    /// Create a new SubtitleFile with translated text segments
-    /// The translated_texts should be in the same order as self.segments
-    pub fn with_translated_text<I, S>(&self, translated_texts: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let mut translated_iter = translated_texts.into_iter();
-        let segments = self
-            .segments
-            .iter()
-            .map(|seg| SubtitleSegment {
-                index: seg.index,
-                start: seg.start.clone(),
-                end: seg.end.clone(),
-                text: translated_iter
-                    .next()
-                    .map(|t| t.as_ref().to_string())
-                    .unwrap_or_else(|| seg.text.clone()),
-            })
-            .collect();
-
-        SubtitleFile { segments }
-    }
-
     /// Create a new SubtitleFile with translated text while preserving
     /// leading Hermeneia speaker labels (e.g., `[Speaker 1]`) verbatim.
     pub fn with_translated_text_preserving_labels<I, S>(&self, translated_texts: I) -> Self
@@ -154,20 +129,6 @@ impl SubtitleFile {
         SubtitleFile { segments }
     }
 
-    /// Get just the text content for translation (preserving order)
-    pub fn get_texts(&self) -> Vec<String> {
-        self.segments.iter().map(|s| s.text.clone()).collect()
-    }
-
-    /// Get text content prepared for translation while preserving leading
-    /// Hermeneia speaker labels by excluding them from translation input.
-    pub fn get_texts_for_translation(&self) -> Vec<String> {
-        self.get_texts_for_translation_ref()
-            .into_iter()
-            .map(str::to_string)
-            .collect()
-    }
-
     /// Get borrowed text slices prepared for translation while preserving
     /// leading Hermeneia speaker labels by excluding them from translation input.
     pub fn get_texts_for_translation_ref(&self) -> Vec<&str> {
@@ -181,13 +142,9 @@ impl SubtitleFile {
     }
 
     /// Get the number of segments
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.segments.len()
-    }
-
-    /// Check if empty
-    pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
     }
 }
 
@@ -420,7 +377,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\nFirst\n\n2\n00:00:03,500 --> 00:00:05,500\nSecond\n\n3\n00:00:06,000 --> 00:00:08,000\nThird\n";
 
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
-        let texts = srt_file.get_texts();
+        let texts = srt_file.get_texts_for_translation_ref();
 
         assert_eq!(texts.len(), 3);
         assert_eq!(texts[0], "First");
@@ -435,7 +392,7 @@ mod tests {
 
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
         let translated = vec!["Hola".to_string(), "Mundo".to_string()];
-        let new_srt = srt_file.with_translated_text(translated);
+        let new_srt = srt_file.with_translated_text_preserving_labels(translated);
 
         assert_eq!(new_srt.segments[0].start, "00:00:01,000");
         assert_eq!(new_srt.segments[0].end, "00:00:03,000");
@@ -474,7 +431,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1] Hello world\n\n2\n00:00:03,500 --> 00:00:05,500\nNo label here\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec!["Hello world", "No label here"]);
     }
 
@@ -483,7 +440,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Music]\n\n2\n00:00:03,500 --> 00:00:05,500\n[laughter] continues\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec!["[Music]", "[laughter] continues"]);
     }
 
@@ -492,7 +449,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Door Opens]\n\n2\n00:00:03,500 --> 00:00:05,500\n[Phone Rings] Hello\n\n3\n00:00:06,000 --> 00:00:07,000\n[Audience Laughs]\n\n4\n00:00:07,500 --> 00:00:08,500\n[Thunder] rumbles\n\n5\n00:00:09,000 --> 00:00:10,000\n[Birds Chirping]\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(
             texts,
             vec![
@@ -546,7 +503,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1 laughs] Hello\n\n2\n00:00:03,500 --> 00:00:05,500\n[Speaker 1A] World\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(
             texts,
             vec!["[Speaker 1 laughs] Hello", "[Speaker 1A] World"]
@@ -558,7 +515,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Alice] Hello\n\n2\n00:00:03,500 --> 00:00:05,000\n[Pastor John] Welcome\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec!["Hello", "Welcome"]);
 
         let rebuilt = srt_file.with_translated_text_preserving_labels(vec![
@@ -574,7 +531,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[José] Hola\n\n2\n00:00:03,500 --> 00:00:05,000\n[Élodie] Bonjour\n\n3\n00:00:05,500 --> 00:00:07,000\n[Dr. Smith] Hello\n\n4\n00:00:07,500 --> 00:00:09,000\n[Pastor John Jr.] Welcome\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec!["Hola", "Bonjour", "Hello", "Welcome"]);
 
         let rebuilt = srt_file.with_translated_text_preserving_labels(vec![
@@ -595,7 +552,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[sighs] Hello\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec!["[sighs] Hello"]);
     }
 
@@ -604,7 +561,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[   ] Hello\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec!["[   ] Hello"]);
     }
 
@@ -634,7 +591,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1]\nHello world\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec!["Hello world"]);
 
         let rebuilt =
@@ -647,7 +604,7 @@ mod tests {
         let srt_content = "1\n00:00:01,000 --> 00:00:03,000\n[Speaker 1]\n";
         let srt_file = SubtitleFile::parse(srt_content).unwrap();
 
-        let texts = srt_file.get_texts_for_translation();
+        let texts = srt_file.get_texts_for_translation_ref();
         assert_eq!(texts, vec![""]);
 
         let rebuilt =

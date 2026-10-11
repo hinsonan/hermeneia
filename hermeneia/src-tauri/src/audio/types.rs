@@ -41,14 +41,6 @@ impl AudioData {
         let total_frames = self.samples.len() as f64 / self.channels as f64;
         total_frames / self.sample_rate as f64
     }
-
-    /// Get the number of audio frames (one sample per channel)
-    ///
-    /// For stereo: 1000 samples = 500 frames
-    /// For mono: 1000 samples = 1000 frames
-    pub fn frame_count(&self) -> usize {
-        self.samples.len() / self.channels as usize
-    }
 }
 
 /// Metadata about an audio file without loading all samples
@@ -163,26 +155,6 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_data_frame_count_stereo() {
-        let audio = AudioData {
-            samples: vec![0.0; 1000], // 500 frames stereo
-            sample_rate: 44100,
-            channels: 2,
-        };
-        assert_eq!(audio.frame_count(), 500);
-    }
-
-    #[test]
-    fn test_audio_data_frame_count_mono() {
-        let audio = AudioData {
-            samples: vec![0.0; 1000], // 1000 frames mono
-            sample_rate: 44100,
-            channels: 1,
-        };
-        assert_eq!(audio.frame_count(), 1000);
-    }
-
-    #[test]
     fn test_audio_data_empty() {
         let audio = AudioData {
             samples: vec![],
@@ -190,7 +162,6 @@ mod tests {
             channels: 2,
         };
         assert_eq!(audio.duration_seconds(), 0.0);
-        assert_eq!(audio.frame_count(), 0);
     }
 
     #[test]

@@ -24,20 +24,19 @@ impl WhisperModel {
     /// Requirements are based on typical memory usage during inference:
     /// - VRAM: For GPU inference (model weights + activations + KV cache)
     /// - RAM: For CPU inference (higher due to less efficient memory layout)
-    /// - Compute: CUDA 7.0+ recommended for optimal performance
+    /// - Compute: CUDA 6.1+ (Pascal) recommended for optimal performance
     ///
     /// # Note
     /// These are conservative estimates. Actual requirements may vary based on:
     /// - Audio file length (longer files need more memory for KV cache)
     /// - Batch size and beam search parameters
-    /// - Quantization (when supported, reduces requirements by ~50%)
     pub fn requirements(&self) -> ModelRequirements {
         match self {
             // Tiny models: ~39M parameters
             Self::Tiny | Self::TinyEn => ModelRequirements {
                 min_vram_gb: 1.0,
                 min_ram_gb: 2.0,
-                min_compute_capability: Some((7, 0)), // CUDA 7.0+
+                min_compute_capability: Some((6, 1)), // Pascal (compute capability 6.1)+
                 disk_size_gb: 0.15,
             },
 
@@ -45,7 +44,7 @@ impl WhisperModel {
             Self::Base | Self::BaseEn => ModelRequirements {
                 min_vram_gb: 1.5,
                 min_ram_gb: 3.0,
-                min_compute_capability: Some((7, 0)),
+                min_compute_capability: Some((6, 1)),
                 disk_size_gb: 0.29,
             },
 
@@ -53,7 +52,7 @@ impl WhisperModel {
             Self::Small | Self::SmallEn => ModelRequirements {
                 min_vram_gb: 2.0,
                 min_ram_gb: 4.0,
-                min_compute_capability: Some((7, 0)),
+                min_compute_capability: Some((6, 1)),
                 disk_size_gb: 0.97,
             },
 
@@ -61,7 +60,7 @@ impl WhisperModel {
             Self::Medium | Self::MediumEn => ModelRequirements {
                 min_vram_gb: 5.0,
                 min_ram_gb: 8.0,
-                min_compute_capability: Some((7, 0)),
+                min_compute_capability: Some((6, 1)),
                 disk_size_gb: 3.1,
             },
 
@@ -70,7 +69,7 @@ impl WhisperModel {
             Self::Large | Self::LargeV2 | Self::LargeV3 => ModelRequirements {
                 min_vram_gb: 10.0,
                 min_ram_gb: 16.0,
-                min_compute_capability: Some((7, 0)),
+                min_compute_capability: Some((6, 1)),
                 disk_size_gb: 6.2,
             },
         }
@@ -97,7 +96,7 @@ mod tests {
         let reqs = WhisperModel::Tiny.requirements();
         assert_eq!(reqs.min_vram_gb, 1.0);
         assert_eq!(reqs.min_ram_gb, 2.0);
-        assert_eq!(reqs.min_compute_capability, Some((7, 0)));
+        assert_eq!(reqs.min_compute_capability, Some((6, 1)));
     }
 
     #[test]

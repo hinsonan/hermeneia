@@ -10,10 +10,6 @@ pub enum AudioError {
         source: std::io::Error,
     },
 
-    /// The audio format is not supported by symphonia
-    #[error("Unsupported audio format: {0}")]
-    UnsupportedFormat(String),
-
     /// Error occurred while decoding the audio data
     #[error("Audio decoding failed: {0}")]
     DecodeFailed(String),
@@ -33,10 +29,6 @@ pub enum AudioError {
     /// Generic I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-
-    /// Error from symphonia decoder
-    #[error("Symphonia error: {0}")]
-    Symphonia(String),
 
     /// Error from hound WAV encoder
     #[error("Hound WAV error: {0}")]
@@ -78,10 +70,6 @@ pub enum AudioError {
     /// Translation failed
     #[error("Translation failed: {0}")]
     TranslationFailed(String),
-
-    /// Invalid translation parameters
-    #[error("Invalid translation parameters: {0}")]
-    InvalidTranslateParams(String),
 
     /// Unsupported language pair for the selected model
     #[error("Unsupported language pair: {source_lang} -> {target_lang}")]

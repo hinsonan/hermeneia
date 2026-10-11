@@ -28,16 +28,22 @@ RUN apt-get update && apt-get install -y \
     libclang-dev \
     cmake \
     ninja-build \
-    # cuDNN 9 for ORT CUDA provider (RNN/LSTM ops)
-    libcudnn9-cuda-12 \
+    # cuDNN 9 for ORT CUDA provider (RNN/LSTM ops).
+    # Pinned to 9.11.1: cuDNN 9.12+ dropped Pascal (compute capability 6.1) support.
+    libcudnn9-cuda-12=9.11.1.4-1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Explicitly tell bindgen where libclang lives.
 # Ubuntu 22.04 ships LLVM 14; libclang-dev installs the .so there.
 ENV LIBCLANG_PATH=/usr/lib/llvm-14/lib
 
-# PTX JIT: compile for sm_75 baseline, driver JIT-compiles to actual GPU (RTX 5090 = sm_120)
-ENV CUDA_COMPUTE_CAP=75
+# CUDA kernel architecture (PTX). PTX is forward-compatible, so targeting the
+# lowest supported arch (Pascal, compute_61) produces a single binary that runs
+# on every GPU from sm_61 (Quadro P1000/P4000, GTX 10-series) through sm_120
+# (RTX 50-series). Higher arches JIT-compile the embedded PTX at load time.
+# Override with: docker compose -f docker-compose.cuda.yml build --build-arg CUDA_COMPUTE_CAP=<n>
+ARG CUDA_COMPUTE_CAP=61
+ENV CUDA_COMPUTE_CAP=${CUDA_COMPUTE_CAP}
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

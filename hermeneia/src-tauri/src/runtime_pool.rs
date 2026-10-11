@@ -43,19 +43,6 @@ impl<T> RuntimePool<T> {
         }
     }
 
-    pub fn checkout<F, E>(&self, create_worker: F) -> std::result::Result<RuntimeLease<T>, E>
-    where
-        F: FnOnce() -> std::result::Result<T, E>,
-    {
-        match self.checkout_cancellable(create_worker, || false) {
-            Ok(lease) => Ok(lease),
-            Err(RuntimePoolCheckoutError::Worker(err)) => Err(err),
-            Err(RuntimePoolCheckoutError::Cancelled) => {
-                unreachable!("checkout() cannot be cancelled")
-            }
-        }
-    }
-
     pub fn checkout_cancellable<F, E, C>(
         &self,
         create_worker: F,
@@ -174,6 +161,29 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;
+
+    /// Test-only alias for the non-cancellable checkout that production code
+    /// no longer exposes.
+    trait CheckoutExt<T> {
+        fn checkout<F, E>(&self, create_worker: F) -> std::result::Result<RuntimeLease<T>, E>
+        where
+            F: FnOnce() -> std::result::Result<T, E>;
+    }
+
+    impl<T> CheckoutExt<T> for RuntimePool<T> {
+        fn checkout<F, E>(&self, create_worker: F) -> std::result::Result<RuntimeLease<T>, E>
+        where
+            F: FnOnce() -> std::result::Result<T, E>,
+        {
+            match self.checkout_cancellable(create_worker, || false) {
+                Ok(lease) => Ok(lease),
+                Err(RuntimePoolCheckoutError::Worker(err)) => Err(err),
+                Err(RuntimePoolCheckoutError::Cancelled) => {
+                    unreachable!("test checkout cannot be cancelled")
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_lease_returns_worker_to_pool() {

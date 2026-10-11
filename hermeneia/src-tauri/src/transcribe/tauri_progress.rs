@@ -69,7 +69,7 @@ impl ProgressReporter for TauriProgressReporter {
         }
 
         // Log every 10% of progress
-        let pct = if total > 0 { current * 100 / total } else { 0 };
+        let pct = current.saturating_mul(100).checked_div(total).unwrap_or(0);
         let last = self.last_logged_pct.load(Ordering::Relaxed);
         if pct / 10 > last / 10 {
             self.last_logged_pct.store(pct, Ordering::Relaxed);

@@ -6,7 +6,6 @@ use crate::translate::{
     types::{ProgressCallback, TranslateParams, TranslationModel, TranslationResult},
 };
 use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
 use candle_transformers::models::{marian, t5};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,11 +36,6 @@ fn device_name(device: &Device) -> &'static str {
     }
 }
 
-/// Main translation function - simple API
-pub fn translate_text(text: &str, params: TranslateParams) -> Result<TranslationResult> {
-    translate_text_with_progress(text, params, None, None)
-}
-
 /// Translation with optional progress callback for CLI
 pub fn translate_text_with_progress(
     text: &str,
@@ -63,7 +57,7 @@ pub fn translate_text_with_progress(
     tracing::info!("Selected model: {}", selected_model.display_name());
 
     // 2. Download/load model (on-demand, cached for future use)
-    let model_files = model_manager.ensure_model(selected_model, params.use_quantized)?;
+    let model_files = model_manager.ensure_model(selected_model)?;
 
     // Check for cancellation after model download
     if let Some(ref flag) = cancel_flag {
@@ -173,33 +167,26 @@ fn load_model(
 
     tracing::info!("Loading model weights...");
     let model_id = model_type.model_id().to_string();
-    let vb = if model_files.weights.extension().and_then(|s| s.to_str()) == Some("safetensors") {
-        // Platform-safe loading: buffered on Windows, mmap on Linux/macOS
-        crate::gpu_cleanup::load_safetensors_varbuilder(
-            &model_files.weights,
-            candle_core::DType::F32,
-            device,
-        )
-        .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, &model_id))?
-    } else {
-        // Load pytorch pickle-based checkpoint using candle's pickle reader
-        tracing::info!("Loading pytorch pickle checkpoint...");
-        let tensors = candle_core::pickle::read_all(&model_files.weights).map_err(|e| {
-            AudioError::ModelLoad {
-                model: model_id.clone(),
-                details: format!("Failed to read pytorch pickle: {}", e),
-            }
-        })?;
+    let weights = &model_files.weights;
+    let all_safetensors = !weights.is_empty()
+        && weights
+            .iter()
+            .all(|path| path.extension().and_then(|s| s.to_str()) == Some("safetensors"));
 
-        // Convert Vec to HashMap for VarBuilder
-        let tensor_map: std::collections::HashMap<String, Tensor> = tensors.into_iter().collect();
-        tracing::info!(
-            "Loaded {} tensors from pytorch checkpoint",
-            tensor_map.len()
-        );
+    if !all_safetensors {
+        return Err(AudioError::ModelLoad {
+            model: model_id,
+            details:
+                "Model weights are not safetensors; only safetensors checkpoints are supported"
+                    .to_string(),
+        });
+    }
 
-        VarBuilder::from_tensors(tensor_map, candle_core::DType::F32, device)
-    };
+    // Platform-safe loading: buffered on Windows, mmap on Linux/macOS.
+    // Sharded checkpoints pass every shard to the VarBuilder.
+    let vb =
+        crate::gpu_cleanup::load_safetensors_varbuilder(weights, candle_core::DType::F32, device)
+            .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, device, &model_id))?;
 
     tracing::info!("Loading model config...");
     tracing::info!("Initializing model architecture...");
@@ -475,7 +462,7 @@ impl Translator {
         tracing::info!("Selected model: {}", selected_model.display_name());
 
         // 2. Download/load model (on-demand, cached for future use)
-        let model_files = model_manager.ensure_model(selected_model, params.use_quantized)?;
+        let model_files = model_manager.ensure_model(selected_model)?;
 
         // Check for cancellation after model download
         if let Some(flag) = cancel_flag {

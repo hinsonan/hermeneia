@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 /// All models listed here are fine-tuned for translation and ready to use:
 /// - **MarianMT models**: Specialized for specific language pairs (fastest, best quality for supported pairs)
 /// - **MADLAD-400 models**: Multilingual models supporting 450+ languages (use for unsupported pairs)
+///
+/// Every model publishes safetensors weights (monolithic or sharded), which is
+/// the only checkpoint format the Candle loaders support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TranslationModel {
@@ -22,142 +25,46 @@ pub enum TranslationModel {
     MarianEnEs,
     #[serde(rename = "marian-es-en")]
     MarianEsEn,
-    #[serde(rename = "marian-en-fr")]
-    MarianEnFr,
     #[serde(rename = "marian-fr-en")]
     MarianFrEn,
-    #[serde(rename = "marian-en-pt")]
-    MarianEnPt,
-    #[serde(rename = "marian-pt-en")]
-    MarianPtEn,
-    #[serde(rename = "marian-en-it")]
-    MarianEnIt,
-    #[serde(rename = "marian-it-en")]
-    MarianItEn,
-    #[serde(rename = "marian-en-ro")]
-    MarianEnRo,
-    #[serde(rename = "marian-ro-en")]
-    MarianRoEn,
 
     // Germanic Languages
     #[serde(rename = "marian-en-de")]
     MarianEnDe,
     #[serde(rename = "marian-de-en")]
     MarianDeEn,
-    #[serde(rename = "marian-en-nl")]
-    MarianEnNl,
     #[serde(rename = "marian-nl-en")]
     MarianNlEn,
-    #[serde(rename = "marian-en-sv")]
-    MarianEnSv,
     #[serde(rename = "marian-sv-en")]
     MarianSvEn,
-    #[serde(rename = "marian-en-da")]
-    MarianEnDa,
-    #[serde(rename = "marian-da-en")]
-    MarianDaEn,
-    #[serde(rename = "marian-en-no")]
-    MarianEnNo,
-    #[serde(rename = "marian-no-en")]
-    MarianNoEn,
 
     // Slavic Languages
     #[serde(rename = "marian-en-ru")]
     MarianEnRu,
     #[serde(rename = "marian-ru-en")]
     MarianRuEn,
-    #[serde(rename = "marian-en-pl")]
-    MarianEnPl,
-    #[serde(rename = "marian-pl-en")]
-    MarianPlEn,
-    #[serde(rename = "marian-en-cs")]
-    MarianEnCs,
-    #[serde(rename = "marian-cs-en")]
-    MarianCsEn,
-    #[serde(rename = "marian-en-uk")]
-    MarianEnUk,
-    #[serde(rename = "marian-uk-en")]
-    MarianUkEn,
 
     // East Asian Languages
-    #[serde(rename = "marian-en-zh")]
-    MarianEnZh,
-    #[serde(rename = "marian-zh-en")]
-    MarianZhEn,
-    #[serde(rename = "marian-en-ja")]
-    MarianEnJa,
-    #[serde(rename = "marian-ja-en")]
-    MarianJaEn,
     #[serde(rename = "marian-en-ko")]
     MarianEnKo,
-    #[serde(rename = "marian-ko-en")]
-    MarianKoEn,
-
-    // Southeast Asian Languages
-    #[serde(rename = "marian-en-vi")]
-    MarianEnVi,
-    #[serde(rename = "marian-vi-en")]
-    MarianViEn,
-    #[serde(rename = "marian-en-th")]
-    MarianEnTh,
-    #[serde(rename = "marian-th-en")]
-    MarianThEn,
-    #[serde(rename = "marian-en-id")]
-    MarianEnId,
-    #[serde(rename = "marian-id-en")]
-    MarianIdEn,
 
     // Middle Eastern Languages
     #[serde(rename = "marian-en-ar")]
     MarianEnAr,
     #[serde(rename = "marian-ar-en")]
     MarianArEn,
-    #[serde(rename = "marian-en-he")]
-    MarianEnHe,
     #[serde(rename = "marian-he-en")]
     MarianHeEn,
-    #[serde(rename = "marian-en-fa")]
-    MarianEnFa,
-    #[serde(rename = "marian-fa-en")]
-    MarianFaEn,
-    #[serde(rename = "marian-en-tr")]
-    MarianEnTr,
-    #[serde(rename = "marian-tr-en")]
-    MarianTrEn,
 
     // South Asian Languages
-    #[serde(rename = "marian-en-hi")]
-    MarianEnHi,
-    #[serde(rename = "marian-hi-en")]
-    MarianHiEn,
-    #[serde(rename = "marian-en-bn")]
-    MarianEnBn,
     #[serde(rename = "marian-bn-en")]
     MarianBnEn,
-    #[serde(rename = "marian-en-ur")]
-    MarianEnUr,
-    #[serde(rename = "marian-ur-en")]
-    MarianUrEn,
 
     // Other European Languages
     #[serde(rename = "marian-en-hu")]
     MarianEnHu,
-    #[serde(rename = "marian-hu-en")]
-    MarianHuEn,
-    #[serde(rename = "marian-en-fi")]
-    MarianEnFi,
     #[serde(rename = "marian-fi-en")]
     MarianFiEn,
-    #[serde(rename = "marian-en-el")]
-    MarianEnEl,
-    #[serde(rename = "marian-el-en")]
-    MarianElEn,
-
-    // African Languages
-    #[serde(rename = "marian-en-sw")]
-    MarianEnSw,
-    #[serde(rename = "marian-sw-en")]
-    MarianSwEn,
 }
 
 impl TranslationModel {
@@ -172,82 +79,32 @@ impl TranslationModel {
             // Romance Languages
             Self::MarianEnEs => "Helsinki-NLP/opus-mt-en-es",
             Self::MarianEsEn => "Helsinki-NLP/opus-mt-es-en",
-            Self::MarianEnFr => "Helsinki-NLP/opus-mt-en-fr",
             Self::MarianFrEn => "Helsinki-NLP/opus-mt-fr-en",
-            Self::MarianEnPt => "Helsinki-NLP/opus-mt-en-roa",
-            Self::MarianPtEn => "Helsinki-NLP/opus-mt-roa-en",
-            Self::MarianEnIt => "Helsinki-NLP/opus-mt-en-it",
-            Self::MarianItEn => "Helsinki-NLP/opus-mt-it-en",
-            Self::MarianEnRo => "Helsinki-NLP/opus-mt-en-ro",
-            Self::MarianRoEn => "Helsinki-NLP/opus-mt-ro-en",
 
             // Germanic Languages
             Self::MarianEnDe => "Helsinki-NLP/opus-mt-en-de",
             Self::MarianDeEn => "Helsinki-NLP/opus-mt-de-en",
-            Self::MarianEnNl => "Helsinki-NLP/opus-mt-en-nl",
             Self::MarianNlEn => "Helsinki-NLP/opus-mt-nl-en",
-            Self::MarianEnSv => "Helsinki-NLP/opus-mt-en-sv",
             Self::MarianSvEn => "Helsinki-NLP/opus-mt-sv-en",
-            Self::MarianEnDa => "Helsinki-NLP/opus-mt-en-da",
-            Self::MarianDaEn => "Helsinki-NLP/opus-mt-da-en",
-            Self::MarianEnNo => "Helsinki-NLP/opus-mt-en-no",
-            Self::MarianNoEn => "Helsinki-NLP/opus-mt-no-en",
 
             // Slavic Languages
             Self::MarianEnRu => "Helsinki-NLP/opus-mt-en-ru",
             Self::MarianRuEn => "Helsinki-NLP/opus-mt-ru-en",
-            Self::MarianEnPl => "Helsinki-NLP/opus-mt-en-pl",
-            Self::MarianPlEn => "Helsinki-NLP/opus-mt-pl-en",
-            Self::MarianEnCs => "Helsinki-NLP/opus-mt-en-cs",
-            Self::MarianCsEn => "Helsinki-NLP/opus-mt-cs-en",
-            Self::MarianEnUk => "Helsinki-NLP/opus-mt-en-uk",
-            Self::MarianUkEn => "Helsinki-NLP/opus-mt-uk-en",
 
             // East Asian Languages
-            Self::MarianEnZh => "Helsinki-NLP/opus-mt-en-zh",
-            Self::MarianZhEn => "Helsinki-NLP/opus-mt-zh-en",
-            Self::MarianEnJa => "Helsinki-NLP/opus-mt-en-jap",
-            Self::MarianJaEn => "Helsinki-NLP/opus-mt-jap-en",
-            Self::MarianEnKo => "Helsinki-NLP/opus-mt-en-ko",
-            Self::MarianKoEn => "Helsinki-NLP/opus-mt-ko-en",
-
-            // Southeast Asian Languages
-            Self::MarianEnVi => "Helsinki-NLP/opus-mt-en-vi",
-            Self::MarianViEn => "Helsinki-NLP/opus-mt-vi-en",
-            Self::MarianEnTh => "Helsinki-NLP/opus-mt-en-th",
-            Self::MarianThEn => "Helsinki-NLP/opus-mt-th-en",
-            Self::MarianEnId => "Helsinki-NLP/opus-mt-en-id",
-            Self::MarianIdEn => "Helsinki-NLP/opus-mt-id-en",
+            Self::MarianEnKo => "Helsinki-NLP/opus-mt-tc-big-en-ko",
 
             // Middle Eastern Languages
             Self::MarianEnAr => "Helsinki-NLP/opus-mt-en-ar",
             Self::MarianArEn => "Helsinki-NLP/opus-mt-ar-en",
-            Self::MarianEnHe => "Helsinki-NLP/opus-mt-en-he",
             Self::MarianHeEn => "Helsinki-NLP/opus-mt-tc-big-he-en",
-            Self::MarianEnFa => "Helsinki-NLP/opus-mt-en-fa",
-            Self::MarianFaEn => "Helsinki-NLP/opus-mt-fa-en",
-            Self::MarianEnTr => "Helsinki-NLP/opus-mt-tc-big-en-tr",
-            Self::MarianTrEn => "Helsinki-NLP/opus-mt-tr-en",
 
             // South Asian Languages
-            Self::MarianEnHi => "Helsinki-NLP/opus-mt-en-hi",
-            Self::MarianHiEn => "Helsinki-NLP/opus-mt-hi-en",
-            Self::MarianEnBn => "Helsinki-NLP/opus-mt-en-bn",
             Self::MarianBnEn => "Helsinki-NLP/opus-mt-bn-en",
-            Self::MarianEnUr => "Helsinki-NLP/opus-mt-en-ur",
-            Self::MarianUrEn => "Helsinki-NLP/opus-mt-ur-en",
 
             // Other European Languages
             Self::MarianEnHu => "Helsinki-NLP/opus-mt-tc-big-en-hu",
-            Self::MarianHuEn => "Helsinki-NLP/opus-mt-hu-en",
-            Self::MarianEnFi => "Helsinki-NLP/opus-mt-en-fi",
             Self::MarianFiEn => "Helsinki-NLP/opus-mt-tc-big-fi-en",
-            Self::MarianEnEl => "Helsinki-NLP/opus-mt-en-el",
-            Self::MarianElEn => "Helsinki-NLP/opus-mt-el-en",
-
-            // African Languages
-            Self::MarianEnSw => "Helsinki-NLP/opus-mt-en-sw",
-            Self::MarianSwEn => "Helsinki-NLP/opus-mt-sw-en",
         }
     }
 
@@ -266,21 +123,22 @@ impl TranslationModel {
         !self.is_madlad()
     }
 
-    /// Returns the HuggingFace revision/branch that contains safetensors files
-    /// Most models on main branch don't have safetensors, they're in PR branches
-    pub fn safetensors_revision(&self) -> Option<&'static str> {
-        match self {
-            // MADLAD models - main branch has safetensors
-            Self::Madlad3B | Self::Madlad7B | Self::Madlad10B => None,
+    /// Returns the catalog entry for this model, looked up by its stable CLI key.
+    ///
+    /// The catalog (`models.toml`) is the single source of truth for repository
+    /// ids and revisions.
+    pub fn catalog_entry(&self) -> Option<crate::translate::catalog::CatalogModel> {
+        let catalog = crate::translate::catalog::load_model_catalog().ok()?;
+        catalog
+            .into_iter()
+            .find(|entry| entry.name == self.cli_key())
+    }
 
-            // TC-Big variants use main branch
-            Self::MarianHeEn | Self::MarianEnTr | Self::MarianEnHu | Self::MarianFiEn => None,
-
-            // All other MarianMT models use refs/pr/4 for safetensors
-            _ if self.is_marian() => Some("refs/pr/4"),
-
-            _ => None,
-        }
+    /// Returns the repository revision selected by the catalog.
+    ///
+    /// Both `"main"` and `None` select the repository's default branch.
+    pub fn catalog_revision(&self) -> Option<String> {
+        self.catalog_entry().and_then(|entry| entry.revision)
     }
 
     /// Returns the source and target languages for specialized models
@@ -290,82 +148,32 @@ impl TranslationModel {
             // Romance Languages
             Self::MarianEnEs => Some(("en", "es")),
             Self::MarianEsEn => Some(("es", "en")),
-            Self::MarianEnFr => Some(("en", "fr")),
             Self::MarianFrEn => Some(("fr", "en")),
-            Self::MarianEnPt => Some(("en", "pt")),
-            Self::MarianPtEn => Some(("pt", "en")),
-            Self::MarianEnIt => Some(("en", "it")),
-            Self::MarianItEn => Some(("it", "en")),
-            Self::MarianEnRo => Some(("en", "ro")),
-            Self::MarianRoEn => Some(("ro", "en")),
 
             // Germanic Languages
             Self::MarianEnDe => Some(("en", "de")),
             Self::MarianDeEn => Some(("de", "en")),
-            Self::MarianEnNl => Some(("en", "nl")),
             Self::MarianNlEn => Some(("nl", "en")),
-            Self::MarianEnSv => Some(("en", "sv")),
             Self::MarianSvEn => Some(("sv", "en")),
-            Self::MarianEnDa => Some(("en", "da")),
-            Self::MarianDaEn => Some(("da", "en")),
-            Self::MarianEnNo => Some(("en", "no")),
-            Self::MarianNoEn => Some(("no", "en")),
 
             // Slavic Languages
             Self::MarianEnRu => Some(("en", "ru")),
             Self::MarianRuEn => Some(("ru", "en")),
-            Self::MarianEnPl => Some(("en", "pl")),
-            Self::MarianPlEn => Some(("pl", "en")),
-            Self::MarianEnCs => Some(("en", "cs")),
-            Self::MarianCsEn => Some(("cs", "en")),
-            Self::MarianEnUk => Some(("en", "uk")),
-            Self::MarianUkEn => Some(("uk", "en")),
 
             // East Asian Languages
-            Self::MarianEnZh => Some(("en", "zh")),
-            Self::MarianZhEn => Some(("zh", "en")),
-            Self::MarianEnJa => Some(("en", "ja")),
-            Self::MarianJaEn => Some(("ja", "en")),
             Self::MarianEnKo => Some(("en", "ko")),
-            Self::MarianKoEn => Some(("ko", "en")),
-
-            // Southeast Asian Languages
-            Self::MarianEnVi => Some(("en", "vi")),
-            Self::MarianViEn => Some(("vi", "en")),
-            Self::MarianEnTh => Some(("en", "th")),
-            Self::MarianThEn => Some(("th", "en")),
-            Self::MarianEnId => Some(("en", "id")),
-            Self::MarianIdEn => Some(("id", "en")),
 
             // Middle Eastern Languages
             Self::MarianEnAr => Some(("en", "ar")),
             Self::MarianArEn => Some(("ar", "en")),
-            Self::MarianEnHe => Some(("en", "he")),
             Self::MarianHeEn => Some(("he", "en")),
-            Self::MarianEnFa => Some(("en", "fa")),
-            Self::MarianFaEn => Some(("fa", "en")),
-            Self::MarianEnTr => Some(("en", "tr")),
-            Self::MarianTrEn => Some(("tr", "en")),
 
             // South Asian Languages
-            Self::MarianEnHi => Some(("en", "hi")),
-            Self::MarianHiEn => Some(("hi", "en")),
-            Self::MarianEnBn => Some(("en", "bn")),
             Self::MarianBnEn => Some(("bn", "en")),
-            Self::MarianEnUr => Some(("en", "ur")),
-            Self::MarianUrEn => Some(("ur", "en")),
 
             // Other European Languages
             Self::MarianEnHu => Some(("en", "hu")),
-            Self::MarianHuEn => Some(("hu", "en")),
-            Self::MarianEnFi => Some(("en", "fi")),
             Self::MarianFiEn => Some(("fi", "en")),
-            Self::MarianEnEl => Some(("en", "el")),
-            Self::MarianElEn => Some(("el", "en")),
-
-            // African Languages
-            Self::MarianEnSw => Some(("en", "sw")),
-            Self::MarianSwEn => Some(("sw", "en")),
 
             // Multilingual models support any pair
             _ => None,
@@ -407,26 +215,20 @@ impl TranslationModel {
             Self::Madlad10B => "MADLAD-400 10B (38GB, 450+ languages)",
             Self::MarianEnEs => "MarianMT EN→ES (298MB)",
             Self::MarianEsEn => "MarianMT ES→EN (298MB)",
-            Self::MarianEnFr => "MarianMT EN→FR (298MB)",
             Self::MarianFrEn => "MarianMT FR→EN (298MB)",
             Self::MarianEnDe => "MarianMT EN→DE (298MB)",
             Self::MarianDeEn => "MarianMT DE→EN (298MB)",
-            Self::MarianEnPt => "MarianMT EN→PT (298MB)",
-            Self::MarianPtEn => "MarianMT PT→EN (298MB)",
-            Self::MarianEnIt => "MarianMT EN→IT (298MB)",
-            Self::MarianItEn => "MarianMT IT→EN (298MB)",
+            Self::MarianNlEn => "MarianMT NL→EN (298MB)",
+            Self::MarianSvEn => "MarianMT SV→EN (298MB)",
             Self::MarianEnRu => "MarianMT EN→RU (298MB)",
             Self::MarianRuEn => "MarianMT RU→EN (298MB)",
-            Self::MarianEnZh => "MarianMT EN→ZH (298MB)",
-            Self::MarianZhEn => "MarianMT ZH→EN (298MB)",
-            Self::MarianEnJa => "MarianMT EN→JA (298MB)",
-            Self::MarianJaEn => "MarianMT JA→EN (298MB)",
             Self::MarianEnKo => "MarianMT EN→KO (298MB)",
-            Self::MarianKoEn => "MarianMT KO→EN (298MB)",
             Self::MarianEnAr => "MarianMT EN→AR (298MB)",
             Self::MarianArEn => "MarianMT AR→EN (298MB)",
-            // All other MarianMT models - use generic format
-            _ => "MarianMT (298MB)",
+            Self::MarianHeEn => "MarianMT HE→EN (298MB)",
+            Self::MarianBnEn => "MarianMT BN→EN (298MB)",
+            Self::MarianEnHu => "MarianMT EN→HU (298MB)",
+            Self::MarianFiEn => "MarianMT FI→EN (298MB)",
         }
     }
 
@@ -438,82 +240,20 @@ impl TranslationModel {
             Self::Madlad10B => "madlad-10b",
             Self::MarianEnEs => "marian-en-es",
             Self::MarianEsEn => "marian-es-en",
-            Self::MarianEnFr => "marian-en-fr",
             Self::MarianFrEn => "marian-fr-en",
             Self::MarianEnDe => "marian-en-de",
             Self::MarianDeEn => "marian-de-en",
-            Self::MarianEnPt => "marian-en-pt",
-            Self::MarianPtEn => "marian-pt-en",
-            Self::MarianEnIt => "marian-en-it",
-            Self::MarianItEn => "marian-it-en",
+            Self::MarianNlEn => "marian-nl-en",
+            Self::MarianSvEn => "marian-sv-en",
             Self::MarianEnRu => "marian-en-ru",
             Self::MarianRuEn => "marian-ru-en",
-            Self::MarianEnZh => "marian-en-zh",
-            Self::MarianZhEn => "marian-zh-en",
-            Self::MarianEnJa => "marian-en-ja",
-            Self::MarianJaEn => "marian-ja-en",
             Self::MarianEnKo => "marian-en-ko",
-            Self::MarianKoEn => "marian-ko-en",
             Self::MarianEnAr => "marian-en-ar",
             Self::MarianArEn => "marian-ar-en",
-
-            // New models - Romance Languages
-            Self::MarianEnRo => "marian-en-ro",
-            Self::MarianRoEn => "marian-ro-en",
-
-            // Germanic Languages
-            Self::MarianEnNl => "marian-en-nl",
-            Self::MarianNlEn => "marian-nl-en",
-            Self::MarianEnSv => "marian-en-sv",
-            Self::MarianSvEn => "marian-sv-en",
-            Self::MarianEnDa => "marian-en-da",
-            Self::MarianDaEn => "marian-da-en",
-            Self::MarianEnNo => "marian-en-no",
-            Self::MarianNoEn => "marian-no-en",
-
-            // Slavic Languages
-            Self::MarianEnPl => "marian-en-pl",
-            Self::MarianPlEn => "marian-pl-en",
-            Self::MarianEnCs => "marian-en-cs",
-            Self::MarianCsEn => "marian-cs-en",
-            Self::MarianEnUk => "marian-en-uk",
-            Self::MarianUkEn => "marian-uk-en",
-
-            // Southeast Asian
-            Self::MarianEnVi => "marian-en-vi",
-            Self::MarianViEn => "marian-vi-en",
-            Self::MarianEnTh => "marian-en-th",
-            Self::MarianThEn => "marian-th-en",
-            Self::MarianEnId => "marian-en-id",
-            Self::MarianIdEn => "marian-id-en",
-
-            // Middle Eastern
-            Self::MarianEnHe => "marian-en-he",
             Self::MarianHeEn => "marian-he-en",
-            Self::MarianEnFa => "marian-en-fa",
-            Self::MarianFaEn => "marian-fa-en",
-            Self::MarianEnTr => "marian-en-tr",
-            Self::MarianTrEn => "marian-tr-en",
-
-            // South Asian
-            Self::MarianEnHi => "marian-en-hi",
-            Self::MarianHiEn => "marian-hi-en",
-            Self::MarianEnBn => "marian-en-bn",
             Self::MarianBnEn => "marian-bn-en",
-            Self::MarianEnUr => "marian-en-ur",
-            Self::MarianUrEn => "marian-ur-en",
-
-            // Other European
             Self::MarianEnHu => "marian-en-hu",
-            Self::MarianHuEn => "marian-hu-en",
-            Self::MarianEnFi => "marian-en-fi",
             Self::MarianFiEn => "marian-fi-en",
-            Self::MarianEnEl => "marian-en-el",
-            Self::MarianElEn => "marian-el-en",
-
-            // African
-            Self::MarianEnSw => "marian-en-sw",
-            Self::MarianSwEn => "marian-sw-en",
         }
     }
 }
@@ -536,9 +276,6 @@ pub struct TranslateParams {
     /// Force CPU even if GPU available
     pub force_cpu: bool,
 
-    /// Use quantized model for faster inference (if available)
-    pub use_quantized: bool,
-
     /// Maximum length of generated translation in tokens
     pub max_length: Option<usize>,
 
@@ -560,7 +297,6 @@ impl Default for TranslateParams {
             preferred_model: None, // Auto-select best available
             fallback_enabled: true,
             force_cpu: false,
-            use_quantized: false,
             max_length: Some(512),
             temperature: Some(0.0),
             top_p: None,
@@ -674,26 +410,43 @@ mod tests {
     }
 
     #[test]
-    fn test_safetensors_revision() {
-        // MADLAD models should use main branch
-        assert_eq!(TranslationModel::Madlad3B.safetensors_revision(), None);
-        assert_eq!(TranslationModel::Madlad7B.safetensors_revision(), None);
-        assert_eq!(TranslationModel::Madlad10B.safetensors_revision(), None);
+    fn test_catalog_revision() {
+        // MADLAD models load from the default branch
+        assert_eq!(
+            TranslationModel::Madlad3B.catalog_revision(),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            TranslationModel::Madlad7B.catalog_revision(),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            TranslationModel::Madlad10B.catalog_revision(),
+            Some("main".to_string())
+        );
 
-        // Typical Marian models should use refs/pr/4
+        // Marian models with safetensors in a PR ref
         assert_eq!(
-            TranslationModel::MarianEnEs.safetensors_revision(),
-            Some("refs/pr/4")
+            TranslationModel::MarianEnEs.catalog_revision(),
+            Some("refs/pr/4".to_string())
         );
         assert_eq!(
-            TranslationModel::MarianFrEn.safetensors_revision(),
-            Some("refs/pr/4")
+            TranslationModel::MarianFrEn.catalog_revision(),
+            Some("refs/pr/4".to_string())
         );
         assert_eq!(
-            TranslationModel::MarianEnDe.safetensors_revision(),
-            Some("refs/pr/4")
+            TranslationModel::MarianEnDe.catalog_revision(),
+            Some("refs/pr/4".to_string())
         );
-        assert_eq!(TranslationModel::MarianHeEn.safetensors_revision(), None);
-        assert_eq!(TranslationModel::MarianEnTr.safetensors_revision(), None);
+
+        // Marian models with safetensors on the default branch
+        assert_eq!(
+            TranslationModel::MarianHeEn.catalog_revision(),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            TranslationModel::MarianEnKo.catalog_revision(),
+            Some("main".to_string())
+        );
     }
 }

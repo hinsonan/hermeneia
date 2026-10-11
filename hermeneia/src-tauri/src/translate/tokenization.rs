@@ -11,8 +11,8 @@ pub struct TranslationTokenizer {
 
 /// Internal enum to support both HuggingFace and MarianMT tokenizers
 enum TokenizerInner {
-    HuggingFace(Tokenizer),
-    Marian(rust_tokenizers::tokenizer::MarianTokenizer),
+    HuggingFace(Box<Tokenizer>),
+    Marian(Box<rust_tokenizers::tokenizer::MarianTokenizer>),
 }
 
 impl TranslationTokenizer {
@@ -26,7 +26,7 @@ impl TranslationTokenizer {
         let _ = tokenizer.with_truncation(None);
 
         Ok(Self {
-            inner: TokenizerInner::HuggingFace(tokenizer),
+            inner: TokenizerInner::HuggingFace(Box::new(tokenizer)),
             model_type,
         })
     }
@@ -53,7 +53,7 @@ impl TranslationTokenizer {
         })?;
 
         Ok(Self {
-            inner: TokenizerInner::Marian(tokenizer),
+            inner: TokenizerInner::Marian(Box::new(tokenizer)),
             model_type,
         })
     }
@@ -120,42 +120,6 @@ impl TranslationTokenizer {
         // "<2de> {text}" for translation to German
         format!("<2{}> {}", target_lang, text)
     }
-
-    /// Get special token IDs
-    pub fn get_bos_token_id(&self) -> Option<u32> {
-        match &self.inner {
-            TokenizerInner::HuggingFace(tokenizer) => tokenizer.get_vocab(true).get("<s>").copied(),
-            TokenizerInner::Marian(_) => {
-                // MarianMT typically uses </s> as BOS
-                Some(0)
-            }
-        }
-    }
-
-    pub fn get_eos_token_id(&self) -> Option<u32> {
-        match &self.inner {
-            TokenizerInner::HuggingFace(tokenizer) => {
-                tokenizer.get_vocab(true).get("</s>").copied()
-            }
-            TokenizerInner::Marian(_) => {
-                // MarianMT uses </s> (ID 0) as EOS
-                Some(0)
-            }
-        }
-    }
-
-    pub fn get_pad_token_id(&self) -> Option<u32> {
-        match &self.inner {
-            TokenizerInner::HuggingFace(tokenizer) => {
-                let vocab = tokenizer.get_vocab(true);
-                vocab.get("<pad>").or_else(|| vocab.get("[PAD]")).copied()
-            }
-            TokenizerInner::Marian(_) => {
-                // MarianMT uses </s> as pad token
-                Some(0)
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -170,7 +134,7 @@ mod tests {
         let tokenizer = Tokenizer::new(model);
 
         let tok = TranslationTokenizer {
-            inner: TokenizerInner::HuggingFace(tokenizer),
+            inner: TokenizerInner::HuggingFace(Box::new(tokenizer)),
             model_type: TranslationModel::Madlad3B,
         };
 

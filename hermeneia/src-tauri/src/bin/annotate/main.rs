@@ -91,7 +91,7 @@ impl AnnotationProgressReporter for CliAnnotationReporter {
             }
             AnnotationPhase::Diarizing => {
                 if let (Some(current), Some(total)) = (progress.current, progress.total) {
-                    let pct = if total > 0 { current * 100 / total } else { 0 };
+                    let pct = current.saturating_mul(100).checked_div(total).unwrap_or(0);
                     eprint!("\r  [1/2] Diarization: {}% ({}/{})", pct, current, total);
                 }
             }
@@ -100,7 +100,7 @@ impl AnnotationProgressReporter for CliAnnotationReporter {
             }
             AnnotationPhase::Transcribing => {
                 if let (Some(current), Some(total)) = (progress.current, progress.total) {
-                    let pct = if total > 0 { current * 100 / total } else { 0 };
+                    let pct = current.saturating_mul(100).checked_div(total).unwrap_or(0);
                     eprint!("\r  [2/2] Transcribing: {}% ({}/{})", pct, current, total);
                 }
             }
@@ -158,7 +158,6 @@ fn main() -> anyhow::Result<()> {
             language: args.language,
             timestamps: !args.no_timestamps,
             force_cpu: false,
-            use_quantized: false,
         },
         diarize: DiarizeParams {
             model: speaker_model,

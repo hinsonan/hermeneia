@@ -210,14 +210,6 @@ function removeJobIfClearPending(jobId: string): boolean {
   return true;
 }
 
-function isCancelJobCommandUnavailable(err: unknown): boolean {
-  const message = String(err).toLowerCase();
-  return message.includes("unknown command `cancel_job`")
-    || message.includes("unknown command: cancel_job")
-    || message.includes("command cancel_job not found")
-    || (message.includes("not found") && message.includes("cancel_job"));
-}
-
 function withSchedulerPaused<T>(fn: () => Promise<T>): Promise<T> {
   schedulerPaused = true;
   return fn().finally(() => {
@@ -302,16 +294,6 @@ export async function initJobQueue(): Promise<void> {
   return initPromise;
 }
 
-export function teardownJobQueue() {
-  initGeneration += 1;
-  initPromise = null;
-  if (unlistenTranscription) unlistenTranscription();
-  if (unlistenAnnotation) unlistenAnnotation();
-  unlistenTranscription = null;
-  unlistenAnnotation = null;
-  setState("listenersInitialized", false);
-}
-
 async function loadCapabilities(): Promise<void> {
   if (state.capabilitiesLoaded) return;
   const errors: string[] = [];
@@ -356,7 +338,7 @@ async function loadCapabilities(): Promise<void> {
   }
 }
 
-export async function validateCurrentModel(): Promise<void> {
+async function validateCurrentModel(): Promise<void> {
   try {
     const validation = await invoke<ModelValidation>("validate_model_selection", {
       model: state.defaults.model,
@@ -514,17 +496,8 @@ export async function cancelJob(jobId: string): Promise<void> {
       await invoke("cancel_inference");
     }
   } catch (err) {
-    if (isCancelJobCommandUnavailable(err)) {
-      try {
-        await invoke("cancel_inference");
-      } catch (fallbackErr) {
-        setState("queueError", `Failed to cancel job '${jobId}': ${String(fallbackErr)}`);
-        restoreFailedCancellation(jobId, current);
-      }
-    } else {
-      setState("queueError", `Failed to cancel job '${jobId}': ${String(err)}`);
-      restoreFailedCancellation(jobId, current);
-    }
+    setState("queueError", `Failed to cancel job '${jobId}': ${String(err)}`);
+    restoreFailedCancellation(jobId, current);
   } finally {
     schedulePersist();
     if (!hasActiveJob(jobId)) {
@@ -658,19 +631,6 @@ export function clearCompleted(): void {
       if (!draft.jobs.find((job) => job.id === draft.selectedJobId)) {
         draft.selectedJobId = draft.jobs[0]?.id ?? null;
       }
-    })
-  );
-  schedulePersist();
-}
-
-export function clearAll(): void {
-  const running = state.jobs.filter((j) => isActiveStatus(j.status));
-  if (running.length > 0) return; // caller should cancel running jobs first
-  setState(
-    produce((draft) => {
-      draft.jobs = [];
-      draft.selectedJobId = null;
-      draft.startArmed = false;
     })
   );
   schedulePersist();

@@ -13,6 +13,20 @@ Pick the right file for your system:
 
 > **CUDA variants** bundle CUDA, ONNX Runtime, and cuDNN libraries, so they are much larger. You still need compatible NVIDIA drivers installed on your system.
 
+## NVIDIA GPU Support
+
+The **CUDA** variants accelerate transcription, translation, and speaker diarization on NVIDIA GPUs. GPU acceleration is split across two backends with different minimum hardware requirements:
+
+| Feature | Minimum GPU |
+|---------|-------------|
+| Full GPU acceleration (transcription, translation, **and diarization**) | **Turing** — compute capability 7.5 (e.g. RTX 20-series, GTX 16-series, Quadro RTX/T-series, Tesla T4) |
+| GPU transcription/translation only | **Pascal** — compute capability 6.1 (e.g. GTX 10-series, Quadro P-series) |
+
+- On Pascal and Volta GPUs, diarization must run on the CPU; Tesla P100 / Quadro GP100 (compute capability 6.0) are not supported.
+- **Newest supported:** Blackwell (RTX 50-series, B100/B200). Newer architectures run via forward-compatible PTX JIT.
+- **Driver requirement:** NVIDIA driver >= 525 (Linux) / ~527 (Windows) for CUDA 12.x.
+- The **CPU** variants do not require a GPU.
+
 ## Installation Notes
 
 **macOS:** The app is not code-signed. macOS will block it on first launch.

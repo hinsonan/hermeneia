@@ -38,7 +38,6 @@ impl Default for CachePolicy {
 pub struct WhisperRuntimeKey {
     pub model: WhisperModel,
     pub force_cpu: bool,
-    pub use_quantized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -170,19 +169,6 @@ impl RuntimeCacheManager {
         }
     }
 
-    pub fn with_whisper_runtime<R, L, U>(
-        &self,
-        key: WhisperRuntimeKey,
-        load: L,
-        use_runtime: U,
-    ) -> Result<R>
-    where
-        L: FnOnce() -> Result<WhisperRuntime>,
-        U: FnOnce(&mut WhisperRuntime) -> Result<R>,
-    {
-        self.with_whisper_runtime_cancellable(key, load, use_runtime, None)
-    }
-
     pub fn with_whisper_runtime_cancellable<R, L, U>(
         &self,
         key: WhisperRuntimeKey,
@@ -273,19 +259,6 @@ impl RuntimeCacheManager {
         lease.reset_kv_cache();
 
         result
-    }
-
-    pub fn with_speaker_runtime<R, L, U>(
-        &self,
-        key: SpeakerRuntimeKey,
-        load: L,
-        use_runtime: U,
-    ) -> Result<R>
-    where
-        L: FnOnce() -> Result<SpeakerRuntime>,
-        U: FnOnce(&mut SpeakerRuntime) -> Result<R>,
-    {
-        self.with_speaker_runtime_cancellable(key, load, use_runtime, None)
     }
 
     pub fn with_speaker_runtime_cancellable<R, L, U>(
@@ -621,10 +594,9 @@ impl RuntimeCacheManager {
             speaker_loaded: speaker.is_some(),
             whisper_key: whisper.map(|(k, _)| {
                 format!(
-                    "{}:{}:{}",
+                    "{}:{}",
                     k.model.model_id(),
-                    if k.force_cpu { "cpu" } else { "auto" },
-                    if k.use_quantized { "q" } else { "fp" }
+                    if k.force_cpu { "cpu" } else { "auto" }
                 )
             }),
             speaker_key: speaker
@@ -868,7 +840,7 @@ fn map_pool_checkout_error(err: RuntimePoolCheckoutError<AudioError>) -> AudioEr
 
 pub fn load_whisper_runtime_by_key(key: WhisperRuntimeKey) -> Result<WhisperRuntime> {
     let model_manager = ModelManager::new()?;
-    let model_files = model_manager.ensure_model(key.model, key.use_quantized)?;
+    let model_files = model_manager.ensure_model(key.model)?;
     let device = get_device(key.force_cpu)?;
 
     let config_str =
@@ -887,9 +859,12 @@ pub fn load_whisper_runtime_by_key(key: WhisperRuntimeKey) -> Result<WhisperRunt
             details: e.to_string(),
         })?;
 
-    let vb =
-        crate::gpu_cleanup::load_safetensors_varbuilder(&model_files.weights, m::DTYPE, &device)
-            .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, &device, "weights"))?;
+    let vb = crate::gpu_cleanup::load_safetensors_varbuilder(
+        std::slice::from_ref(&model_files.weights),
+        m::DTYPE,
+        &device,
+    )
+    .map_err(|e| crate::gpu_cleanup::to_model_load_error(e, &device, "weights"))?;
 
     let model = m::model::Whisper::load(&vb, config.clone())
         .map_err(|e| crate::gpu_cleanup::to_model_init_error(e, &device, "whisper"))?;
@@ -992,10 +967,9 @@ mod tests {
         let key = WhisperRuntimeKey {
             model: WhisperModel::Tiny,
             force_cpu: true,
-            use_quantized: false,
         };
 
-        let result = cache.with_whisper_runtime(
+        let result = cache.with_whisper_runtime_cancellable(
             key,
             || {
                 loader_called.store(true, Ordering::SeqCst);
@@ -1005,6 +979,7 @@ mod tests {
                 })
             },
             |_runtime| Ok(()),
+            None,
         );
 
         assert!(matches!(result, Err(AudioError::OutOfMemory { .. })));
@@ -1024,7 +999,7 @@ mod tests {
             device: SpeakerDevice::Cpu,
         };
 
-        let result = cache.with_speaker_runtime(
+        let result = cache.with_speaker_runtime_cancellable(
             key,
             || {
                 loader_called.store(true, Ordering::SeqCst);
@@ -1033,6 +1008,7 @@ mod tests {
                 ))
             },
             |_runtime| Ok(()),
+            None,
         );
 
         assert!(matches!(result, Err(AudioError::OutOfMemory { .. })));
@@ -1045,15 +1021,13 @@ mod tests {
         let key_a = WhisperRuntimeKey {
             model: WhisperModel::Tiny,
             force_cpu: true,
-            use_quantized: false,
         };
         let key_b = WhisperRuntimeKey {
             model: WhisperModel::Base,
             force_cpu: true,
-            use_quantized: false,
         };
 
-        let _ = cache.with_whisper_runtime(
+        let _ = cache.with_whisper_runtime_cancellable(
             key_a,
             || {
                 Err(AudioError::ModelLoad {
@@ -1062,9 +1036,10 @@ mod tests {
                 })
             },
             |_runtime| Ok(()),
+            None,
         );
 
-        let _ = cache.with_whisper_runtime(
+        let _ = cache.with_whisper_runtime_cancellable(
             key_b,
             || {
                 Err(AudioError::ModelLoad {
@@ -1073,6 +1048,7 @@ mod tests {
                 })
             },
             |_runtime| Ok(()),
+            None,
         );
 
         let stats = cache.stats();
@@ -1111,7 +1087,7 @@ mod tests {
         }
 
         let loader_called = AtomicBool::new(false);
-        let result = cache.with_speaker_runtime(
+        let result = cache.with_speaker_runtime_cancellable(
             key,
             || {
                 loader_called.store(true, Ordering::SeqCst);
@@ -1120,6 +1096,7 @@ mod tests {
                 ))
             },
             |_runtime| Ok(()),
+            None,
         );
 
         assert!(matches!(result, Err(AudioError::OutOfMemory { .. })));

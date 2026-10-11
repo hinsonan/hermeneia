@@ -55,7 +55,6 @@ pub struct DiarizeStageProgress {
     pub current: Option<usize>,
     pub total: Option<usize>,
     pub message: &'static str,
-    pub indeterminate: bool,
 }
 
 pub type DiarizeStageProgressCallback = Arc<dyn Fn(DiarizeStageProgress) + Send + Sync>;
@@ -75,11 +74,6 @@ fn check_cancelled(cancel: &Option<Arc<AtomicBool>>) -> Result<()> {
         return Err(AudioError::Cancelled);
     }
     Ok(())
-}
-
-/// Diarize an audio file. Downloads models on first use.
-pub fn diarize_audio(audio_path: &str, params: DiarizeParams) -> Result<DiarizationResult> {
-    diarize_audio_with_progress(audio_path, params, None, None)
 }
 
 /// Diarize with optional progress callback and cancellation flag.
@@ -102,21 +96,12 @@ pub fn diarize_audio_with_progress(
     diarize_prepared_audio_owned_with_progress(speech_audio, params, progress, cancel)
 }
 
-/// Diarize already-preprocessed mono 16kHz speech audio.
-pub fn diarize_prepared_audio(
-    speech_audio: &SpeechAudio,
-    params: DiarizeParams,
-) -> Result<DiarizationResult> {
-    diarize_prepared_audio_with_progress(speech_audio, params, None, None)
-}
-
 fn emit_stage(
     stage_progress: &Option<DiarizeStageProgressCallback>,
     stage: DiarizeStage,
     current: Option<usize>,
     total: Option<usize>,
     message: &'static str,
-    indeterminate: bool,
 ) {
     if let Some(cb) = stage_progress {
         cb(DiarizeStageProgress {
@@ -124,7 +109,6 @@ fn emit_stage(
             current,
             total,
             message,
-            indeterminate,
         });
     }
 }
@@ -141,7 +125,6 @@ fn ensure_model_paths(
         None,
         None,
         "Ensuring speaker diarization models...",
-        true,
     );
 
     tracing::info!("Ensuring speaker diarization models...");
@@ -163,7 +146,6 @@ fn create_diarizer(
         None,
         None,
         "Initializing diarization runtime...",
-        true,
     );
 
     let config = DiarizeConfig {
@@ -254,7 +236,6 @@ fn compute_speaker_segments(
         None,
         None,
         "Diarizing...",
-        true,
     );
 
     let chunk_progress = chunk_progress.map(Arc::new);
@@ -291,7 +272,6 @@ fn compute_speaker_segments(
                             current: Some(processed_u),
                             total: Some(total_u),
                             message: "Diarizing...",
-                            indeterminate: false,
                         });
                     }
                 }
@@ -401,128 +381,6 @@ fn count_unique_speakers(segments: &[SpeakerSegment]) -> usize {
     ids.len()
 }
 
-/// Diarize already-preprocessed mono 16kHz speech audio with progress/cancel.
-pub fn diarize_prepared_audio_with_progress(
-    speech_audio: &SpeechAudio,
-    params: DiarizeParams,
-    progress: Option<DiarizeProgressCallback>,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<DiarizationResult> {
-    diarize_prepared_audio_with_callbacks(
-        speech_audio,
-        params,
-        DiarizeCallbacks {
-            chunk_progress: progress,
-            stage_progress: None,
-        },
-        cancel,
-    )
-}
-
-/// Diarize with both chunk-level and stage-level progress callbacks.
-pub fn diarize_prepared_audio_with_callbacks(
-    speech_audio: &SpeechAudio,
-    params: DiarizeParams,
-    callbacks: DiarizeCallbacks,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<DiarizationResult> {
-    diarize_prepared_audio_with_callbacks_cached(
-        speech_audio,
-        params,
-        callbacks,
-        cancel,
-        Some(global_runtime_cache()),
-    )
-}
-
-pub fn diarize_prepared_audio_with_callbacks_cached(
-    speech_audio: &SpeechAudio,
-    params: DiarizeParams,
-    callbacks: DiarizeCallbacks,
-    cancel: Option<Arc<AtomicBool>>,
-    runtime_cache: Option<Arc<RuntimeCacheManager>>,
-) -> Result<DiarizationResult> {
-    let start = Instant::now();
-    validate_diarize_params(&params)?;
-    check_cancelled(&cancel)?;
-
-    let device_name = params.device.provider_string().to_string();
-    let model_name = params.model.display_name().to_string();
-
-    tracing::info!(
-        "Running diarization with {} model on {}...",
-        model_name,
-        device_name
-    );
-
-    let result_segments = if let Some(cache) = runtime_cache {
-        let key = SpeakerRuntimeKey {
-            model: params.model.clone(),
-            device: params.device.clone(),
-        };
-
-        cache.with_speaker_runtime_cancellable(
-            key,
-            || load_speaker_runtime(&params, &cancel, &callbacks.stage_progress),
-            |runtime| {
-                maybe_warmup_speaker_runtime(
-                    runtime,
-                    &params.device,
-                    &speech_audio.samples_16k_mono,
-                    &cancel,
-                );
-                compute_speaker_segments(
-                    &mut runtime.diarize,
-                    speech_audio.samples_16k_mono.clone(),
-                    callbacks.chunk_progress,
-                    callbacks.stage_progress.clone(),
-                    cancel.clone(),
-                )
-            },
-            cancel.as_deref(),
-        )?
-    } else {
-        let mut runtime = load_speaker_runtime(&params, &cancel, &callbacks.stage_progress)?;
-        maybe_warmup_speaker_runtime(
-            &mut runtime,
-            &params.device,
-            &speech_audio.samples_16k_mono,
-            &cancel,
-        );
-        compute_speaker_segments(
-            &mut runtime.diarize,
-            speech_audio.samples_16k_mono.clone(),
-            callbacks.chunk_progress,
-            callbacks.stage_progress.clone(),
-            cancel.clone(),
-        )?
-    };
-
-    check_cancelled(&cancel)?;
-
-    emit_stage(
-        &callbacks.stage_progress,
-        DiarizeStage::Finalizing,
-        None,
-        None,
-        "Finalizing speaker segments...",
-        true,
-    );
-
-    let num_speakers = count_unique_speakers(&result_segments);
-
-    let inference_time = start.elapsed().as_secs_f64();
-
-    Ok(DiarizationResult {
-        segments: result_segments,
-        num_speakers,
-        audio_duration: speech_audio.duration_seconds as f32,
-        inference_time,
-        model: model_name,
-        device: device_name,
-    })
-}
-
 pub fn diarize_prepared_audio_with_callbacks_cached_owned(
     speech_audio: SpeechAudio,
     params: DiarizeParams,
@@ -609,7 +467,6 @@ pub fn diarize_prepared_audio_with_callbacks_cached_owned(
         None,
         None,
         "Finalizing speaker segments...",
-        true,
     );
 
     let num_speakers = count_unique_speakers(&result_segments);
@@ -628,31 +485,8 @@ pub fn diarize_prepared_audio_with_callbacks_cached_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::{convert_to_mono, resample_to_16khz};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
-
-    #[test]
-    fn test_convert_to_mono_passthrough() {
-        let samples = vec![0.1, 0.2, 0.3];
-        let mono = convert_to_mono(&samples, 1);
-        assert_eq!(mono, samples);
-    }
-
-    #[test]
-    fn test_convert_to_mono_stereo() {
-        let samples = vec![0.0f32, 1.0, 0.0, 1.0];
-        let mono = convert_to_mono(&samples, 2);
-        assert_eq!(mono.len(), 2);
-        assert!((mono[0] - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_resample_passthrough() {
-        let samples = vec![0.1f32, 0.2, 0.3];
-        let out = resample_to_16khz(&samples, 16000).unwrap();
-        assert_eq!(out, samples);
-    }
 
     #[test]
     fn test_should_skip_warmup_when_already_warmed() {

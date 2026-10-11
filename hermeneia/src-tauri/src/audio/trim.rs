@@ -1,6 +1,6 @@
 // src-tauri/src/audio/trim.rs
 
-use crate::audio::types::{AudioData, TrimParams};
+use crate::audio::types::TrimParams;
 use crate::error::{AudioError, Result};
 use hound::{SampleFormat, WavReader, WavSpec, WavWriter};
 use std::fs::File;
@@ -11,48 +11,6 @@ use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-
-/// Trim audio data to a specific time range
-///
-/// # Arguments
-/// * `audio` - The audio data to trim
-/// * `params` - Start and end times in seconds
-pub fn trim_audio(audio: &AudioData, params: &TrimParams) -> Result<AudioData> {
-    // Validate trim range against audio duration
-    let duration = audio.duration_seconds();
-
-    if params.end_seconds > duration {
-        return Err(AudioError::TrimRangeOutOfBounds {
-            start: params.start_seconds,
-            end: params.end_seconds,
-            duration,
-        });
-    }
-
-    // Calculate sample indices
-    let samples_per_second = audio.sample_rate as f64 * audio.channels as f64;
-
-    let start_sample_index = (params.start_seconds * samples_per_second) as usize;
-    let end_sample_index = (params.end_seconds * samples_per_second) as usize;
-
-    // Ensure indices are aligned to frame boundaries (multiples of channels)
-    let channels = audio.channels as usize;
-    let start_sample_index = (start_sample_index / channels) * channels;
-    let end_sample_index = (end_sample_index / channels) * channels;
-
-    // Clamp to valid range
-    let start_sample_index = start_sample_index.min(audio.samples.len());
-    let end_sample_index = end_sample_index.min(audio.samples.len());
-
-    // Extract the slice
-    let trimmed_samples = audio.samples[start_sample_index..end_sample_index].to_vec();
-
-    Ok(AudioData {
-        samples: trimmed_samples,
-        sample_rate: audio.sample_rate,
-        channels: audio.channels,
-    })
-}
 
 /// Check if a file is a WAV file by examining its extension
 fn is_wav_file<P: AsRef<Path>>(path: P) -> bool {
@@ -487,6 +445,7 @@ pub fn trim_audio_file<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::types::AudioData;
 
     fn create_test_audio(duration_seconds: f64, sample_rate: u32, channels: u16) -> AudioData {
         let total_samples = (duration_seconds * sample_rate as f64 * channels as f64) as usize;
@@ -497,33 +456,6 @@ mod tests {
             sample_rate,
             channels,
         }
-    }
-
-    #[test]
-    fn test_trim_middle_section() {
-        let audio = create_test_audio(10.0, 44100, 2);
-        let params = TrimParams::new(3.0, 7.0).unwrap();
-        let trimmed = trim_audio(&audio, &params).unwrap();
-
-        assert_eq!(trimmed.duration_seconds(), 4.0);
-    }
-
-    #[test]
-    fn test_trim_start() {
-        let audio = create_test_audio(10.0, 44100, 2);
-        let params = TrimParams::new(0.0, 5.0).unwrap();
-        let trimmed = trim_audio(&audio, &params).unwrap();
-
-        assert_eq!(trimmed.duration_seconds(), 5.0);
-    }
-
-    #[test]
-    fn test_trim_out_of_bounds() {
-        let audio = create_test_audio(10.0, 44100, 2);
-        let params = TrimParams::new(5.0, 15.0).unwrap();
-        let result = trim_audio(&audio, &params);
-
-        assert!(result.is_err());
     }
 
     #[test]
@@ -539,61 +471,6 @@ mod tests {
 
         assert_eq!(mono.samples.len(), 44100);
         assert_eq!(stereo.samples.len(), 88200);
-    }
-
-    #[test]
-    fn test_trim_entire_audio() {
-        let audio = create_test_audio(5.0, 44100, 2);
-        let params = TrimParams::new(0.0, 5.0).unwrap();
-        let trimmed = trim_audio(&audio, &params).unwrap();
-
-        assert_eq!(trimmed.duration_seconds(), audio.duration_seconds());
-        assert_eq!(trimmed.samples.len(), audio.samples.len());
-    }
-
-    #[test]
-    fn test_trim_very_short_duration() {
-        let audio = create_test_audio(10.0, 44100, 2);
-        let params = TrimParams::new(5.0, 5.01).unwrap();
-        let trimmed = trim_audio(&audio, &params).unwrap();
-
-        // Should be approximately 0.01 seconds
-        assert!(trimmed.duration_seconds() < 0.02);
-        assert!(trimmed.duration_seconds() > 0.005);
-    }
-
-    #[test]
-    fn test_trim_at_exact_end() {
-        let audio = create_test_audio(10.0, 44100, 2);
-        let duration = audio.duration_seconds();
-        let params = TrimParams::new(5.0, duration).unwrap();
-        let result = trim_audio(&audio, &params);
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_trim_preserves_sample_rate_and_channels() {
-        let audio = create_test_audio(10.0, 48000, 1);
-        let params = TrimParams::new(2.0, 6.0).unwrap();
-        let trimmed = trim_audio(&audio, &params).unwrap();
-
-        assert_eq!(trimmed.sample_rate, 48000);
-        assert_eq!(trimmed.channels, 1);
-    }
-
-    #[test]
-    fn test_trim_empty_audio() {
-        let audio = AudioData {
-            samples: vec![],
-            sample_rate: 44100,
-            channels: 2,
-        };
-        let params = TrimParams::new(0.0, 1.0).unwrap();
-        let result = trim_audio(&audio, &params);
-
-        // Should fail because end_seconds > duration (0.0)
-        assert!(result.is_err());
     }
 
     #[test]
@@ -622,29 +499,4 @@ mod tests {
     // creating Symphonia AudioBufferRef instances, which have complex internal
     // structures. The function is well-tested indirectly through the trim functions
     // and the decoder tests.
-
-    #[test]
-    fn test_trim_audio_different_sample_rates() {
-        let rates = vec![22050, 44100, 48000, 96000];
-
-        for rate in rates {
-            let audio = create_test_audio(5.0, rate, 2);
-            let params = TrimParams::new(1.0, 3.0).unwrap();
-            let trimmed = trim_audio(&audio, &params).unwrap();
-
-            assert_eq!(trimmed.sample_rate, rate);
-            assert_eq!(trimmed.duration_seconds(), 2.0);
-        }
-    }
-
-    #[test]
-    fn test_trim_audio_boundary_alignment() {
-        // Test that trimming aligns to frame boundaries
-        let audio = create_test_audio(10.0, 44100, 2);
-        let params = TrimParams::new(1.5, 5.5).unwrap();
-        let trimmed = trim_audio(&audio, &params).unwrap();
-
-        // Samples should be aligned to channel boundaries
-        assert_eq!(trimmed.samples.len() % trimmed.channels as usize, 0);
-    }
 }
